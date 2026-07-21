@@ -1,0 +1,116 @@
+{
+  "purpose": "Minimal constants to reimplement AIComp Soccer free-ball + pitch in Bevy/Rust",
+  "source_game": "worldcupv0.5",
+  "asset_confirmed": true,
+  "il2cpp_metadata": "encrypted \u2014 MelonLoader/Il2CppDumper not required for this dataset",
+  "units": "meters, seconds; play on XZ; Y up",
+  "ball": {
+    "mass": 0.44999998807907104,
+    "scale": 0.8999999761581421,
+    "radius_local": 0.45152485370635986,
+    "radius_world": 0.40637235757053247,
+    "rest_y": 0.3499999940395355,
+    "linear_damping": 0.0,
+    "angular_damping": 0.0,
+    "use_gravity": true,
+    "freeze_rotation_xyz": true,
+    "constraints_bitmask": 112,
+    "collision_detection": "Discrete"
+  },
+  "material_soccer": {
+    "dynamic_friction": 0.10000000149011612,
+    "static_friction": 0.0,
+    "bounciness": 0.4000000059604645,
+    "friction_combine": "Average",
+    "bounce_combine": "Average"
+  },
+  "contacts": {
+    "wall_material": "none (Unity default)",
+    "default_surface_dynamic_friction": 0.6,
+    "default_surface_bounciness": 0.0,
+    "effective_ground_mu": 0.35,
+    "effective_wall_mu": 0.35,
+    "effective_wall_restitution_e": 0.2,
+    "wall_tangent_friction_cap": "mu * (1+e) * |vn|"
+  },
+  "free_ball_slide": {
+    "model": "coulomb_constant_deceleration",
+    "accel_mps2": 5.95,
+    "note": "Use measured 5.95 from timeplots, not mu*g=3.43 from materials alone",
+    "stop_speed_eps": 0.0001
+  },
+  "pitch": {
+    "playable_ball_center_aabb": {
+      "x_min": -39.5,
+      "x_max": 39.5,
+      "z_min": -24.7,
+      "z_max": 24.7
+    },
+    "goal": {
+      "posts_x": 40.2,
+      "post_z": [-6.0, 6.0],
+      "post_radius_world": 0.3,
+      "post_contact_radius": 0.7063723683357239,
+      "half_width": 6.0,
+      "line_x": 39.5,
+      "terminal": true,
+      "open_mouth": true,
+      "rule": "End walls collide EXCEPT |z|<=6 goal mouths \u2014 ball passes through and terminates (no bounce). Upright posts are solid vertical capsules at (\u00b140.2, \u00b16) with world radius 0.3 (parent scale 0.6 \u00d7 local capsule 0.5); ball-center contact radius = post_r + ball_r \u2248 0.706. Geometry behind the goal line (nets) is ignored \u2014 scoring terminates the free-ball path.",
+      "post_bounce": {
+        "restitution": 0.2,
+        "graze_vn_floor_frac": 0.5,
+        "scrape_tangent_frac": 0.4,
+        "note": "Grazing endline-rail hits have tiny geometric vn; PhysX still scrapes the ball inward hard (timeplot_2026-07-21_12-59-35 ~t=8.63: (0,-28.8)->(-11.7,-16.0)). Floor |vn| to graze_vn_floor_frac*|v| and kill at least scrape_tangent_frac*|v| of tangential speed."
+      },
+      "post_evidence": "level0 CapsuleCollider on LeftPost/RightPost; timeplot_2026-07-21_12-36-34 ~t=9.42 and 12-59-35 ~t=8.63 endline scrapes."
+    },
+    "asset_anchors_v05": {
+      "home_net_x": -40.2,
+      "away_net_x": 40.2,
+      "sideline_rail_z_abs_approx": 24.7,
+      "post_z_abs": 6.0,
+      "posts_x_from_prior_audit": 40.2
+    },
+    "ignore": ["nets behind goal line", "visual trails"]
+  },
+  "pitch_marks_soccer_get_float": {
+    "Field Width": 50.0,
+    "Field Depth": 80.0,
+    "Kickoff Circle Radius": 7.25,
+    "ground_line": 5.0,
+    "Area Depth": 12.5,
+    "Arena Semicircle Depth": 2.5,
+    "note": "Depth=goal axis (X), Width=sidelines (Z). Ball-center AABB remains x±39.5 z±24.7."
+  },
+  "kick_airborne_candidates": {
+    "status": "community_not_confirmed",
+    "source": "MerijnZ1",
+    "max_power_speed_mps": 30.0,
+    "apex_height_m": 1.4,
+    "hang_before_first_bounce_s": 1.0,
+    "ground_slide_accel_mps2_community": 6.0,
+    "ground_slide_accel_mps2_timeplot": 5.95,
+    "note": "Free-ball XZ predictor still ignores Y until airborne kicks are ported; use Coulomb a=5.95 on ground."
+  },
+  "player_candidates": {
+    "status": "community_not_confirmed",
+    "model": "perfect_simple_movers",
+    "stamina_drain_full_s": 30.0,
+    "stamina_regen_full_s": 15.0,
+    "intercept_defaults_mps": { "max_speed": 4.5, "acceleration": 2.5 },
+    "nav_agent_radius_m": 0.5,
+    "hold_offset_m": 0.90637236,
+    "interact_radius_m": 1.5,
+    "free_ball_pickup": "interact/tackle required",
+    "global_pickup_delay_after_shot_s": 0.3,
+    "note": "2D body disc uses nav_agent_radius (footprint), not mesh hitbox. BallHoldLocation = facing * hold_offset (≈ agent_r + ball_r). Interact radius UNKNOWN until SoccerGetFloat measured. Speeds CANDIDATE."
+  },
+  "bevy_impl_hints": [
+    "Ball: Dynamic RigidBody, LockedAxes::ROTATION_LOCKED, sphere collider radius radius_world, friction/restitution as contacts above OR custom Coulomb slide force -accel*normalize(vel) while grounded",
+    "Walls: cuboid colliders on playable AABB sides; restitution 0.2; open goal mouths |z|<=6 at x=\u00b139.5 do not collide",
+    "Posts optional: capsules at (\u00b140.2, \u00b16) contact radius ~0.706; can omit for v1",
+    "No linear damping on rigidbody \u2014 deceleration is material/custom friction only",
+    "Players: kinematic simple movers (accel+clamp), not PhysX friction; stamina drain/regen candidates 30s/15s",
+    "Kicks: launch ~30 m/s slight up; apex ~1.4m; hang ~1s; then ground slide at ~6 m/s^2"
+  ]
+}

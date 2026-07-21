@@ -1,0 +1,220 @@
+{
+  "source": "worldcup4 Aialanders asset scrape (Unity 6000.4)",
+  "human_game_model": "SOCCER_GAME_MODEL.md",
+  "units": "Unity meters / seconds; pitch plane is XZ",
+  "ball": {
+    "mass": 0.45,
+    "scale": 0.9,
+    "collider_radius_local": 0.45152485370635986,
+    "radius_world": 0.4063723683357239,
+    "linear_damping": 0.0,
+    "angular_damping": 0.0,
+    "use_gravity": true,
+    "constraints": "FreezeRotationXYZ (112) — slides, does not roll",
+    "rest_y_approx": 0.36
+  },
+  "physic_material_soccer": {
+    "path_id": 483,
+    "dynamic_friction": 0.1,
+    "static_friction": 0.0,
+    "bounciness": 0.4,
+    "friction_combine": "Average",
+    "bounce_combine": "Average",
+    "boundary_wall_bounciness": 0.0,
+    "default_surface_dynamic_friction": 0.6,
+    "effective_ground_friction": 0.35,
+    "effective_boundary_dynamic_friction": 0.35,
+    "effective_boundary_restitution": 0.2,
+    "note": "Raw Soccer material bounciness is 0.4. Boundary wall colliders have no material (Unity default, bounciness 0.0); BounceCombine Average gives effective boundary restitution e=0.2. All audited field/boundary BoxColliders have m_Material path_id 0, so Unity's default dynamic friction 0.6 is inferred for the surface; Average friction combine gives effective ground and boundary contact friction 0.35. Boundary collision friction removes tangential velocity up to mu*(1+e)*normal_speed. No serialized runtime drag was found."
+  },
+  "friction_model": {
+    "type": "runtime_calibrated_coulomb_slide",
+    "accel_mps2": 5.95,
+    "formula": "Fit v(t) = v0 - a*t to clean runtime deceleration windows; a = 5.95 m/s^2; t_stop = |v|/a; s_stop = |v|^2/(2a)",
+    "g": 9.81,
+    "inference_note": "The asset-material estimate (0.35*g = 3.4335 m/s^2) underestimates the observed runtime slowdown. Clean monotonic free-ball windows in timeplot_2026-07-21_13-11-46.json fit a median deceleration of 5.95 m/s^2 (p25–p75 ≈ 5.95–5.96). Equivalent mu≈0.607 at g=9.81. Used by both the offline simulator and Titanium trajectory service. Independent community report (MerijnZ1) of rolling resistance ≈6 u/s^2 matches within ~1%.",
+    "calibration": {
+      "date": "2026-07-21",
+      "source": "timeplot_2026-07-21_13-11-46.json",
+      "method": "Least-squares linear fits over clean monotonic speed-decay windows; median fitted slope magnitude.",
+      "measured_accel_mps2": 5.95,
+      "equivalent_friction_coefficient": 0.607,
+      "community_crosscheck_mps2": 6.0
+    }
+  },
+  "community_reports": {
+    "source": "MerijnZ1 Discord notes (2026-07, via Terminator)",
+    "status": "candidate_not_timeplot_confirmed",
+    "players": {
+      "model": "perfect_simple_movers",
+      "note": "Reachability ≈ circle radius growing with max speed (Apollonius / earliest-intercept). No Coulomb player friction; controller-driven.",
+      "stamina_full_drain_s": {
+        "value": 30.0,
+        "confirmed": false,
+        "note": "Extrapolated from small UI slope"
+      },
+      "stamina_full_regen_s": {
+        "value": 15.0,
+        "confirmed": false,
+        "note": "Extrapolated from small UI slope"
+      },
+      "tackle": "Deduct min(attacker,carrier) stamina from both; survivor with stamina>0 keeps/wins ball (near-ball interact, not body hitbox alone)",
+      "interact": "Near the ball (Player Interact Radius), not only player collider",
+      "free_ball_pickup": "Not automatic — must interact/tackle to claim a loose ball (AIA 2026-07-19)",
+      "shot_charge": "Hold SoccerController Bool2 (interact) to charge; set false to release kick in that frame's move direction"
+    },
+    "possession_timing": {
+      "source": "AIA Discord 2026-07-18 (BlockheadedMoronicIdiot bug reports + AIA reply)",
+      "global_pickup_delay_after_shot_s": {
+        "value": 0.3,
+        "confirmed_by_aia": true,
+        "note": "Was GLOBAL (blocks everyone from grabbing after any shot). AIA said they would change it; verify on current build (v0.2+ / worldcupv0.5)."
+      },
+      "observed_bugs_may_be_fixed": [
+        "Standing on still ball + interact for many frames without pickup (may be delay + still-ball edge case)",
+        "Catching fast ball but failing to pick up stationary ball",
+        "Full-charge shot: interact false next frame but still holding ball (failed release / instant regrab)"
+      ],
+      "bot_implication": "After any shot, treat ball as unclaimable for ~0.3s (or until verified fixed). Do not spam interact as pass; release interact to shoot, then wait delay before re-interact. Instant regrab after shoot was a known bug."
+    },
+    "relative_position_self": {
+      "source": "AIA / BlockheadedMoronicIdiot 2026-07-19",
+      "meaning": "RelativePosition(..., 'Self') is the local frame of the *input transform*, not the graph's controlling player",
+      "recommendation": "Prefer World: OpponentGoal→World minus Player→World for player-relative vectors"
+    },
+    "kick": {
+      "max_power_speed_mps": {
+        "value": 30.0,
+        "confirmed": false,
+        "note": "Max power kick launch speed; slight upward pitch"
+      },
+      "max_apex_height_m": { "value": 1.4, "confirmed": false },
+      "max_hang_before_first_bounce_s": {
+        "value": 1.0,
+        "confirmed": false,
+        "crosscheck": "With g=9.81 and rise 0.35→1.4m, hang≈0.93s; ground-symmetric 1.4m rise hang≈1.07s — consistent with ~1s claim"
+      },
+      "launch_pitch_deg_implied": {
+        "value": 8.7,
+        "note": "|v|=30 with vy for 0.35→1.4m apex implies ~8.7° up"
+      }
+    },
+    "export_json": {
+      "note": "In-game Export JSON destination still unknown (Merijn could not find output). Soccer settings expose exportResults bool but no audited write path. Bot graphs go via SaveData to Saves/Soccer/*.txt — different from Export JSON."
+    },
+    "survival_movement_similarity": {
+      "claim": "Soccer locomotion is supposedly similar to Survival (moveTo + sprint + stamina).",
+      "survival_readme": {
+        "walk_mps": 5.0,
+        "sprint_mps": 9.0,
+        "stamina_start": 100,
+        "sprint_drain_per_tick": 0.15,
+        "regen_delay_s": 3.0,
+        "regen_per_tick": 2.0
+      },
+      "drive_pdf": {
+        "file": "_mined/survival_movement_ref.pdf",
+        "url": "https://drive.google.com/file/d/1MJCXr5IEoF-OTt0UNe5vT--iu9Y_NxmM/view",
+        "what_it_is": "ORYX Survival competition code writeup (state machine / sprint-at-70%-stamina policy). Not a Soccer or Survival physics dump — no accel/friction numbers."
+      },
+      "soccer_status": "Controller shape matches (SoccerController moveTo/sprint/interact). Soccer walk/sprint speeds and accel still unconfirmed; Titanium still uses 4.5/2.5 interception defaults."
+    }
+  },
+  "simulation": {
+    "low_speed_threshold_mps": 0.0001,
+    "max_free_ball_speed_mps": 80.0,
+    "enable_post_bounce": false,
+    "event_time_epsilon_s": 1e-9,
+    "held_carrier_lookahead_s": 0.35,
+    "notes": {
+      "low_speed_threshold": "Numerical stop policy only. Speeds at or below this threshold stop without integrating the residual distance, whose bound is threshold^2/(2*accel).",
+      "max_free_ball_speed": "Safety cap on free-ball predictor input only. Raised to 80 m/s from timeplot_2026-07-21_13-59-01.json (p99 free/kick speeds ~75, impulse spikes higher). Not an audited Soccer prefab value.",
+      "event_time_epsilon": "Tolerance for accepting a quadratic event root at the friction stop boundary and for grouping simultaneous corner contacts.",
+      "held_carrier_lookahead": "Bounded prediction horizon for opponent-held-ball interception; not a scraped runtime physics constant."
+    }
+  },
+  "player_movement_calibration": {
+    "status": "candidate_only_not_confirmed",
+    "evidence_policy": "SoccerController exposes sprint, move target, and interact inputs, but the available Soccer assets do not expose auditable movement speed or acceleration floats. Community: players are perfect simple movers (geometric reach circles). Do not treat opaque prefab values as confirmed.",
+    "model": "accelerate_then_cruise_toward_moveTo (simple mover); sprint bool raises max speed when stamina allows",
+    "interception_defaults": {
+      "max_speed_mps": 4.5,
+      "acceleration_mps2": 2.5,
+      "confirmed": false,
+      "source": "Opaque Soccer prefab candidate values; not verified against the runtime prefab. Used by Titanium ReachTime until remeasured."
+    },
+    "walk_max_speed_mps": {
+      "candidates": [5.0],
+      "confirmed": false,
+      "source": "AIGamePyLibrary README Survival-mode reference; not Soccer movement evidence"
+    },
+    "sprint_max_speed_mps": {
+      "candidates": [9.0],
+      "confirmed": false,
+      "source": "AIGamePyLibrary README Survival-mode reference; not Soccer movement evidence"
+    },
+    "walk_acceleration_mps2": {
+      "candidates": [],
+      "confirmed": false,
+      "source": "No auditable Soccer movement acceleration value found"
+    },
+    "sprint_acceleration_mps2": {
+      "candidates": [],
+      "confirmed": false,
+      "source": "No auditable Soccer movement acceleration value found"
+    }
+  },
+  "field": {
+    "soccer_get_float_marks": {
+      "source": "AIA Discord / SoccerGetFloat labels (community, 2026-07)",
+      "Field Width": 50.0,
+      "Field Depth": 80.0,
+      "Kickoff Circle Radius": 7.25,
+      "Each ground line": 5.0,
+      "Area Depth": 12.5,
+      "Arena Semicircle Depth": 2.5,
+      "axis_convention": "Depth ≈ long axis toward goals (our ±X); Width ≈ sideline axis (our ±Z). Width 50 ≈ ball-center Z span 49.4; Depth 80 ≈ post span 80.4 / playable X span 79.",
+      "note": "These are the runtime SoccerGetFloat constants. Ball-center collision AABB below is tighter by ~ball radius / wall thickness."
+    },
+    "playable_ball_center_aabb": {
+      "x_min": -39.5,
+      "x_max": 39.5,
+      "z_min": -24.7,
+      "z_max": 24.7
+    },
+    "goal": {
+      "posts_x": 40.2,
+      "post_z": [-6.0, 6.0],
+      "post_radius_world": 0.3,
+      "post_contact_radius": 0.7063723683357239,
+      "half_width": 6.0,
+      "line_x": 39.5,
+      "terminal": true,
+      "open_mouth": true,
+      "rule": "End walls collide EXCEPT |z|<=6 goal mouths — ball passes through and terminates (no bounce). Upright posts are solid vertical capsules at (±40.2, ±6) with world radius 0.3 (parent scale 0.6 × local capsule 0.5); ball-center contact radius = post_r + ball_r ≈ 0.706. Geometry behind the goal line (nets) is ignored — scoring terminates the free-ball path.",
+      "post_bounce": {
+        "restitution": 0.2,
+        "graze_vn_floor_frac": 0.5,
+        "scrape_tangent_frac": 0.4,
+        "note": "Grazing endline-rail hits have tiny geometric vn; PhysX still scrapes the ball inward hard (timeplot_2026-07-21_12-59-35 ~t=8.63: (0,-28.8)->(-11.7,-16.0)). Floor |vn| to graze_vn_floor_frac*|v| and kill at least scrape_tangent_frac*|v| of tangential speed."
+      },
+      "post_evidence": "level0 CapsuleCollider on LeftPost/RightPost; timeplot_2026-07-21_12-36-34 ~t=9.42 and 12-59-35 ~t=8.63 endline scrapes."
+    },
+    "walls": {
+      "sidelines_z": "bounce effective e=0.2 (80% normal-speed loss)",
+      "endlines_outside_mouth": "bounce effective e=0.2 (80% normal-speed loss)",
+      "endlines_in_mouth": "OPEN — pass through / score (terminal), never bounce",
+      "slide_into_wall_absorb": {
+        "wall_eps_m": 0.15,
+        "into_speed_frac": 0.08,
+        "note": "Tiny into-wall velocity while already on a solid wall is absorbed (vx/vz->0) so the predictor does not invent a bounce that then misses the post. Real wall shots with meaningful |vn| still bounce."
+      },
+      "goal_posts": "XZ circles; e=0.2 + graze floor/scrape (see goal.post_bounce)"
+    }
+  },
+  "api": {
+    "position": "RelativePosition(SoccerGetTransform('Ball'), 'Self')",
+    "velocity": "SoccerGetVector3('Ball Velocity') — flatten Y for XZ sim"
+  },
+  "module": "ball_physics_sim.py"
+}

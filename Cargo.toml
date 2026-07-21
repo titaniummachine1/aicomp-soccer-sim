@@ -1,0 +1,26 @@
+[package]
+name = "aicomp-soccer-sim"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Fully 2D top-down close copy of AIComp Soccer for rapid offline testing"
+
+[[bin]]
+name = "soccer_sim"
+path = "src/main.rs"
+
+[dependencies]
+# Top-down 2D only. dynamic_linking = fast debug rebuilds on Windows.
+bevy = { version = "0.19", features = ["dynamic_linking"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+approx = "0.5"
+
+# Fast edit→run: light opt on our code, full opt on deps.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
