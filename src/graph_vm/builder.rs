@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::graph_vm::ir::{IrInst, LoweredIR};
 use crate::graph_vm::lower::CompileResult;
-use crate::graph_vm::opcode::Instruction;
+use crate::graph_vm::opcode::{Instruction, OpCode};
 use crate::graph_vm::program::{RuntimeProgram, GRAPH_ABI_VERSION};
 
 #[derive(Debug, Default)]
@@ -86,11 +86,17 @@ fn max_reg(ir: &LoweredIR) -> u32 {
         if let Some(d) = inst.dest {
             max_reg = max_reg.max(d.0 + 1);
         }
-        for a in &inst.args {
-            max_reg = max_reg.max(a.0 + 1);
+        for (index, a) in inst.args.iter().enumerate() {
+            if !is_variable_id_arg(inst.op, index) {
+                max_reg = max_reg.max(a.0 + 1);
+            }
         }
     }
     max_reg
+}
+
+fn is_variable_id_arg(op: OpCode, index: usize) -> bool {
+    index == 0 && matches!(op, OpCode::LoadVar | OpCode::StoreVar)
 }
 
 fn hash_ops(ops: &[Instruction]) -> u64 {

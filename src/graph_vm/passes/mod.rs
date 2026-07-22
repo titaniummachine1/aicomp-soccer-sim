@@ -3,6 +3,7 @@
 pub mod const_fold;
 pub mod cse;
 pub mod fusion;
+pub mod reg_alloc;
 pub mod relay_removal;
 
 use crate::graph_vm::ir::LoweredIR;
@@ -10,6 +11,7 @@ use crate::graph_vm::ir::LoweredIR;
 pub use const_fold::ConstFold;
 pub use cse::Cse;
 pub use fusion::Fusion;
+pub use reg_alloc::RegAlloc;
 pub use relay_removal::RelayRemoval;
 
 pub trait Pass {
@@ -29,9 +31,7 @@ impl PassManager {
         }
     }
 
-    /// O1 pipeline: ConstFold followed by RelayRemoval, CSE, and Fusion.
-    ///
-    /// RegAlloc lands later.
+    /// O1 pipeline: ConstFold → RelayRemoval → CSE → Fusion → RegAlloc.
     pub fn o1() -> Self {
         Self {
             passes: vec![
@@ -39,6 +39,7 @@ impl PassManager {
                 Box::new(RelayRemoval),
                 Box::new(Cse),
                 Box::new(Fusion),
+                Box::new(RegAlloc),
             ],
         }
     }

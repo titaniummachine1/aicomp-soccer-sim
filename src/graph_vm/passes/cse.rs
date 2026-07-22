@@ -106,6 +106,7 @@ fn is_variable_id_arg(op: OpCode, index: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::graph_vm::ir::IrInst;
     use crate::graph_vm::passes::{ConstFold, RelayRemoval};
     use crate::graph_vm::value::RegisterKind;
 
