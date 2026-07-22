@@ -61,6 +61,37 @@ pub trait TeamBrain: Send + Sync {
     fn think(&mut self, api: &TeamApi) -> BrainOutput;
 }
 
+impl TeamBrain for Box<dyn TeamBrain> {
+    fn think(&mut self, api: &TeamApi) -> BrainOutput {
+        (**self).think(api)
+    }
+}
+
+/// Stand still — useful as a parked opponent in probes / headless A/B.
+#[derive(Debug, Default)]
+pub struct IdleBrain;
+
+impl TeamBrain for IdleBrain {
+    fn think(&mut self, api: &TeamApi) -> BrainOutput {
+        let mut out = BrainOutput::default();
+        for (i, slot) in PlayerId::ALL.iter().enumerate() {
+            let me_label = match slot.0 {
+                1 => "Team Player 1",
+                2 => "Team Player 2",
+                3 => "Team Player 3",
+                _ => "Team Player 4",
+            };
+            let me = api.get_transform(me_label).unwrap_or(Vec2::ZERO);
+            out.commands[i] = BrainCommand {
+                move_to: me,
+                sprint: false,
+                interact: false,
+            };
+        }
+        out
+    }
+}
+
 /// Chase ball via SoccerGet* labels — proves API I/O path.
 #[derive(Debug, Default)]
 pub struct ChaseBallBrain;

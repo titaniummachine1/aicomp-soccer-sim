@@ -4,14 +4,29 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 description = "Fully 2D top-down close copy of AIComp Soccer for rapid offline testing"
+default-run = "soccer_sim"
+
+# Bins (easy entry points):
+#   soccer_sim          — Bevy viewer (window)
+#   soccer_headless     — batch / fishtest-style matches (JSON stdout, no window)
+#   debug_tackle_test   — scripted Test1/Test2 steal assert
+#   timeplot_until_goal — AIA graph TimePlot capture
 
 [[bin]]
 name = "soccer_sim"
 path = "src/main.rs"
 
 [[bin]]
+name = "soccer_headless"
+path = "src/bin/soccer_headless.rs"
+
+[[bin]]
 name = "timeplot_until_goal"
 path = "src/bin/timeplot_until_goal.rs"
+
+[[bin]]
+name = "debug_tackle_test"
+path = "src/bin/debug_tackle_test.rs"
 
 [features]
 # Shareable/portable builds are the default (fully static).

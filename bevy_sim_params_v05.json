@@ -146,8 +146,8 @@
       "consume_rate": 0.15,
       "regen_rate": 5.0,
       "regen_delay_s": 0.0,
-      "tackle_regen_delay_s": 1.5,
-      "note": "TimePlot 17-27-22 DB15: regen starts next tick after sprint OFF (no 1.0s flat). Frida staminaRegenDelay=1.0 unused/wrong for live drain. tackle delay still Frida candidate."
+      "tackle_regen_delay_s": 0.0,
+      "note": "TimePlot 18-27-41: stam-advantage steal, no mutual dump, loser regen immediate (Frida tackle 1.5s / sprint 1.0s both wrong). Equal stam keeps carrier."
     },
     "stamina_drain_full_s": 34.5,
     "stamina_regen_full_s": 20.0,

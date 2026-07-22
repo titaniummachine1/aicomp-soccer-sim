@@ -21,12 +21,8 @@ use crate::match_state::{
     kickoff_control_allowed, place_kickoff, receiving_team_circle_locked, MatchPhase, MatchState,
 };
 use crate::params::SimParams;
-use crate::player::{
-    faceoff_world, kickoff_facing, step_mover, Player, PlayerId, SimpleMover,
-};
-use crate::possession::{
-    apply_interact, sync_held_ball, tick_possession_timers, Possession,
-};
+use crate::player::{faceoff_world, kickoff_facing, step_mover, Player, PlayerId, SimpleMover};
+use crate::possession::{apply_interact, sync_held_ball, tick_possession_timers, Possession};
 
 /// Confirmed AIComp fixed step (~52.6 Hz). Independent of render FPS.
 pub const FIXED_DT: f32 = 0.019;
@@ -85,6 +81,9 @@ impl MatchWorld {
             world.match_state.kickoff_team,
             world.params.ball_rest_height,
         );
+        if world.ball.held {
+            world.possession.carrier = Some((world.match_state.kickoff_team, 1));
+        }
         world
     }
 
@@ -113,7 +112,11 @@ impl MatchWorld {
                     self.match_state.kickoff_team,
                     self.params.ball_rest_height,
                 );
-                self.possession.carrier = None;
+                self.possession.carrier = if self.ball.held {
+                    Some((self.match_state.kickoff_team, 1))
+                } else {
+                    None
+                };
                 self.match_state.phase = MatchPhase::Kickoff;
                 self.match_state.phase_timer = 0.0;
                 self.match_state.kickoff_circle_lock = true;
@@ -179,11 +182,7 @@ impl MatchWorld {
                 &self.match_state,
                 &self.params,
             );
-            let cmd = bias_away_defender_opening_hold(
-                &self.players[i],
-                cmd,
-                &self.match_state,
-            );
+            let cmd = bias_away_defender_opening_hold(&self.players[i], cmd, &self.match_state);
             let is_carrier = matches!(
                 self.possession.carrier,
                 Some((t, id)) if t == team && id == self.players[i].id.0
@@ -314,7 +313,8 @@ impl MatchWorld {
     fn apply_goal(&mut self, scored: EndReason) {
         match scored {
             EndReason::GoalHome => {
-                self.match_state.on_goal(TeamId::Home, self.params.kickoff_delay_s);
+                self.match_state
+                    .on_goal(TeamId::Home, self.params.kickoff_delay_s);
                 self.possession.carrier = None;
                 self.ball.held = false;
                 self.ball.vel = Vec2::ZERO;
@@ -322,7 +322,8 @@ impl MatchWorld {
                 self.ball.height = self.params.ball_rest_height;
             }
             EndReason::GoalAway => {
-                self.match_state.on_goal(TeamId::Away, self.params.kickoff_delay_s);
+                self.match_state
+                    .on_goal(TeamId::Away, self.params.kickoff_delay_s);
                 self.possession.carrier = None;
                 self.ball.held = false;
                 self.ball.vel = Vec2::ZERO;
@@ -333,7 +334,7 @@ impl MatchWorld {
         }
     }
 
-    pub fn step_brains<H: TeamBrain, A: TeamBrain>(
+    pub fn step_brains<H: TeamBrain + ?Sized, A: TeamBrain + ?Sized>(
         &mut self,
         home: &mut H,
         away: &mut A,
@@ -469,6 +470,26 @@ fn tick_stamina(player: &mut Player, sprint: bool, dt: f32, params: &SimParams) 
 mod tests {
     use super::*;
     use crate::brain::ChaseBallBrain;
+
+    #[test]
+    fn scripted_test1_test2_steal_in_sim() {
+        let params = SimParams::default();
+        let mut world = MatchWorld::new_kickoff_opening(params, TeamId::Home);
+        let mut home = crate::probe_brains::Test1Brain::default();
+        let mut away = crate::probe_brains::Test2Brain::default();
+        let mut stole = false;
+        for _ in 0..(50.0 / FIXED_DT) as u32 {
+            world.step_brains(&mut home, &mut away, FIXED_DT);
+            if matches!(world.possession.carrier, Some((TeamId::Away, 1))) {
+                stole = true;
+                break;
+            }
+        }
+        assert!(
+            stole,
+            "Test1/Test2 scripted brains must produce a steal in-sim"
+        );
+    }
 
     #[test]
     fn headless_steps_without_panic() {

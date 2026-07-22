@@ -189,6 +189,18 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
             3 => "Team Player 3 Stamina",
             _ => "Team Player 4 Stamina",
         };
+        let charge_label = match id.0 {
+            1 => "Teammate 1 Shot Charge",
+            2 => "Teammate 2 Shot Charge",
+            3 => "Teammate 3 Shot Charge",
+            _ => "Teammate 4 Shot Charge",
+        };
+        let opp_stam_label = match id.0 {
+            1 => "Opponent Player 1 Stamina",
+            2 => "Opponent Player 2 Stamina",
+            3 => "Opponent Player 3 Stamina",
+            _ => "Opponent Player 4 Stamina",
+        };
         let dist_label = match id.0 {
             1 => "Distance from Team Player 1 to nearest Opponent",
             2 => "Distance from Team Player 2 to nearest Opponent",
@@ -200,7 +212,19 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
             .find(|p| p.id == id)
             .map(|p| p.stamina)
             .unwrap_or(0.0);
+        let charge = team_players
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| p.shot_charge)
+            .unwrap_or(0.0);
+        let opp_stam = opp_players
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| p.stamina)
+            .unwrap_or(0.0);
         floats.insert(stam_label, stam);
+        floats.insert(charge_label, charge);
+        floats.insert(opp_stam_label, opp_stam);
         let dist = team_players
             .iter()
             .find(|p| p.id == id)
@@ -228,6 +252,19 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
             .map(|p| p.pos)
             .unwrap_or(Vec2::ZERO);
         transforms.insert(key, pos);
+
+        let opp_key = match id.0 {
+            1 => "Opponent Player 1",
+            2 => "Opponent Player 2",
+            3 => "Opponent Player 3",
+            _ => "Opponent Player 4",
+        };
+        let opp_pos = opp_players
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| p.pos)
+            .unwrap_or(Vec2::ZERO);
+        transforms.insert(opp_key, opp_pos);
 
         let near_key = match id.0 {
             1 => "Teammate Nearest Team Player 1",

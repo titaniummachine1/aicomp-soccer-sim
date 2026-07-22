@@ -29,6 +29,10 @@ pub const GET_FLOAT: &[&str] = &[
     "Distance from Team Player 2 to nearest Opponent",
     "Distance from Team Player 3 to nearest Opponent",
     "Distance from Team Player 4 to nearest Opponent",
+    "Opponent Player 1 Stamina",
+    "Opponent Player 2 Stamina",
+    "Opponent Player 3 Stamina",
+    "Opponent Player 4 Stamina",
     "Opponent Score",
     "Player Interact Radius",
     "Stamina of last defending opponent",
@@ -37,6 +41,10 @@ pub const GET_FLOAT: &[&str] = &[
     "Team Player 3 Stamina",
     "Team Player 4 Stamina",
     "Team Score",
+    "Teammate 1 Shot Charge",
+    "Teammate 2 Shot Charge",
+    "Teammate 3 Shot Charge",
+    "Teammate 4 Shot Charge",
 ];
 
 /// Field marks (CONFIRMED API labels; not all appear in AIATest dump of 14).
@@ -59,6 +67,10 @@ pub const GET_TRANSFORM: &[&str] = &[
     "Team Player 2",
     "Team Player 3",
     "Team Player 4",
+    "Opponent Player 1",
+    "Opponent Player 2",
+    "Opponent Player 3",
+    "Opponent Player 4",
     "Teammate Nearest Team Player 1",
     "Teammate Nearest Team Player 2",
     "Teammate Nearest Team Player 3",

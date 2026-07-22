@@ -1,5 +1,11 @@
-//! Interactive viewer: scale-correct pitch, solid white posts, R=restart,
-//! click player for debug outlines, Load Team A/B from Soccer saves folder.
+//! Interactive Bevy viewer (window). For batch AI eval use `soccer_headless`.
+//!
+//! ```text
+//! cargo run --release
+//! cargo run --release --bin soccer_headless -- --help
+//! ```
+//!
+//! See README.md / AGENTS.md. Hotkeys: Space=pause, R=reload params.
 
 use std::path::{Path, PathBuf};
 

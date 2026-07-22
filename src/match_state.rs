@@ -140,6 +140,15 @@ pub fn place_kickoff(
         p.shot_charge = 0.0;
         p.charge_warmup_left = 0.0;
     }
+    // Kicking striker starts with the ball (avoids body-bump launch at overlap).
+    if let Some(p) = players
+        .iter()
+        .find(|p| p.team == kickoff_team && p.id.0 == 1)
+    {
+        let hold = p.pos + p.facing * 1.557;
+        ball.pos = hold;
+        ball.held = true;
+    }
 }
 
 /// Receiving team may not enter the kickoff circle during Kickoff phase only.

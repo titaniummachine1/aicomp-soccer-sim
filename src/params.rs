@@ -131,7 +131,7 @@ impl SimParams {
             ball_bounce_settle: 0.5,
             angular_speed_deg: 2500.0,
             stamina_regen_delay_s: 0.0,
-            stamina_tackle_regen_delay_s: 1.5,
+            stamina_tackle_regen_delay_s: 0.0,
             // TimePlot 17-05-04 DebugBuild=14 continuous sprint/has segments.
             stamina_drain_full_s: 34.5,
             stamina_regen_full_s: 20.0,
@@ -459,6 +459,7 @@ struct RawStaleBallFrida {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct RawStaminaFrida {
     max: Option<f32>,
     consume_rate: Option<f32>,

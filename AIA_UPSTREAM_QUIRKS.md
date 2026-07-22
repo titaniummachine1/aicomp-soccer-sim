@@ -135,9 +135,14 @@ Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic
 
 ## Lower / measurement notes
 
-### 11. Locomotion without Sprint ≈ 7 m/s
+### 11. Walk ≈ 7 m/s · sprint = 8 m/s · **no stamina throttle**
 
-- **Where:** `ENGINE` · `CONFIRMED` (Away O1 chase, Sprint=0, mean ~6.4–7 m/s)
+- **Where:** `ENGINE` · `CONFIRMED`
+  - Walk (Sprint=0): ~7 m/s (Away chase + StaminaProbe).
+  - Sprint cruise: **exactly 8.0 m/s** flat (clips hard).
+  - TimePlot **18-53-07 DB2** (always-sprint to empty): median **8.0** in every
+    stam bin down through `stam≈0.00015` (612 samples with stam≤0.01). Speed
+    does **not** scale with stamina; Sprint flag alone picks 8 vs 7.
 - Community “Survival-like 4.5 walk / 9 sprint” does **not** match Soccer.
 - **Ask:** Publish Soccer walk/sprint/accel from the build.
 
@@ -190,15 +195,15 @@ Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic
   carry/kick origin (~0.9 m along facing); grab reach is still interact_r vs
   hold∪body.
 
-### 18. Tackle: strict `>` after drain + live carrier stam (no same-tick ping-pong)
+### 18. Tackle: strict stam `>` steals; equal keeps; **no mutual dump**
 
-- **Where:** `ENGINE` · `CONFIRMED` (SOCCER_GAME_MODEL) / was `SIM` bug
-- **What:** Winner needs **more** stamina after mutual drain (carrier keeps ties).
-  Sim also snapshotted carrier stam once per tick and applied drains after the
-  player loop → later tacklers dueled a stale (often 0) stam and stole every
-  player in the same frame (Away charge never reached 1.0). Fixed: live stam,
-  immediate drain, lockout after steal/kick blocks further tackle/pickup.
-- **Ask:** Confirm tie rule + whether steal has a short lockout in engine.
+- **Where:** `ENGINE` · `CONFIRMED` (TimePlot **18-27-41** Test1/Test2)
+- **What:** Attacker needs **strictly higher** stamina than carrier to steal.
+  Equal stam → carrier keeps (usable technique). Steal does **not** zero /
+  mutual-drain either side. Loser regen starts immediately (Frida
+  `tackleRegenDelay=1.5s` not live). Exchange pickup lockout **0.25s** after
+  win. Sim also fixed same-tick ping-pong (live carrier stam + lockout).
+- **Ask:** Document live tie rule; Frida mutual-zero + 1.5s delay appear stale.
 
 ### 19. Shot charge: ~0.30s warmup after pickup, then ~0.38s to 1.0
 
@@ -224,16 +229,14 @@ Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic
   first held sample ≈1.67)
 - **Sim:** `hold_offset_m=1.60`. Old body+ball≈0.9 under-shot early Ball.Z.
 
-### 22. Tackle: failed probes drain 0; success = full mutual min-drain
+### 22. Tackle (locked): advantage steal, no dump, equal keeps
 
-- **Where:** `ENGINE`/`SIM` · working assumption (updated from TimePlot)
-- **What:** Opening probes must not attrit (tiny mutual drip left Home 0.992 <
-  Away 0.993 → StrikerPos → TriangulatedOffPos). Successful steals deduct
-  **min(attacker,carrier)** from **both** (real t≈1.36: T1 and O2 → 0). Equal
-  stam after drain: **attacker wins** only when carrier `shot_charge ≥ 0.5`
-  (mid-charge contest); otherwise carrier keeps (protects first Away touch).
-  Post-steal lockout **0.40s** so a fresh full-stam teammate doesn't instantly
-  yo-yo the zeroed carrier (real Home holds ~1.38–1.75 at stam 0).
+- **Where:** `ENGINE`/`SIM` · `CONFIRMED` (TimePlot **18-27-41**; supersedes
+  earlier mutual-min-drain / mid-charge-bias notes)
+- **What:** Failed probes drain nothing. Successful steal = `attacker.stam >
+  carrier.stam` only; **no** mutual stam dump. Equal stam → carrier keeps.
+  Post-steal exchange lockout **0.25s**. Mid-charge equal-stam “both dump”
+  never cleanly captured — treat as untested / likely wrong.
 
 ### 23. Post-kick reclaim: hot window only, no hang body-snatch
 
@@ -276,12 +279,12 @@ Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic
 | Opp-goal dir    | Clear lane into mouth or null; goal-dir uses interact_r                             |
 | ClearMate       | LOS + short corridor + other mates block; MIN_DOT 0.93; mate_r body×2.8; max 36     |
 | Kicking striker | Spawns at (0,0) when kicking off; kickoff face ±Z (#24)                             |
-| Speeds          | ~7.5 m/s, accel ~45; Clear-sticky facing; snap after warmup (#24)                   |
+| Speeds          | walk **7** / sprint **8**; no stam throttle (#11); Clear-sticky facing (#24)        |
 | Clear blockers  | body1.5 + continuous closest-approach ray                                           |
 | Charge          | 0.30s warmup + 0.38s to full (#19)                                                  |
 | Hold offset     | 1.60 m (#21)                                                                        |
 | Kickoff / Away  | Kickoff-phase circle clamp; suppress Away team-side + P3-closest                    |
-| Tackle          | Full mutual drain on success; equal→attacker if carrier ch≥0.5; lockout 0.40s (#22) |
+| Tackle          | Strict stam `>` steals; equal keeps; no dump; lockout 0.25s (#18/#22)               |
 | Pickup / loose  | Hot window 0.25s; no hang body-claim; settle `<2 m/s` (#23)                         |
 | Held-ball vel   | Carrier vel (#16)                                                                   |
 | Early Ball      | **t<=2 X~~0.77 Z~~1.22**; Zt2[-5.2,2.1] vs[-4.5,1.9]; t<=3 ~0.9/2.0                 |
@@ -292,7 +295,7 @@ Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic
 | Kick launch     | `horiz=min((10+290c)/9,29.42)`; lift `max(0,-0.323+6.667c)`;                        |
 | Ground slide    | Coulomb 5.95 **only while grounded**; airborne XZ coasts (Y hang ⇒ carry)           |
 | Whistle reset   | Positions/ball/charge snap to kickoff; **stamina persists** (no free refill)        |
-| Stamina rates   | Drain **~34.5s** empty; regen **~20s** full (TimePlot 17-05-04 DB14); no snap@0     |
+| Stamina rates   | Drain **~34.5s** empty; regen **~20s** full; no snap@0; sprint 8 @ empty (#11)       |
 | Kick flick      | Interact↓ aims **MoveTo**, not hold/facing — instant 90° OK (17-11-17 DB11)         |
 
 ### Whistle / kickoff: positions only (`CONFIRMED`)
@@ -331,11 +334,12 @@ regenerated smoothly at **0.05/s** (~20s full) — no snap. Drain while carrying
 > 5. Striker `Ready Shoot/Pass` uses OppGoal for **both** dirs, so Ready stays
 >    false until full charge (kick at 1.0). Playmaker can Ready earlier via
 >    ClearMate. Intentional?
-> 6. Please publish Soccer walk/sprint/accel; Survival 4.5/9 does not match.
+> 6. Soccer walk≈7 / sprint=8; Survival 4.5/9 does not match. Sprint speed does
+>    **not** drop at stam≈0 (always-sprint TimePlot).
 > 7. Opening kickoff hold faces **world ±Z** (~1.67 m), not attack ±X; facing
 >    tracks Clear with sticky C→H during charge warmup.
-> 8. Successful tackle deducts min(stam) from **both**; equal mid-charge contests
->    go to attacker (carrier keeps ties only before mid-charge).
+> 8. Tackle: higher stam steals, equal keeps, **no** mutual stam dump. Frida
+>    mutual-zero + 1.5s tackle regen delay not observed live.
 
 Update this file whenever a new confirmed quirk shows up.
 
@@ -345,9 +349,9 @@ Update this file whenever a new confirmed quirk shows up.
 
 What is still soft / optional:
 
-1. **Tackle regen delay 1.5s** — Frida candidate; first TackleRegen capture
-   missed (Away body-chased; equal-stam before first kick). Reload fixed
-   TackleRegenProbe/Away (chase ball + short kick then bait).
+1. *(none for tackle delay — locked below)* Mid-charge **equal-stam** mutual
+   stam-zero still untested (equal stam cannot steal; advantage steal does not
+   dump either side).
 
 ### Locked (no new capture needed)
 
@@ -356,6 +360,8 @@ What is still soft / optional:
 - Hang vs charge (~0.28s@0.5 → ~0.61s@full)
 - Stamina drain **~34.5s** / regen **~20s**; no snap@0; sprint works to empty
 - Sprint-off regen delay = **0** (immediate next tick; Frida 1.0s not live)
+- Walk **7** / sprint **8** m/s; **no speed throttle at stam≈0** (TimePlot
+  18-53-07 DB2 always-sprint; med 8.0 through stam≤0.01 / floor ~1.5e-4)
 - Kick flick: Interact↓ = **MoveTo** dir (TimePlot 17-11-17); sim already matches
 - Exchange pickup lockout **0.25s** on tackle win
 - Pickup airborne uses real grounded Y
@@ -366,6 +372,9 @@ What is still soft / optional:
   charge-warmup reject of ~90° flips still applies while carrying.
 - Post-goal pause → kickoff reset **~4.9s** (TimePlot 17-37-34); Frida 1.0s is
   not that freeze.
+- Tackle: **equal stam → carrier keeps**; **higher stam steals** (TimePlot
+  18-27-41 Test1/Test2). Steal does **not** zero either stam. Loser regen is
+  immediate (tackleRegenDelay Frida 1.5s **not live** → wired 0).
 
 ---
 

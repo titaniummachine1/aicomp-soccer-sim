@@ -59,7 +59,7 @@ pub fn apply_interact(
     params: &SimParams,
     dt: f32,
     carrier_stamina: Option<f32>,
-    carrier_shot_charge: Option<f32>,
+    _carrier_shot_charge: Option<f32>,
 ) -> Option<CarrierStaminaDrain> {
     let hold = player.hold_pos(params.hold_offset);
     let is_carrier = matches!(
@@ -151,8 +151,8 @@ pub fn apply_interact(
         }
     }
 
-    // Tackle: interact near held ball; stamina duel (min drained from both).
-    // Attacker wins only with strictly more stamina after drain (carrier keeps ties).
+    // Tackle: interact near held ball. Strict stamina advantage steals;
+    // equal/lower keeps carrier. No mutual stam dump (TimePlot 18-27-41).
     if ball.held {
         if let Some((ct, cid)) = poss.carrier {
             if ct != player.team {
@@ -161,26 +161,11 @@ pub fn apply_interact(
                     .min((player.pos - ball.pos).length());
                 if dist <= params.interact_radius {
                     let carrier_stam = carrier_stamina.unwrap_or(0.0);
-                    // Failed probes drain nothing (quirks #22). Successful steals
-                    // apply full mutual min-drain (real t≈1.37: T1 and O2 → 0).
-                    // After first kick, equal-stam ties go to the attacker only
-                    // once the carrier is mid-charge (real Away ch≈0.57 before
-                    // Home steal) — otherwise Home yo-yo-steals the first Away
-                    // touch right after kickoff release.
-                    let full = player.stamina.min(carrier_stam);
-                    let attacker_after = (player.stamina - full).max(0.0);
-                    let carrier_after = (carrier_stam - full).max(0.0);
-                    let carrier_charging = carrier_shot_charge.unwrap_or(0.0) >= 0.5;
-                    let attacker_wins = attacker_after > carrier_after
-                        || (poss.first_kick_done
-                            && carrier_charging
-                            && full > 0.0
-                            && (attacker_after - carrier_after).abs() < 1e-6
-                            && player.stamina >= carrier_stam);
-                    let drain = if attacker_wins { full } else { 0.0 };
-                    if drain > 0.0 {
-                        player.stamina = attacker_after;
-                    }
+                    // TimePlot 18-27-41 (Test1/Test2): equal stam → carrier keeps;
+                    // strictly higher stam steals with NO mutual dump. Frida
+                    // "zeros both" / 1.5s tackle regen delay not observed.
+                    let attacker_wins = player.stamina > carrier_stam + 1e-4;
+                    let drain = 0.0;
                     if attacker_wins {
                         poss.carrier = Some((player.team, player.id.0));
                         player.shot_charge = 0.0;
@@ -328,7 +313,7 @@ mod tests {
             Some(0.0),
         );
         assert!(drain.is_some());
-        // Equal stamina before first kick: carrier keeps (strict > after drain).
+        // Equal stamina: carrier keeps (TimePlot).
         assert!(!drain.unwrap().attacker_wins);
         assert_eq!(poss.carrier, Some((TeamId::Home, 1)));
         assert!(
@@ -380,5 +365,10 @@ mod tests {
         );
         assert!(drain.unwrap().attacker_wins);
         assert_eq!(poss.carrier, Some((TeamId::Away, 1)));
+        assert!(
+            (attacker.stamina - 1.0).abs() < 1e-5,
+            "advantage steal must not drain attacker, got {}",
+            attacker.stamina
+        );
     }
 }
