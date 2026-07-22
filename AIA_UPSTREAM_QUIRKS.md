@@ -287,6 +287,8 @@ Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic
 | Chase           | Home 0.45× / Away 0.95× (#25); Away full kick → F (#26)                             |
 | Mid Ball        | t<=5 X~5.7 Z~8.3; t=5 Ball≈(−17,−20) vs (−22,−22) — close                           |
 | ClearMate mix   | T2≈0.62 matches; T1 0.23 vs 0.28; T3 0.68 vs 0.93; T4 0.43 vs 0.38                  |
+| Kick launch     | `horiz=min((10+290c)/9,29.42)`; lift `max(0,-0.323+6.667c)`; |v| soft-cap 29.94   |
+| Ground slide    | Coulomb 5.95 **only while grounded**; airborne XZ coasts (Y hang ⇒ carry)         |
 
 ---
 
@@ -315,6 +317,31 @@ Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic
 >    go to attacker (carrier keeps ties only before mid-charge).
 
 Update this file whenever a new confirmed quirk shows up.
+
+---
+
+## Coverage gaps (need more TimePlots / Frida)
+
+What is still **not locked** for full engine parity — capture help:
+
+1. **Stamina mapping** — Frida `consume_rate=0.15` / `regen_rate=5` / delays vs
+   community 30s drain / 15s regen. Need a sprint-to-empty + idle-regen TimePlot
+   (one player sprinting in place / loops, log stamina every tick).
+2. **`pickupDelayAfterExchange` 0.25s** — unused in sim; confirm when it fires
+   (tackle exchange vs pass claim) with Interact edges.
+3. **Facing / flick / angularSpeed** — Frida `angularSpeed=2500`,
+   `stoppingDistance=0.5`. Need: (a) turn-in-place with ball, (b) turn without,
+   (c) Interact↓ + MoveTo flick (kick aims MoveTo, not facing). Dedicated
+   TurnSweep / FlickKick probes.
+4. **Air drag** — is airborne XZ truly frictionless, or slight drag? Coast a
+   high-lift kick and compare planar |v| before first bounce vs launch.
+5. **Bounce restitution** — material `bounciness=0.4` candidate; measure
+   post-landing `vy` and 2nd bounce settle vs charge.
+6. **Hang vs charge** — not fixed 1s; plot time-to-first-ground vs charge grid
+   (already have launch; need landing timestamps).
+7. **Kickoff delay / spawn margin** — Frida delay 1.0s + margin 0.5; polish vs
+   real first-touch timing.
+8. **Tackle regen delay 1.5s** — confirm stamina freeze after tackle.
 
 ---
 

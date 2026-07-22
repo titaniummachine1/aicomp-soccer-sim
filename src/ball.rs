@@ -1,4 +1,8 @@
-//! Free-ball XZ (2D) kinematics — Coulomb slide + walls + open goal mouths.
+//! Free-ball XZ kinematics + hidden Y (lift / hang).
+//!
+//! Ground Coulomb slide (`slide_accel`) applies only while grounded. Airborne
+//! kicks keep planar speed until landing — stronger charge ⇒ more lift ⇒ longer
+//! hang ⇒ farther carry than always-on slide.
 
 use bevy::prelude::*;
 
@@ -6,8 +10,12 @@ use crate::params::SimParams;
 
 #[derive(Component, Debug, Clone, Copy)]
 pub struct Ball {
+    /// Pitch plane (sim X = Unity depth, sim Y = Unity width/Z).
     pub pos: Vec2,
     pub vel: Vec2,
+    /// Hidden height (Unity Y). Not drawn; drives airborne vs ground slide.
+    pub height: f32,
+    pub vel_y: f32,
     pub held: bool,
 }
 
@@ -16,8 +24,16 @@ impl Default for Ball {
         Self {
             pos: Vec2::ZERO,
             vel: Vec2::ZERO,
+            height: 0.33,
+            vel_y: 0.0,
             held: false,
         }
+    }
+}
+
+impl Ball {
+    pub fn grounded(&self, params: &SimParams) -> bool {
+        self.height <= params.ball_rest_height + 1e-4 && self.vel_y <= 0.05
     }
 }
 
@@ -28,39 +44,82 @@ pub enum EndReason {
     GoalAway,
 }
 
+/// TimePlot 2026-07-22 charge sweep: planar launch + lift.
+/// `horiz = min((10 + 290 c)/9, horiz_cap)` then soft-cap `|v|` to `kick_max_speed`.
+pub fn kick_launch_speeds(charge: f32, params: &SimParams) -> (f32, f32) {
+    let c = charge.clamp(0.0, 1.0);
+    let mut horiz = (params.kick_speed_base + params.kick_speed_per_charge * c)
+        .min(params.kick_horiz_cap);
+    let mut lift = params.kick_lift_base + params.kick_lift_per_charge * c;
+    if lift < 0.0 {
+        lift = 0.0;
+    }
+    let spd = (horiz * horiz + lift * lift).sqrt();
+    if spd > params.kick_max_speed && spd > 1e-6 {
+        let s = params.kick_max_speed / spd;
+        horiz *= s;
+        lift *= s;
+    }
+    (horiz, lift)
+}
+
 pub fn in_goal_mouth(z: f32, half_width: f32) -> bool {
     z.abs() <= half_width
 }
 
 pub fn step_free_ball(ball: &mut Ball, params: &SimParams, dt: f32) -> EndReason {
-    // Held or parked: still score if the center is already in the net (carry-in).
     if ball.held || dt <= 0.0 {
         return goal_at(ball.pos, params);
     }
 
+    // --- Vertical (hidden) ---
+    ball.height += ball.vel_y * dt - 0.5 * params.gravity * dt * dt;
+    ball.vel_y -= params.gravity * dt;
+    if ball.height <= params.ball_rest_height {
+        ball.height = params.ball_rest_height;
+        if ball.vel_y < 0.0 {
+            let bounce = -ball.vel_y * params.ball_bounce_e;
+            ball.vel_y = if bounce < params.ball_bounce_settle {
+                0.0
+            } else {
+                bounce
+            };
+        }
+    }
+
+    let grounded = ball.grounded(params);
+
+    // --- Planar ---
     let speed = ball.vel.length();
     if speed <= params.stop_speed_eps {
         ball.vel = Vec2::ZERO;
+        resolve_walls(ball, params);
+        let scored = goal_at(ball.pos, params);
+        if scored != EndReason::None {
+            return scored;
+        }
+        resolve_posts(ball, params);
         return goal_at(ball.pos, params);
     }
 
-    let a = params.slide_accel;
-    let t_stop = speed / a;
-    let dt_use = dt.min(t_stop);
-    let dir = ball.vel / speed;
-    let accel = -dir * a;
-
-    ball.pos += ball.vel * dt_use + 0.5 * accel * dt_use * dt_use;
-    ball.vel += accel * dt_use;
-    if ball.vel.length() <= params.stop_speed_eps || dt_use >= t_stop {
-        ball.vel = Vec2::ZERO;
+    if grounded {
+        let a = params.slide_accel;
+        let t_stop = speed / a;
+        let dt_use = dt.min(t_stop);
+        let dir = ball.vel / speed;
+        let accel = -dir * a;
+        ball.pos += ball.vel * dt_use + 0.5 * accel * dt_use * dt_use;
+        ball.vel += accel * dt_use;
+        if ball.vel.length() <= params.stop_speed_eps || dt_use >= t_stop {
+            ball.vel = Vec2::ZERO;
+        }
+    } else {
+        // Airborne: no ground Coulomb slide (Y is why strong kicks carry farther).
+        ball.pos += ball.vel * dt;
     }
 
     resolve_walls(ball, params);
 
-    // Score as soon as the ball-center crosses the goal line in the mouth.
-    // Must run BEFORE post bounce — posts sit past the line (±40.2) and were
-    // shoving near-post shots back onto the pitch without terminating.
     let scored = goal_at(ball.pos, params);
     if scored != EndReason::None {
         return scored;
@@ -70,15 +129,12 @@ pub fn step_free_ball(ball: &mut Ball, params: &SimParams, dt: f32) -> EndReason
     goal_at(ball.pos, params)
 }
 
-/// Loose-ball circle vs player bodies (body_r + ball_r). Soft restitution so
-/// contested midfield doesn't need a fat phantom radius.
-/// Hot balls (>8 m/s) pass through — real kicks hang ~1s airborne; ground-only
-/// bounce was dumping speed under the pickup gate and killing loose %.
+/// Loose-ball circle vs player bodies. Hot / airborne balls pass through.
 pub fn resolve_player_bodies(ball: &mut Ball, players: &[crate::player::Player], params: &SimParams) {
     if ball.held {
         return;
     }
-    if ball.vel.length() > 8.0 {
+    if !ball.grounded(params) || ball.vel.length() > 8.0 {
         return;
     }
     let contact_r = params.body_radius + params.ball_radius;
@@ -112,90 +168,95 @@ pub fn resolve_player_bodies(ball: &mut Ball, players: &[crate::player::Player],
 }
 
 fn resolve_posts(ball: &mut Ball, params: &SimParams) {
-    // Past the goal line inside the mouth = scoring volume; ignore posts/net.
     if goal_at(ball.pos, params) != EndReason::None {
         return;
     }
     let contact_r = params.post_contact_radius;
     let e = params.wall_e;
     let mu = params.wall_mu;
-    for sx in [-1.0_f32, 1.0] {
-        for sz in [-1.0_f32, 1.0] {
-            let post = Vec2::new(sx * params.posts_x, sz * params.goal_half_width);
-            let delta = ball.pos - post;
-            let dist = delta.length();
-            if dist >= contact_r || dist < 1e-8 {
-                continue;
-            }
-            let n = delta / dist;
-            // Push ball center out to contact surface
-            ball.pos = post + n * contact_r;
-            let vn = ball.vel.dot(n);
-            if vn >= 0.0 {
-                continue; // separating
-            }
-            // Reflect normal * e, Coulomb tangent friction
-            let mut v = ball.vel - n * vn; // tangent part
-            let into = -vn;
-            let reflected_n = n * (into * e);
-            let t_speed = v.length();
-            let friction_budget = mu * (1.0 + e) * into;
-            if t_speed > 0.0 {
-                let kill = friction_budget.min(t_speed);
-                v *= (t_speed - kill) / t_speed;
-            }
-            ball.vel = v + reflected_n;
+    for &(sx, sz) in &[
+        (params.posts_x, params.goal_half_width),
+        (params.posts_x, -params.goal_half_width),
+        (-params.posts_x, params.goal_half_width),
+        (-params.posts_x, -params.goal_half_width),
+    ] {
+        let c = Vec2::new(sx, sz);
+        let delta = ball.pos - c;
+        let dist = delta.length();
+        if dist >= contact_r || dist < 1e-8 {
+            continue;
         }
+        let n = delta / dist;
+        ball.pos = c + n * contact_r;
+        bounce_circle(&mut ball.vel, n, e, mu);
     }
-}
-
-/// True when ball center is past a goal line inside the mouth (held or free).
-pub fn goal_at(pos: Vec2, params: &SimParams) -> EndReason {
-    if pos.x <= -params.goal_line_x && in_goal_mouth(pos.y, params.goal_half_width) {
-        return EndReason::GoalHome;
-    }
-    if pos.x >= params.goal_line_x && in_goal_mouth(pos.y, params.goal_half_width) {
-        return EndReason::GoalAway;
-    }
-    EndReason::None
 }
 
 fn resolve_walls(ball: &mut Ball, params: &SimParams) {
+    let r = params.ball_radius;
     let e = params.wall_e;
     let mu = params.wall_mu;
-    let mouth = params.goal_half_width;
 
-    if ball.pos.y < params.z_min {
-        ball.pos.y = params.z_min;
-        bounce_axis(&mut ball.vel, 1, e, mu);
-    } else if ball.pos.y > params.z_max {
-        ball.pos.y = params.z_max;
-        bounce_axis(&mut ball.vel, 1, e, mu);
+    if ball.pos.y - r < params.z_min {
+        ball.pos.y = params.z_min + r;
+        if ball.vel.y < 0.0 {
+            bounce_axis(&mut ball.vel, 1, e, mu);
+        }
+    } else if ball.pos.y + r > params.z_max {
+        ball.pos.y = params.z_max - r;
+        if ball.vel.y > 0.0 {
+            bounce_axis(&mut ball.vel, 1, e, mu);
+        }
     }
 
-    if ball.pos.x < params.x_min {
-        if in_goal_mouth(ball.pos.y, mouth) {
-            return;
+    // Open goal mouths at ±goal_line_x — no wall when |z| <= goal_half_width.
+    if ball.pos.x - r < params.x_min {
+        if !in_goal_mouth(ball.pos.y, params.goal_half_width) {
+            ball.pos.x = params.x_min + r;
+            if ball.vel.x < 0.0 {
+                bounce_axis(&mut ball.vel, 0, e, mu);
+            }
         }
-        ball.pos.x = params.x_min;
-        bounce_axis(&mut ball.vel, 0, e, mu);
-    } else if ball.pos.x > params.x_max {
-        if in_goal_mouth(ball.pos.y, mouth) {
-            return;
+    } else if ball.pos.x + r > params.x_max {
+        if !in_goal_mouth(ball.pos.y, params.goal_half_width) {
+            ball.pos.x = params.x_max - r;
+            if ball.vel.x > 0.0 {
+                bounce_axis(&mut ball.vel, 0, e, mu);
+            }
         }
-        ball.pos.x = params.x_max;
-        bounce_axis(&mut ball.vel, 0, e, mu);
     }
+}
+
+fn bounce_circle(vel: &mut Vec2, n: Vec2, e: f32, mu: f32) {
+    let vn = vel.dot(n);
+    if vn >= 0.0 {
+        return;
+    }
+    let into = -vn;
+    let mut t = *vel - n * vn;
+    let t_speed = t.length();
+    let friction_budget = mu * (1.0 + e) * into;
+    if t_speed > 0.0 {
+        let kill = friction_budget.min(t_speed);
+        t *= (t_speed - kill) / t_speed;
+    }
+    *vel = t + n * (into * e);
 }
 
 fn bounce_axis(vel: &mut Vec2, normal_axis: usize, e: f32, mu: f32) {
     let mut v = *vel;
-    let into_speed = v[normal_axis].abs();
-    if into_speed <= 1e-8 {
-        return;
-    }
-    v[normal_axis] = -v[normal_axis].signum() * into_speed * e;
-
+    let into_speed = if normal_axis == 0 {
+        if v.x > 0.0 {
+            v.x
+        } else {
+            -v.x
+        }
+    } else if v.y > 0.0 {
+        v.y
+    } else {
+        -v.y
+    };
+    v[normal_axis] *= -e;
     let mut t = v;
     t[normal_axis] = 0.0;
     let t_speed = t.length();
@@ -208,18 +269,50 @@ fn bounce_axis(vel: &mut Vec2, normal_axis: usize, e: f32, mu: f32) {
     *vel = v;
 }
 
+/// True when ball center is past a goal line inside the mouth (held or free).
+pub fn goal_at(pos: Vec2, params: &SimParams) -> EndReason {
+    if pos.x >= params.goal_line_x && in_goal_mouth(pos.y, params.goal_half_width) {
+        return EndReason::GoalAway;
+    }
+    if pos.x <= -params.goal_line_x && in_goal_mouth(pos.y, params.goal_half_width) {
+        return EndReason::GoalHome;
+    }
+    EndReason::None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn ground_ball(vel: Vec2) -> Ball {
+        Ball {
+            pos: Vec2::ZERO,
+            vel,
+            height: 0.33,
+            vel_y: 0.0,
+            held: false,
+        }
+    }
+
+    #[test]
+    fn kick_curve_matches_timeplot_grid() {
+        let p = SimParams::default();
+        let (h05, _) = kick_launch_speeds(0.05, &p);
+        let (h50, _) = kick_launch_speeds(0.50, &p);
+        let (h85, _) = kick_launch_speeds(0.85, &p);
+        let (h95, l95) = kick_launch_speeds(0.95, &p);
+        assert!((h05 - 2.722222).abs() < 1e-3, "h05={h05}");
+        assert!((h50 - 17.222222).abs() < 1e-3, "h50={h50}");
+        assert!((h85 - 28.5).abs() < 1e-3, "h85={h85}");
+        assert!(h95 <= 29.42 + 0.05, "h95={h95}");
+        let spd = (h95 * h95 + l95 * l95).sqrt();
+        assert!(spd <= p.kick_max_speed + 1e-3, "spd={spd}");
+    }
+
     #[test]
     fn coast_stops_under_coulomb() {
         let params = SimParams::default();
-        let mut ball = Ball {
-            pos: Vec2::ZERO,
-            vel: Vec2::new(10.0, 0.0),
-            held: false,
-        };
+        let mut ball = ground_ball(Vec2::new(10.0, 0.0));
         let dt = 1.0 / 60.0;
         for _ in 0..600 {
             step_free_ball(&mut ball, &params, dt);
@@ -229,13 +322,30 @@ mod tests {
     }
 
     #[test]
+    fn airborne_skips_ground_slide() {
+        let params = SimParams::default();
+        let mut air = ground_ball(Vec2::new(20.0, 0.0));
+        air.height = 0.33;
+        air.vel_y = 5.55; // full-kick lift class
+        let mut ground = ground_ball(Vec2::new(20.0, 0.0));
+        let dt = 0.019;
+        for _ in 0..30 {
+            step_free_ball(&mut air, &params, dt);
+            step_free_ball(&mut ground, &params, dt);
+        }
+        assert!(
+            air.pos.x > ground.pos.x + 0.5,
+            "air={} ground={} (air should carry farther)",
+            air.pos.x,
+            ground.pos.x
+        );
+    }
+
+    #[test]
     fn goal_mouth_is_terminal() {
         let params = SimParams::default();
-        let mut ball = Ball {
-            pos: Vec2::new(39.0, 0.0),
-            vel: Vec2::new(20.0, 0.0),
-            held: false,
-        };
+        let mut ball = ground_ball(Vec2::new(20.0, 0.0));
+        ball.pos = Vec2::new(39.0, 0.0);
         let mut reason = EndReason::None;
         for _ in 0..30 {
             reason = step_free_ball(&mut ball, &params, 1.0 / 60.0);
@@ -248,14 +358,9 @@ mod tests {
 
     #[test]
     fn near_post_shot_still_scores_past_goal_line() {
-        // Posts sit at x=40.2; a shot that crosses x=39.5 near the post used to
-        // get shoved back by post collision before check_goal ran.
         let params = SimParams::default();
-        let mut ball = Ball {
-            pos: Vec2::new(39.2, 5.5),
-            vel: Vec2::new(25.0, 0.0),
-            held: false,
-        };
+        let mut ball = ground_ball(Vec2::new(25.0, 0.0));
+        ball.pos = Vec2::new(39.2, 5.5);
         let mut reason = EndReason::None;
         for _ in 0..40 {
             reason = step_free_ball(&mut ball, &params, 1.0 / 60.0);
@@ -272,6 +377,8 @@ mod tests {
         let ball = Ball {
             pos: Vec2::new(params.goal_line_x + 0.5, 0.0),
             vel: Vec2::ZERO,
+            height: params.ball_rest_height,
+            vel_y: 0.0,
             held: true,
         };
         assert_eq!(goal_at(ball.pos, &params), EndReason::GoalAway);

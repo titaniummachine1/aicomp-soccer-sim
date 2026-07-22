@@ -28,7 +28,24 @@ pub struct SimParams {
     pub kickoff_circle_r: f32,
     pub player_max_speed: f32,
     pub player_accel: f32,
+    /// Soft cap on launch |v| (TimePlot ~29.94; ball maxSpeed ~30).
     pub kick_max_speed: f32,
+    /// Planar launch: `min(base + per_charge * c, kick_horiz_cap)` (TimePlot sweep).
+    pub kick_speed_base: f32,
+    pub kick_speed_per_charge: f32,
+    pub kick_horiz_cap: f32,
+    /// Lift (hidden Y): `max(0, lift_base + lift_per_charge * c)`.
+    pub kick_lift_base: f32,
+    pub kick_lift_per_charge: f32,
+    /// Gravity for hidden ball height (m/s²).
+    pub gravity: f32,
+    /// Resting ball center height while grounded / held (TimePlot ~0.33).
+    pub ball_rest_height: f32,
+    /// Vertical bounce restitution (candidate; settle below [`ball_bounce_settle`]).
+    pub ball_bounce_e: f32,
+    pub ball_bounce_settle: f32,
+    /// Mover angularSpeed (deg/s Frida 2500) — facing turn rate.
+    pub angular_speed_deg: f32,
     pub pickup_delay_s: f32,
     /// Seconds of Interact-with-ball before shot_charge starts rising.
     /// Baseline: ~0.30s after pickup (Home T1 and Away O2).
@@ -91,6 +108,17 @@ impl SimParams {
             player_max_speed: 8.0,
             player_accel: 100.0,
             kick_max_speed: 29.94,
+            // (10 + 290 c) / 9  — TimePlot charge sweep 2026-07-22
+            kick_speed_base: 10.0 / 9.0,
+            kick_speed_per_charge: 290.0 / 9.0,
+            kick_horiz_cap: 29.42,
+            kick_lift_base: -0.323,
+            kick_lift_per_charge: 6.6667,
+            gravity: 9.81,
+            ball_rest_height: 0.33,
+            ball_bounce_e: 0.35,
+            ball_bounce_settle: 0.5,
+            angular_speed_deg: 2500.0,
             pickup_delay_s: 0.125,
             shot_charge_warmup_s: 0.30,
             shot_charge_time_s: 0.38,
@@ -125,6 +153,9 @@ impl SimParams {
         if let Some(b) = raw.ball {
             if let Some(r) = b.radius_world {
                 p.ball_radius = r;
+            }
+            if let Some(y) = b.rest_y {
+                p.ball_rest_height = y;
             }
         }
         if let Some(s) = raw.free_ball_slide {
@@ -174,6 +205,30 @@ impl SimParams {
         if let Some(k) = raw.kick_airborne_candidates {
             if let Some(v) = k.max_power_speed_mps {
                 p.kick_max_speed = v;
+            }
+            if let Some(v) = k.horiz_cap_mps {
+                p.kick_horiz_cap = v;
+            }
+            if let Some(v) = k.speed_base_mps {
+                p.kick_speed_base = v;
+            }
+            if let Some(v) = k.speed_per_charge_mps {
+                p.kick_speed_per_charge = v;
+            }
+            if let Some(v) = k.lift_base_mps {
+                p.kick_lift_base = v;
+            }
+            if let Some(v) = k.lift_per_charge_mps {
+                p.kick_lift_per_charge = v;
+            }
+            if let Some(v) = k.gravity_mps2 {
+                p.gravity = v;
+            }
+            if let Some(v) = k.bounce_e {
+                p.ball_bounce_e = v;
+            }
+            if let Some(v) = k.bounce_settle_mps {
+                p.ball_bounce_settle = v;
             }
         }
         let mut hold_from_file = false;
@@ -275,6 +330,7 @@ struct RawParams {
 #[derive(Deserialize)]
 struct RawBall {
     radius_world: Option<f32>,
+    rest_y: Option<f32>,
 }
 
 #[derive(Deserialize)]
@@ -321,6 +377,15 @@ struct RawMarks {
 #[derive(Deserialize)]
 struct RawKick {
     max_power_speed_mps: Option<f32>,
+    /// Soft planar launch cap (TimePlot ~29.42).
+    horiz_cap_mps: Option<f32>,
+    speed_base_mps: Option<f32>,
+    speed_per_charge_mps: Option<f32>,
+    lift_base_mps: Option<f32>,
+    lift_per_charge_mps: Option<f32>,
+    gravity_mps2: Option<f32>,
+    bounce_e: Option<f32>,
+    bounce_settle_mps: Option<f32>,
 }
 
 #[derive(Deserialize)]

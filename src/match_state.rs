@@ -120,9 +120,16 @@ fn random_opening_kickoff() -> TeamId {
     }
 }
 
-pub fn place_kickoff(ball: &mut Ball, players: &mut [Player], kickoff_team: TeamId) {
+pub fn place_kickoff(
+    ball: &mut Ball,
+    players: &mut [Player],
+    kickoff_team: TeamId,
+    rest_height: f32,
+) {
     ball.pos = Vec2::ZERO;
     ball.vel = Vec2::ZERO;
+    ball.height = rest_height;
+    ball.vel_y = 0.0;
     ball.held = false;
     for p in players.iter_mut() {
         p.pos = faceoff_world(p.team, p.id, kickoff_team);

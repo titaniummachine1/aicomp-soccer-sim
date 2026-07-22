@@ -112,9 +112,11 @@ pub fn apply_interact(
             {
                 dir = Vec2::new(-0.707, -0.707);
             }
-            let speed = params.kick_max_speed * player.shot_charge;
+            let (horiz, lift) = crate::ball::kick_launch_speeds(player.shot_charge, params);
             ball.held = false;
-            ball.vel = dir * speed;
+            ball.vel = dir * horiz;
+            ball.height = params.ball_rest_height;
+            ball.vel_y = lift;
             ball.pos = hold + dir * 0.15;
             player.shot_charge = 0.0;
             player.charge_warmup_left = 0.0;
@@ -252,12 +254,20 @@ pub fn apply_interact(
     None
 }
 
-pub fn sync_held_ball(ball: &mut Ball, players: &[Player], poss: &Possession, hold_offset: f32) {
+pub fn sync_held_ball(
+    ball: &mut Ball,
+    players: &[Player],
+    poss: &Possession,
+    hold_offset: f32,
+    rest_height: f32,
+) {
     if let Some((team, id)) = poss.carrier {
         if let Some(p) = players.iter().find(|p| p.team == team && p.id.0 == id) {
             ball.held = true;
             ball.pos = p.hold_pos(hold_offset);
             ball.vel = p.vel;
+            ball.height = rest_height;
+            ball.vel_y = 0.0;
         }
     } else {
         ball.held = false;
@@ -276,6 +286,8 @@ mod tests {
         let mut ball = Ball {
             pos: Vec2::ZERO,
             vel: Vec2::ZERO,
+            height: params.ball_rest_height,
+            vel_y: 0.0,
             held: true,
         };
         let mut poss = Possession {
@@ -324,6 +336,8 @@ mod tests {
         let mut ball = Ball {
             pos: Vec2::ZERO,
             vel: Vec2::ZERO,
+            height: params.ball_rest_height,
+            vel_y: 0.0,
             held: true,
         };
         let mut poss = Possession {

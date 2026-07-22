@@ -83,14 +83,24 @@
     "note": "Depth=goal axis (X), Width=sidelines (Z). Ball-center AABB remains x±39.5 z±24.7."
   },
   "kick_airborne_candidates": {
-    "status": "community_not_confirmed",
-    "source": "MerijnZ1",
-    "max_power_speed_mps": 30.0,
+    "status": "timeplot_locked_2026-07-22",
+    "source": "ChargeSweepProbe timeplot_2026-07-22_16-19-09 + earlier lift sweeps",
+    "max_power_speed_mps": 29.94,
+    "horiz_cap_mps": 29.42,
+    "speed_base_mps": 1.111111,
+    "speed_per_charge_mps": 32.222222,
+    "lift_base_mps": -0.323,
+    "lift_per_charge_mps": 6.6667,
+    "gravity_mps2": 9.81,
+    "bounce_e": 0.4,
+    "bounce_settle_mps": 0.5,
     "apex_height_m": 1.4,
-    "hang_before_first_bounce_s": 1.0,
+    "hang_before_first_bounce_s": "varies_with_lift_not_fixed_1s",
     "ground_slide_accel_mps2_community": 6.0,
     "ground_slide_accel_mps2_timeplot": 5.95,
-    "note": "Free-ball XZ predictor still ignores Y until airborne kicks are ported; use Coulomb a=5.95 on ground."
+    "formula_planar": "horiz = min((10 + 290*charge)/9, 29.42); soft-cap |v| to 29.94",
+    "formula_lift": "vy = max(0, -0.323 + 6.6667*charge); soft-cap with horiz",
+    "note": "Ground Coulomb slide ONLY while grounded. Airborne XZ coasts (no slide) — stronger charge hangs longer and carries farther. AIA Discord 'linear to 0.75 then lift only' is WRONG for planar (linear continues ~to 0.90)."
   },
     "player_candidates": {
     "status": "frida_live_dump_2026-07-22",
@@ -148,6 +158,8 @@
     "Posts optional: capsules at (\u00b140.2, \u00b16) contact radius ~0.706; can omit for v1",
     "No linear damping on rigidbody \u2014 deceleration is material/custom friction only",
     "Players: kinematic simple movers (accel+clamp), not PhysX friction; stamina drain/regen candidates 30s/15s",
-    "Kicks: launch ~30 m/s slight up; apex ~1.4m; hang ~1s; then ground slide at ~6 m/s^2"
+    "Kicks: TimePlot charge→horiz/lift (see kick_airborne_candidates); ground slide only when grounded; Y hang drives carry distance",
+    "Players: kinematic simple movers (accel+clamp), not PhysX friction; stamina drain/regen candidates 30s/15s",
+    "Facing turn: Frida angularSpeed=2500 deg/s not yet wired (sim still uses ad-hoc blend rates)"
   ]
 }

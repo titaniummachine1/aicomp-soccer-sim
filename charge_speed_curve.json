@@ -1,0 +1,225 @@
+{
+  "file": "c:\\Users\\Terminatort8000\\AppData\\LocalLow\\Unicorn One\\AIComp\\Saves\\Soccer\\Timeplots\\timeplot_2026-07-22_16-19-09.json",
+  "simTime": 90.09797,
+  "meta_debug_build": 10.0,
+  "release_events": 20,
+  "unique_charges": 20,
+  "expected_steps": [
+    0.05,
+    0.1,
+    0.15,
+    0.2,
+    0.25,
+    0.3,
+    0.35,
+    0.4,
+    0.45,
+    0.5,
+    0.55,
+    0.6,
+    0.65,
+    0.7,
+    0.75,
+    0.8,
+    0.85,
+    0.9,
+    0.95,
+    1.0
+  ],
+  "missing_steps": [],
+  "points": [
+    {
+      "t": 0.38,
+      "charge": 0.05,
+      "speed": 2.722242,
+      "horiz": 2.722223,
+      "vy": null,
+      "src": "latch"
+    },
+    {
+      "t": 2.242,
+      "charge": 0.1,
+      "speed": 4.34694,
+      "horiz": 4.333333,
+      "vy": null,
+      "src": "latch"
+    },
+    {
+      "t": 4.123,
+      "charge": 0.15,
+      "speed": 5.982872,
+      "horiz": 5.944445,
+      "vy": null,
+      "src": "latch"
+    },
+    {
+      "t": 6.023,
+      "charge": 0.2,
+      "speed": 7.622808,
+      "horiz": 7.555556,
+      "vy": null,
+      "src": "latch"
+    },
+    {
+      "t": 7.942,
+      "charge": 0.25,
+      "speed": 9.264623,
+      "horiz": 9.166667,
+      "vy": null,
+      "src": "latch"
+    },
+    {
+      "t": 9.88,
+      "charge": 0.3,
+      "speed": 10.907467,
+      "horiz": 10.777778,
+      "vy": null,
+      "src": "latch"
+    },
+    {
+      "t": 11.837,
+      "charge": 0.35,
+      "speed": 12.550938,
+      "horiz": 12.38889,
+      "vy": null,
+      "src": "latch"
+    },
+    {
+      "t": 14.326,
+      "charge": 0.4,
+      "speed": 14.194817,
+      "horiz": 14.000002,
+      "vy": null,
+      "src": "latch"
+    },
+    {
+      "t": 16.777,
+      "charge": 0.45,
+      "speed": 15.838977,
+      "horiz": 15.611113,
+      "vy": null,
+      "src": "latch"
+    },
+    {
+      "t": 20.558,
+      "charge": 0.5,
+      "speed": 17.483337,
+      "horiz": 17.222225,
+      "vy": null,
+      "src": "latch"
+    },
+    {
+      "t": 24.339,
+      "charge": 0.55,
+      "speed": 19.12785,
+      "horiz": 18.833336,
+      "vy": null,
+      "src": "latch"
+    },
+    {
+      "t": 29.697,
+      "charge": 0.6,
+      "speed": 20.772474,
+      "horiz": 20.444447,
+      "vy": null,
+      "src": "latch"
+    },
+    {
+      "t": 35.036,
+      "charge": 0.65,
+      "speed": 22.417192,
+      "horiz": 22.055561,
+      "vy": null,
+      "src": "latch"
+    },
+    {
+      "t": 41.876,
+      "charge": 0.7,
+      "speed": 24.061975,
+      "horiz": 23.66667,
+      "vy": null,
+      "src": "latch"
+    },
+    {
+      "t": 48.602,
+      "charge": 0.75,
+      "speed": 25.706821,
+      "horiz": 25.277782,
+      "vy": null,
+      "src": "latch"
+    },
+    {
+      "t": 55.404,
+      "charge": 0.8,
+      "speed": 27.35171,
+      "horiz": 26.888893,
+      "vy": null,
+      "src": "latch"
+    },
+    {
+      "t": 61.959,
+      "charge": 0.85,
+      "speed": 28.996637,
+      "horiz": 28.500004,
+      "vy": null,
+      "src": "latch"
+    },
+    {
+      "t": 68.704,
+      "charge": 0.9,
+      "speed": 29.938553,
+      "horiz": 29.421587,
+      "vy": null,
+      "src": "latch"
+    },
+    {
+      "t": 75.107,
+      "charge": 0.95,
+      "speed": 29.938435,
+      "horiz": 29.419397,
+      "vy": null,
+      "src": "latch"
+    },
+    {
+      "t": 81.871,
+      "charge": 1.0,
+      "speed": 29.938332,
+      "horiz": 29.417421,
+      "vy": null,
+      "src": "latch"
+    }
+  ],
+  "fits": {
+    "horiz_all": {
+      "a": 1.743803,
+      "b": 30.359168,
+      "rmse": 0.804865,
+      "at_0.75": 24.513179,
+      "at_1.0": 32.102971
+    },
+    "horiz_le_0.75": {
+      "a": 1.11111,
+      "b": 32.222229,
+      "rmse": 1e-06,
+      "at_0.75": 25.277782,
+      "at_1.0": 33.333339
+    },
+    "horiz_ge_0.75": {
+      "a": 13.548536,
+      "b": 16.692166,
+      "rmse": 0.659178,
+      "at_0.75": 26.06766,
+      "at_1.0": 30.240701
+    },
+    "vy_all": null,
+    "vy_le_0.75": null,
+    "vy_ge_0.75": null
+  },
+  "plateau_check": {
+    "mean_horiz_le_0.75": 14.0,
+    "mean_horiz_gt_0.75": 28.7295,
+    "horiz_at_0.75ish": 25.2778,
+    "delta_mean": 14.7295,
+    "aia_claim": "horiz flat above 0.75; extra charge \u2192 Vy lift only"
+  }
+}

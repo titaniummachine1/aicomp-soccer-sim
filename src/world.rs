@@ -82,6 +82,7 @@ impl MatchWorld {
             &mut world.ball,
             &mut world.players,
             world.match_state.kickoff_team,
+            world.params.ball_rest_height,
         );
         world
     }
@@ -109,6 +110,7 @@ impl MatchWorld {
                     &mut self.ball,
                     &mut self.players,
                     self.match_state.kickoff_team,
+                    self.params.ball_rest_height,
                 );
                 self.possession.carrier = None;
                 self.match_state.phase = MatchPhase::Kickoff;
@@ -259,6 +261,7 @@ impl MatchWorld {
             &self.players,
             &self.possession,
             self.params.hold_offset,
+            self.params.ball_rest_height,
         );
 
         // Always verify goal volume after hold sync — a carrier walking the
@@ -294,6 +297,8 @@ impl MatchWorld {
             self.possession.carrier = None;
             self.ball.held = false;
             self.ball.vel = Vec2::ZERO;
+            self.ball.vel_y = 0.0;
+            self.ball.height = self.params.ball_rest_height;
             self.ball.pos = Vec2::ZERO;
         }
     }
@@ -305,12 +310,16 @@ impl MatchWorld {
                 self.possession.carrier = None;
                 self.ball.held = false;
                 self.ball.vel = Vec2::ZERO;
+                self.ball.vel_y = 0.0;
+                self.ball.height = self.params.ball_rest_height;
             }
             EndReason::GoalAway => {
                 self.match_state.on_goal(TeamId::Away);
                 self.possession.carrier = None;
                 self.ball.held = false;
                 self.ball.vel = Vec2::ZERO;
+                self.ball.vel_y = 0.0;
+                self.ball.height = self.params.ball_rest_height;
             }
             EndReason::None => {}
         }
