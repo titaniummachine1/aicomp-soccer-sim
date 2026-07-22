@@ -92,7 +92,9 @@ Headless parity capture:
 cargo run --release --bin timeplot_until_goal -- --secs 30 --home aia --away idle
 ```
 
-Unity: load `AIA_Debug.txt`, same opening/length, export TimePlot → compare series.
+Unity: load `AIA_Debug.txt` (stock **AIA** play + TimePlot probes, DebugBuild=33 —
+rebuild with `python worldcupteams/probes/build_aia_debug.py`), same opening/length,
+export TimePlot → compare series.
 
 ---
 

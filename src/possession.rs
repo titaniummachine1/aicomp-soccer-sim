@@ -161,9 +161,8 @@ pub fn apply_interact(
     }
 
     // Tackle: interact near held ball.
-    // - Higher stam → steal, no mutual dump (TimePlot 18-27-41).
-    // - Equal stam → tackler wins; BOTH stamina dumped (user lock 2026-07-22).
-    // - Lower stam → carrier keeps; no dump.
+    // Drain = min(tackler, carrier) from BOTH. Remaining stam keeps the ball;
+    // if both end at 0 (equal stam), tackler takes it.
     if ball.held {
         if let Some((ct, cid)) = poss.carrier {
             if ct != player.team {
@@ -173,26 +172,22 @@ pub fn apply_interact(
                 if dist <= params.interact_radius {
                     let carrier_stam = carrier_stamina.unwrap_or(0.0);
                     let eps = 1e-4;
-                    let higher = player.stamina > carrier_stam + eps;
-                    let equal = (player.stamina - carrier_stam).abs() <= eps;
-                    let attacker_wins = higher || equal;
-                    let drain = if equal { carrier_stam } else { 0.0 };
-                    if equal {
-                        player.stamina = 0.0;
-                        player.stamina_regen_lock_left = params
-                            .stamina_tackle_regen_delay_s
-                            .max(player.stamina_regen_lock_left);
-                    }
+                    let drain = player.stamina.min(carrier_stam);
+                    player.stamina = (player.stamina - drain).max(0.0);
+                    player.stamina_regen_lock_left = params
+                        .stamina_tackle_regen_delay_s
+                        .max(player.stamina_regen_lock_left);
+                    // After drain: tackler rem = max(0,T−C), carrier rem = max(0,C−T).
+                    // Tackler wins if rem_t >= rem_c (covers equal→both 0 and T>C).
+                    let carrier_after = (carrier_stam - drain).max(0.0);
+                    let attacker_wins = player.stamina + eps >= carrier_after;
                     if attacker_wins {
                         poss.carrier = Some((player.team, player.id.0));
                         player.shot_charge = 0.0;
                         player.charge_warmup_left = params.shot_charge_warmup_s;
-                        player.stamina_regen_lock_left = params
-                            .stamina_tackle_regen_delay_s
-                            .max(player.stamina_regen_lock_left);
                         poss.pickup_lockout = params.pickup_delay_after_exchange_s;
                     } else {
-                        // Failed / contested probe still briefly locks re-tackle spam.
+                        // Failed contest still briefly locks re-tackle spam.
                         poss.pickup_lockout = 0.40;
                     }
                     return InteractOutcome {
@@ -345,7 +340,7 @@ mod tests {
     }
 
     #[test]
-    fn higher_stamina_tackle_challenger_wins() {
+    fn higher_stamina_tackle_both_lose_min_tackler_keeps_ball() {
         let params = SimParams::default();
         let mut ball = Ball {
             pos: Vec2::ZERO,
@@ -389,8 +384,69 @@ mod tests {
         assert!(drain.attacker_wins);
         assert_eq!(poss.carrier, Some((TeamId::Away, 1)));
         assert!(
-            (attacker.stamina - 1.0).abs() < 1e-5,
-            "advantage steal must not drain attacker, got {}",
+            (drain.drain - 0.5).abs() < 1e-5,
+            "both lose min(1.0,0.5)=0.5, got {}",
+            drain.drain
+        );
+        assert!(
+            (attacker.stamina - 0.5).abs() < 1e-5,
+            "tackler keeps remainder 0.5, got {}",
+            attacker.stamina
+        );
+    }
+
+    #[test]
+    fn lower_stamina_tackle_both_lose_min_carrier_keeps_ball() {
+        let params = SimParams::default();
+        let mut ball = Ball {
+            pos: Vec2::ZERO,
+            vel: Vec2::ZERO,
+            height: params.ball_rest_height,
+            vel_y: 0.0,
+            held: true,
+        };
+        let mut poss = Possession {
+            carrier: Some((TeamId::Home, 1)),
+            ..Default::default()
+        };
+        let mut attacker = Player {
+            team: TeamId::Away,
+            id: PlayerId(1),
+            pos: Vec2::new(0.5, 0.0),
+            vel: Vec2::ZERO,
+            facing: -Vec2::X,
+            stamina: 0.3,
+            stamina_regen_lock_left: 0.0,
+            shot_charge: 0.0,
+            charge_warmup_left: 0.0,
+        };
+        let cmd = BrainCommand {
+            move_to: attacker.pos,
+            sprint: false,
+            interact: true,
+        };
+        let drain = apply_interact(
+            &mut attacker,
+            &mut ball,
+            &mut poss,
+            cmd,
+            &params,
+            0.019,
+            Some(0.8),
+            Some(0.0),
+        )
+        .drain
+        .expect("lower-stam tackle returns drain");
+        assert!(!drain.attacker_wins);
+        assert_eq!(poss.carrier, Some((TeamId::Home, 1)));
+        assert!(
+            (drain.drain - 0.3).abs() < 1e-5,
+            "both lose min(0.3,0.8)=0.3, got {}",
+            drain.drain
+        );
+        assert!(
+            attacker.stamina.abs() < 1e-5,
+            "weaker tackler dumps to 0, got {}",
             attacker.stamina
         );
     }

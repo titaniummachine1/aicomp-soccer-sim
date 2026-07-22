@@ -77,9 +77,10 @@ BRAINS:
   chase | idle | test1 | test2 | perfect (kb|keyboard) | aia | graph:<path>
 
 UNITY CAPTURE:
-  1. In AIComp Soccer, set Home (or both) to AIA_Debug.txt or AIA.txt
+  1. In AIComp Soccer, set Home to AIA_Debug.txt (stock AIA + probes, DB33)
   2. Play / record TimePlot the same length / opening as this run
-  3. Compare series names (Ball.*, T1.*, Ctrl.*, In.*, Clear.*, Aim.*)
+  3. Compare series names (Ball.*, T1.*, Ctrl.*, In.*, Aim.*, Sensor.*, Event.*)
+     Rebuild Unity graph: python worldcupteams/probes/build_aia_debug.py
 
 AIA GAPS (stock AIA.txt still soft / blank in sim):
   Spherecast + SoccerPlayerSensors1..4 (raw path Null; SoccerGet clear-dirs

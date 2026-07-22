@@ -24,12 +24,12 @@ Editor / saves (workflow, not sim physics):
 
 ### Tackle (verbal engine rule)
 
-- **Where:** `ENGINE` · `AIA-TIP` (+ TimePlot lock in §18)
-- **What (AIA):** “subtracts the **stamina delta** between players. If the
-  tackling player has **more stamina after** the tackle they win the ball.”
-- **Operational lock (sim §18):** `attacker > carrier` → steal, no mutual dump;
-  `==` → tackler wins + **both dump to 0**; `<` → carrier keeps. Tip doesn’t
-  spell the equal-dump case — keep §18 until a TimePlot says otherwise.
+- **Where:** `ENGINE` · `AIA-TIP` · **LOCKED 2026-07-23** (user clarification)
+- **What:** On a contested tackle, subtract **`min(tackler, carrier)`** from
+  **both** players. Whoever has stamina left keeps the ball. If both end at 0
+  (equal stam), the **tackler** takes the ball.
+- **Examples:** T=0.3 C=0.8 → both −0.3 → C keeps (0.5). T=0.8 C=0.3 → both −0.3
+  → T keeps (0.5) + ball. T=C=0.5 → both 0 → tackler gets ball.
 
 ### Vector3 “directional” SoccerGets (clear / opp-goal / clear-mate, …)
 
@@ -293,17 +293,14 @@ Editor / saves (workflow, not sim physics):
   carry/kick origin (~0.9 m along facing); grab reach is still interact_r vs
   hold∪body.
 
-### 18. Tackle: stam `>=` steals; equal → tackler wins + **both dump**; higher → no dump
+### 18. Tackle: both lose `min(stam)`; remaining keeps ball; equal → tackler
 
-- **Where:** `ENGINE`/`SIM` · `LOCKED` (user 2026-07-22; supersedes TimePlot 18-27-41 tie rule)
-- **AIA tip:** subtract stamina **delta**, then tackler wins if they have **more
-  stam after** the contest (see “AIA author tips”).
-- **What (operational):**
-  - `attacker.stam > carrier.stam` → steal, **no** mutual dump (TimePlot advantage case).
-  - `attacker.stam == carrier.stam` → **tackler wins**; **both** stamina dumped to 0.
-  - `attacker.stam < carrier.stam` → carrier keeps; no dump.
+- **Where:** `ENGINE`/`SIM` · `LOCKED` (user 2026-07-23; supersedes “higher = no dump”)
+- **What:**
+  - `drain = min(attacker.stam, carrier.stam)` applied to **both**.
+  - After drain: remaining stam keeps the ball; if both **0** (were equal) →
+    **tackler** takes it.
   - Exchange pickup lockout **0.25s** after win. Frida `tackleRegenDelay=1.5s` not live.
-- **Ask:** Confirm dump amount with a fresh equal-stam TimePlot if available (sim uses full dump).
 
 ### 19. Shot charge: ~0.30s warmup after pickup, then ~0.38s to 1.0
 
@@ -331,12 +328,11 @@ Editor / saves (workflow, not sim physics):
   radius 0.5 / stoppingDistance **1.25** (pathfinding only — DeterministicMover
   moves).
 
-### 22. Tackle (locked): `>=` steals; equal both-dump; higher no-dump
+### 22. Tackle (locked): both lose `min(stam)`; remainder / tie → ball
 
-- **Where:** `ENGINE`/`SIM` · `LOCKED` (user 2026-07-22; ties supersede TimePlot **18-27-41**)
-- **What:** Failed probes drain nothing. Successful steal when
-  `attacker.stam >= carrier.stam`. Equal → both stam → 0; strict higher → no
-  dump. Post-steal exchange lockout **0.25s**.
+- **Where:** `ENGINE`/`SIM` · `LOCKED` (user 2026-07-23)
+- **What:** Always `drain = min(T,C)` on both. Remaining stam keeps ball; both
+  0 → tackler. Post-steal exchange lockout **0.25s**.
 
 ### 23. Post-kick reclaim: hot window only, no hang body-snatch
 
@@ -414,7 +410,7 @@ Editor / saves (workflow, not sim physics):
 | Charge          | 0.30s warmup + 0.38s to full (#19)                                              |
 | Hold offset     | **1.67 m** prefab BallHoldLocation Z (#21); body capsule **0.762**              |
 | Kickoff / Away  | Kickoff-phase circle clamp; suppress Away team-side + P3-closest                |
-| Tackle          | `stam >=` steals; equal both-dump; higher no-dump; lockout 0.25s (#18/#22)      |
+| Tackle          | both lose `min(stam)`; remainder keeps / tie→tackler; lockout 0.25s (#18/#22) |
 | Pickup / loose  | Hot window 0.25s; no hang body-claim; settle `<2 m/s` (#23)                     |
 | Held-ball vel   | Carrier vel (#16)                                                               |
 | Early Ball      | **t<=2 X~~0.77 Z~~1.22**; Zt2[-5.2,2.1] vs[-4.5,1.9]; t<=3 ~0.9/2.0             |
@@ -468,8 +464,8 @@ regenerated smoothly at **0.05/s** (~20s full) — no snap. Drain while carrying
 >    **not** drop at stam≈0 (always-sprint TimePlot).
 > 7. Opening kickoff hold faces **world ±Z** (~1.67 m), not attack ±X; facing
 >    tracks Clear with sticky C→H during charge warmup.
-> 8. Tackle: `stam >=` steals; **equal → tackler wins + both dump to 0**;
->    higher → steal with no dump. Frida 1.5s tackle regen delay not live.
+> 8. Tackle: both lose `min(stam)`; remaining keeps ball; equal→both 0→tackler
+>    wins. Frida 1.5s tackle regen delay not live.
 
 Update this file whenever a new confirmed quirk shows up.
 
@@ -479,8 +475,8 @@ Update this file whenever a new confirmed quirk shows up.
 
 What is still soft / optional:
 
-1. _(tackle tie rule locked 2026-07-22 — equal steals + both dump; confirm dump
-   magnitude with TimePlot if disputed)_
+1. _(tackle min-drain rule locked 2026-07-23 — both lose min(stam); remainder
+   keeps / both 0 → tackler)_
 
 ### Locked (no new capture needed)
 
@@ -501,9 +497,9 @@ What is still soft / optional:
   charge-warmup reject of ~90° flips still applies while carrying.
 - Post-goal pause → kickoff reset **~4.9s** (TimePlot 17-37-34); Frida 1.0s is
   not that freeze.
-- Tackle: **equal stam → tackler wins + both dump**; **higher stam steals with
-  no dump** (user lock 2026-07-22; supersedes TimePlot 18-27-41 tie).
-  tackleRegenDelay Frida 1.5s **not live** → wired 0.
+- Tackle: **both lose `min(stam)`**; remaining keeps ball; **equal → both 0 →
+  tackler** (user lock 2026-07-23). tackleRegenDelay Frida 1.5s **not live** →
+  wired 0.
 - **Is \* Player N Open** (AIA lock 2026-07-22): true iff **no opposing player**
   is within **`2 × Player Interact Radius`** of that player
   (`nearest_opp_dist > 2×R`). Else false. Same rule for team and opponent
