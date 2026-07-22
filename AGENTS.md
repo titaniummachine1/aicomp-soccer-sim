@@ -30,6 +30,15 @@ Example one-shot:
 cargo run --release --bin soccer_headless -- --secs 60 --home chase --away chase --seed 7 --until-goal --quiet
 ```
 
+Parallel match micropool (`--batch` JSONL, `--jobs` pool size; default jobs =
+logical CPUs − 1 so one core stays free for system/UI):
+
+```bat
+cargo run --release --bin soccer_headless -- --batch 16 --jobs 8 --secs 20 --home chase --away idle --seed 0 --quiet
+```
+
+Seeds are `base_seed + i` (base defaults to 0). Opening follows seed parity
+(even=home, odd=away). Each stdout line is one JSON match result.
 ## Scripted parity probes
 
 ```bat
@@ -40,12 +49,12 @@ Exit `0` = steal seen; `2` = failed assert.
 
 ## Truth files
 
-| File | Use |
-|------|-----|
+| File                          | Use                                       |
+| ----------------------------- | ----------------------------------------- |
 | `docs/AIA_UPSTREAM_QUIRKS.md` | Locked Unity measurements + sim checklist |
-| `bevy_sim_params_v05.json` | Live numbers (crate root) |
-| `data/reference/` | API / Frida dumps (read-only) |
-| `README.md` | Human entry points |
+| `bevy_sim_params_v05.json`    | Live numbers (crate root)                 |
+| `data/reference/`             | API / Frida dumps (read-only)             |
+| `README.md`                   | Human entry points                        |
 
 ## Don't
 

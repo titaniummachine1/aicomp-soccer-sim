@@ -33,6 +33,15 @@ Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic
   `Normalize(OppGoalCenter − player)` (AIA already has `StrikerDirToOppGoal`)
   as Direction 1 instead of the SoccerGet.
 
+### 1b. Custom functions **cannot nest** (engine limit)
+
+- **Where:** `ENGINE` · `CONFIRMED` (AIA Discord bot, 2026-07-22)
+- **What:** “you can't currently nest functions inside of other functions. if
+  you want to use them you'll need to pass a value from one function into
+  another as a parameter.” Nested `Function` calls yield Null / identical
+  wrong results (e.g. Player Distance always the same).
+- **Sim:** GraphBrain + O0 lowerer reject nested `Function` (return/emit Null).
+
 ### 2. Kicking striker spawn = `**(0,0)` on the ball\*\*
 
 - **Where:** `BOT` + `ENGINE` · `CONFIRMED`
@@ -110,6 +119,16 @@ Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic
 
 - **Where:** `ENGINE` · `CONFIRMED` (Clear.Carrier ∈ {E,C,H,…} with |components|∈{0,0.707,1})
 - **Ask:** Document. AIA mixes “×2 as MoveTo” (bug) vs `pos + n*clear` (correct).
+
+### 7b. `Is * Player N Open` = no opposing body within **2× interact radius**
+
+- **Where:** `ENGINE` · `CONFIRMED` (**AIA**, 2026-07-22)
+- **What:** A player is open iff there is **no opposing player within
+  `2 × Player Interact Radius`** of them. Otherwise not open.
+  Equivalently: `nearest_opp_dist > 2×R` → true.
+- **Sim:** Wired for `Is Team Player N Open` / `Is Opponent Player N Open`.
+  Vector getters `Get nearest/most/furthest open *` only consider players that
+  pass this test (`most` = largest nearest-opponent clearance among open).
 
 ### 8. `RelativePosition(transform, "Self")` ≠ controlling player frame
 
@@ -195,15 +214,15 @@ Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic
   carry/kick origin (~0.9 m along facing); grab reach is still interact_r vs
   hold∪body.
 
-### 18. Tackle: strict stam `>` steals; equal keeps; **no mutual dump**
+### 18. Tackle: stam `>=` steals; equal → tackler wins + **both dump**; higher → no dump
 
-- **Where:** `ENGINE` · `CONFIRMED` (TimePlot **18-27-41** Test1/Test2)
-- **What:** Attacker needs **strictly higher** stamina than carrier to steal.
-  Equal stam → carrier keeps (usable technique). Steal does **not** zero /
-  mutual-drain either side. Loser regen starts immediately (Frida
-  `tackleRegenDelay=1.5s` not live). Exchange pickup lockout **0.25s** after
-  win. Sim also fixed same-tick ping-pong (live carrier stam + lockout).
-- **Ask:** Document live tie rule; Frida mutual-zero + 1.5s delay appear stale.
+- **Where:** `ENGINE`/`SIM` · `LOCKED` (user 2026-07-22; supersedes TimePlot 18-27-41 tie rule)
+- **What:**
+  - `attacker.stam > carrier.stam` → steal, **no** mutual dump (TimePlot advantage case).
+  - `attacker.stam == carrier.stam` → **tackler wins**; **both** stamina dumped to 0.
+  - `attacker.stam < carrier.stam` → carrier keeps; no dump.
+  - Exchange pickup lockout **0.25s** after win. Frida `tackleRegenDelay=1.5s` not live.
+- **Ask:** Confirm dump amount with a fresh equal-stam TimePlot if available (sim uses full dump).
 
 ### 19. Shot charge: ~0.30s warmup after pickup, then ~0.38s to 1.0
 
@@ -223,20 +242,20 @@ Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic
 
 ---
 
-### 21. BallHoldLocation offset ≈ **1.60 m** (not body+ball ≈0.9)
+### 21. BallHoldLocation offset = **1.67 m** (prefab local Z)
 
-- **Where:** `ENGINE` · `CONFIRMED` (baseline |Ball−T1| while held ≈1.54–1.67;
-  first held sample ≈1.67)
-- **Sim:** `hold_offset_m=1.60`. Old body+ball≈0.9 under-shot early Ball.Z.
+- **Where:** `ENGINE` · `CONFIRMED` (prefab `BallHoldLocation` local **(0, 0.25, 1.67)**;
+  TimePlot |Ball−T1| while held ≈1.54–1.67, first sample ≈1.67)
+- **Sim:** `hold_offset_m=1.67`. Capsule body radius **0.762**; NavMeshAgent
+  radius 0.5 / stoppingDistance **1.25** (pathfinding only — DeterministicMover
+  moves).
 
-### 22. Tackle (locked): advantage steal, no dump, equal keeps
+### 22. Tackle (locked): `>=` steals; equal both-dump; higher no-dump
 
-- **Where:** `ENGINE`/`SIM` · `CONFIRMED` (TimePlot **18-27-41**; supersedes
-  earlier mutual-min-drain / mid-charge-bias notes)
-- **What:** Failed probes drain nothing. Successful steal = `attacker.stam >
-  carrier.stam` only; **no** mutual stam dump. Equal stam → carrier keeps.
-  Post-steal exchange lockout **0.25s**. Mid-charge equal-stam “both dump”
-  never cleanly captured — treat as untested / likely wrong.
+- **Where:** `ENGINE`/`SIM` · `LOCKED` (user 2026-07-22; ties supersede TimePlot **18-27-41**)
+- **What:** Failed probes drain nothing. Successful steal when
+  `attacker.stam >= carrier.stam`. Equal → both stam → 0; strict higher → no
+  dump. Post-steal exchange lockout **0.25s**.
 
 ### 23. Post-kick reclaim: hot window only, no hang body-snatch
 
@@ -274,29 +293,29 @@ Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic
 
 ## Sim parity checklist (ours — not upstream)
 
-| Item            | Notes                                                                               |
-| --------------- | ----------------------------------------------------------------------------------- |
-| Opp-goal dir    | Clear lane into mouth or null; goal-dir uses interact_r                             |
-| ClearMate       | LOS + short corridor + other mates block; MIN_DOT 0.93; mate_r body×2.8; max 36     |
-| Kicking striker | Spawns at (0,0) when kicking off; kickoff face ±Z (#24)                             |
-| Speeds          | walk **7** / sprint **8**; no stam throttle (#11); Clear-sticky facing (#24)        |
-| Clear blockers  | body1.5 + continuous closest-approach ray                                           |
-| Charge          | 0.30s warmup + 0.38s to full (#19)                                                  |
-| Hold offset     | 1.60 m (#21)                                                                        |
-| Kickoff / Away  | Kickoff-phase circle clamp; suppress Away team-side + P3-closest                    |
-| Tackle          | Strict stam `>` steals; equal keeps; no dump; lockout 0.25s (#18/#22)               |
-| Pickup / loose  | Hot window 0.25s; no hang body-claim; settle `<2 m/s` (#23)                         |
-| Held-ball vel   | Carrier vel (#16)                                                                   |
-| Early Ball      | **t<=2 X~~0.77 Z~~1.22**; Zt2[-5.2,2.1] vs[-4.5,1.9]; t<=3 ~0.9/2.0                 |
-| Loose / OppHas  | early/mid match good; full-match averages shift after late goals                    |
-| Chase           | Home 0.45× / Away 0.95× (#25); Away full kick → F (#26)                             |
-| Mid Ball        | t<=5 X~~5.7 Z~~8.3; t=5 Ball≈(−17,−20) vs (−22,−22) — close                         |
-| ClearMate mix   | T2≈0.62 matches; T1 0.23 vs 0.28; T3 0.68 vs 0.93; T4 0.43 vs 0.38                  |
-| Kick launch     | `horiz=min((10+290c)/9,29.42)`; lift `max(0,-0.323+6.667c)`;                        |
-| Ground slide    | Coulomb 5.95 **only while grounded**; airborne XZ coasts (Y hang ⇒ carry)           |
-| Whistle reset   | Positions/ball/charge snap to kickoff; **stamina persists** (no free refill)        |
-| Stamina rates   | Drain **~34.5s** empty; regen **~20s** full; no snap@0; sprint 8 @ empty (#11)       |
-| Kick flick      | Interact↓ aims **MoveTo**, not hold/facing — instant 90° OK (17-11-17 DB11)         |
+| Item            | Notes                                                                           |
+| --------------- | ------------------------------------------------------------------------------- |
+| Opp-goal dir    | Clear lane into mouth or null; goal-dir uses interact_r                         |
+| ClearMate       | LOS + short corridor + other mates block; MIN_DOT 0.93; mate_r body×2.8; max 36 |
+| Kicking striker | Spawns at (0,0) when kicking off; kickoff face ±Z (#24)                         |
+| Speeds          | walk **7** / sprint **8**; no stam throttle (#11); Clear-sticky facing (#24)    |
+| Clear blockers  | body1.5 + continuous closest-approach ray                                       |
+| Charge          | 0.30s warmup + 0.38s to full (#19)                                              |
+| Hold offset     | **1.67 m** prefab BallHoldLocation Z (#21); body capsule **0.762**              |
+| Kickoff / Away  | Kickoff-phase circle clamp; suppress Away team-side + P3-closest                |
+| Tackle          | `stam >=` steals; equal both-dump; higher no-dump; lockout 0.25s (#18/#22)      |
+| Pickup / loose  | Hot window 0.25s; no hang body-claim; settle `<2 m/s` (#23)                     |
+| Held-ball vel   | Carrier vel (#16)                                                               |
+| Early Ball      | **t<=2 X~~0.77 Z~~1.22**; Zt2[-5.2,2.1] vs[-4.5,1.9]; t<=3 ~0.9/2.0             |
+| Loose / OppHas  | early/mid match good; full-match averages shift after late goals                |
+| Chase           | Home 0.45× / Away 0.95× (#25); Away full kick → F (#26)                         |
+| Mid Ball        | t<=5 X~~5.7 Z~~8.3; t=5 Ball≈(−17,−20) vs (−22,−22) — close                     |
+| ClearMate mix   | T2≈0.62 matches; T1 0.23 vs 0.28; T3 0.68 vs 0.93; T4 0.43 vs 0.38              |
+| Kick launch     | `horiz=min((10+290c)/9,29.42)`; lift `max(0,-0.323+6.667c)`;                    |
+| Ground slide    | Coulomb 5.95 **only while grounded**; airborne XZ coasts (Y hang ⇒ carry)       |
+| Whistle reset   | Positions/ball/charge snap to kickoff; **stamina persists** (no free refill)    |
+| Stamina rates   | Drain **~34.5s** empty; regen **~20s** full; no snap@0; sprint 8 @ empty (#11)  |
+| Kick flick      | Interact↓ aims **MoveTo**, not hold/facing — instant 90° OK (17-11-17 DB11)     |
 
 ### Whistle / kickoff: positions only (`CONFIRMED`)
 
@@ -338,8 +357,8 @@ regenerated smoothly at **0.05/s** (~20s full) — no snap. Drain while carrying
 >    **not** drop at stam≈0 (always-sprint TimePlot).
 > 7. Opening kickoff hold faces **world ±Z** (~1.67 m), not attack ±X; facing
 >    tracks Clear with sticky C→H during charge warmup.
-> 8. Tackle: higher stam steals, equal keeps, **no** mutual stam dump. Frida
->    mutual-zero + 1.5s tackle regen delay not observed live.
+> 8. Tackle: `stam >=` steals; **equal → tackler wins + both dump to 0**;
+>    higher → steal with no dump. Frida 1.5s tackle regen delay not live.
 
 Update this file whenever a new confirmed quirk shows up.
 
@@ -349,9 +368,8 @@ Update this file whenever a new confirmed quirk shows up.
 
 What is still soft / optional:
 
-1. *(none for tackle delay — locked below)* Mid-charge **equal-stam** mutual
-   stam-zero still untested (equal stam cannot steal; advantage steal does not
-   dump either side).
+1. _(tackle tie rule locked 2026-07-22 — equal steals + both dump; confirm dump
+   magnitude with TimePlot if disputed)_
 
 ### Locked (no new capture needed)
 
@@ -372,9 +390,14 @@ What is still soft / optional:
   charge-warmup reject of ~90° flips still applies while carrying.
 - Post-goal pause → kickoff reset **~4.9s** (TimePlot 17-37-34); Frida 1.0s is
   not that freeze.
-- Tackle: **equal stam → carrier keeps**; **higher stam steals** (TimePlot
-  18-27-41 Test1/Test2). Steal does **not** zero either stam. Loser regen is
-  immediate (tackleRegenDelay Frida 1.5s **not live** → wired 0).
+- Tackle: **equal stam → tackler wins + both dump**; **higher stam steals with
+  no dump** (user lock 2026-07-22; supersedes TimePlot 18-27-41 tie).
+  tackleRegenDelay Frida 1.5s **not live** → wired 0.
+- **Is \* Player N Open** (AIA lock 2026-07-22): true iff **no opposing player**
+  is within **`2 × Player Interact Radius`** of that player
+  (`nearest_opp_dist > 2×R`). Else false. Same rule for team and opponent
+  slots; `Get nearest/most/furthest open *` only consider players that pass
+  this test.
 
 ---
 

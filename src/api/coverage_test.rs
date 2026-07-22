@@ -2,9 +2,8 @@
 
 #[cfg(test)]
 mod tests {
-    use bevy::prelude::Vec2;
     use crate::api::{
-        build_team_api, GET_BOOL, GET_FLOAT, GET_TRANSFORM, GET_VECTOR3, WorldSensors,
+        build_team_api, WorldSensors, GET_BOOL, GET_FLOAT, GET_TRANSFORM, GET_VECTOR3,
     };
     use crate::ball::Ball;
     use crate::brain::TeamId;
@@ -12,6 +11,7 @@ mod tests {
     use crate::params::SimParams;
     use crate::player::{default_facing, faceoff_world, Player, PlayerId};
     use crate::possession::Possession;
+    use bevy::prelude::Vec2;
 
     fn sample_players() -> Vec<Player> {
         let mut out = Vec::new();
@@ -50,16 +50,10 @@ mod tests {
         let api = build_team_api(TeamId::Home, &sensors);
 
         for label in GET_BOOL {
-            assert!(
-                api.bools.contains_key(label),
-                "missing bool {label}"
-            );
+            assert!(api.bools.contains_key(label), "missing bool {label}");
         }
         for label in GET_FLOAT {
-            assert!(
-                api.floats.contains_key(label),
-                "missing float {label}"
-            );
+            assert!(api.floats.contains_key(label), "missing float {label}");
         }
         for label in GET_TRANSFORM {
             assert!(
@@ -68,10 +62,65 @@ mod tests {
             );
         }
         for label in GET_VECTOR3 {
-            assert!(
-                api.vectors.contains_key(label),
-                "missing vector3 {label}"
-            );
+            assert!(api.vectors.contains_key(label), "missing vector3 {label}");
         }
+    }
+
+    #[test]
+    fn is_open_is_no_opponent_within_two_interact_radii() {
+        let mut params = SimParams::default();
+        params.interact_radius = 2.0; // open_r = 4.0
+        let open_r = params.interact_radius * 2.0;
+
+        let mut players = sample_players();
+        for p in &mut players {
+            if p.team == TeamId::Home && p.id == PlayerId(1) {
+                p.pos = Vec2::new(0.0, 0.0);
+            } else if p.team == TeamId::Away {
+                p.pos = Vec2::new(100.0, 0.0);
+            }
+        }
+
+        let ball = Ball::default();
+        let possession = Possession::default();
+        let match_state = MatchState::default();
+        let api = |players: &[Player]| {
+            build_team_api(
+                TeamId::Home,
+                &WorldSensors {
+                    ball: &ball,
+                    players,
+                    possession: &possession,
+                    match_state: &match_state,
+                    params: &params,
+                },
+            )
+        };
+
+        assert_eq!(api(&players).get_bool("Is Team Player 1 Open"), Some(true));
+
+        // Just inside 2×R → marked.
+        players
+            .iter_mut()
+            .find(|p| p.team == TeamId::Away && p.id == PlayerId(1))
+            .unwrap()
+            .pos = Vec2::new(open_r - 0.01, 0.0);
+        assert_eq!(api(&players).get_bool("Is Team Player 1 Open"), Some(false));
+
+        // Exactly at 2×R is still "within" → not open.
+        players
+            .iter_mut()
+            .find(|p| p.team == TeamId::Away && p.id == PlayerId(1))
+            .unwrap()
+            .pos = Vec2::new(open_r, 0.0);
+        assert_eq!(api(&players).get_bool("Is Team Player 1 Open"), Some(false));
+
+        // Just outside → open.
+        players
+            .iter_mut()
+            .find(|p| p.team == TeamId::Away && p.id == PlayerId(1))
+            .unwrap()
+            .pos = Vec2::new(open_r + 0.01, 0.0);
+        assert_eq!(api(&players).get_bool("Is Team Player 1 Open"), Some(true));
     }
 }

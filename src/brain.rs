@@ -20,7 +20,7 @@ impl TeamId {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BrainCommand {
     pub move_to: Vec2,
     pub sprint: bool,
@@ -37,7 +37,7 @@ impl Default for BrainCommand {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BrainOutput {
     pub commands: [BrainCommand; 4],
 }
