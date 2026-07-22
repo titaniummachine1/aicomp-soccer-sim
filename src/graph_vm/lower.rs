@@ -605,6 +605,11 @@ impl Lowerer {
     }
 
     fn lower_function_call(&mut self, fn_node: &GraphNode) -> Reg {
+        // Unity AIComp: custom functions cannot nest (Discord AIA bot). Nested
+        // Function calls lower to Null — pass values as parameters instead.
+        if !self.call_stack.is_empty() {
+            return self.emit_const_null(&fn_node.sid, "Any1");
+        }
         let Some(def) = self.graph.create_functions.get(&fn_node.modifier).cloned() else {
             return self.emit_const_null(&fn_node.sid, "Any1");
         };

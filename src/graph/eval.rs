@@ -549,6 +549,13 @@ impl<'a> EvalCtx<'a> {
     }
 
     fn eval_function_call(&mut self, fn_node: &super::load::GraphNode) -> GraphValue {
+        // Unity AIComp: custom functions cannot nest (Discord AIA bot). Calling
+        // Function from inside another CreateFunction body returns Null — pass
+        // values as parameters instead.
+        if !self.call_stack.is_empty() {
+            return GraphValue::Null;
+        }
+
         let Some(def) = self.graph.create_functions.get(&fn_node.modifier).cloned() else {
             return GraphValue::Null;
         };

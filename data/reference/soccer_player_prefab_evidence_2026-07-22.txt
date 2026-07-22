@@ -1,0 +1,153 @@
+## Verdict
+
+Soccer players are the prefab **`AIALander - Soccer`** in `sharedassets0.assets`. Movement is **Rigidbody + CapsuleCollider + NavMeshAgent + `DeterministicMover`** — **no `CharacterController` anywhere** in `sharedassets0` or `level0`. Walk/sprint numerics and interact-radius **value** are not named in scrapable assets; they sit in opaque `MonoBehaviour` payloads / IL2CPP code. Saves expose **`Player Interact Radius`** and **`Ball Velocity`** only — **no player speed/velocity/acceleration labels**.
+
+---
+
+## 1. Player prefab (hard evidence)
+
+| Item | Value |
+|------|--------|
+| File | `C:\gitProjects\worldcup4\Aialanders_Data\sharedassets0.assets` |
+| GameObject | **`AIALander - Soccer`** |
+| path_id | **2860** |
+| Layer | **18** |
+| Also in dump | `C:\gitProjects\worldcup4\worldcupteams\_sim_mine_raw.json` (named entry) |
+
+### Unity components (fully readable)
+
+| Type | path_id | Key values |
+|------|---------|------------|
+| **Transform** | 3517 | identity; children include `BallHoldLocation`, `DirectionalRaycaster`, mesh, etc. |
+| **CapsuleCollider** | 3769 | `m_Radius` **0.7618736028671265**, `m_Height` **3.0291762351989746**, `m_Center` **(0, 1.5353901386260986, 0)**, `m_Direction` **1** (Y), `m_IsTrigger` **false**, `m_Material` **none** |
+| **Rigidbody** | 3762 | `m_Mass` **10**, `m_LinearDamping` **0**, `m_AngularDamping` **~0.05**, `m_UseGravity` **false**, `m_IsKinematic` **false**, `m_Constraints` **36** (= **FreezePositionY (4) + FreezeRotationY (32)**) |
+| **NavMeshAgent** | 3778 | `m_Radius` **0.5**, `m_Height` **2**, `m_Speed` **0**, `m_Acceleration` **0**, `m_AngularSpeed` **0**, `m_StoppingDistance` **1.25** (speed/accel zero on prefab — filled/overridden at runtime) |
+| **Animator** | 3765 | enabled |
+
+**CharacterController:** count **0** in `sharedassets0.assets` and `level0`.
+
+### Children (movement/possession relevant)
+
+| Child | Transform path_id | Local position |
+|-------|-------------------|----------------|
+| **`BallHoldLocation`** | 3347 (GO 2538) | **(0, 0.25, 1.67)** — only a Transform, no collider |
+| **`DirectionalRaycaster`** | 3557 (GO 2353) | (0,0,0); 8 children **Direction A–H** (clear-lane sensors) |
+| `Bip001`, `char_body`, `char_head`, UI/decals | … | cosmetics / graph UI |
+
+---
+
+## 2. MonoBehaviours on the player (names confirmed; values opaque)
+
+UnityPy cannot deserialize most Soccer MonoBehaviours (IL2CPP / missing type trees). Script path_ids resolved via `globalgamemanagers.assets` MonoScripts:
+
+| MB path_id | Class | Notes |
+|------------|-------|-------|
+| **9316** | **`SoccerPlayer`** | 620-byte payload; refs **Stamina**, **NavMeshAgent**, **DeterministicMover**, **BallHoldLocation** Transform |
+| **9260** | **`DeterministicMover`** | 96 bytes; tooltip: *“NavMeshAgent is used for pathfinding only; this component performs movement”* |
+| **9312** | **`Stamina`** | 76 bytes |
+| **8696** | **`SoccerDirectionalRaycaster`** | refs 8 direction transforms |
+| 9047 | `AIBrain` | empty payload |
+| others | `Customization`, `Health` (disabled), `Hunger` (disabled), `Footsteps`, … | not soccer-movement core |
+
+### Unnamed serialized floats (candidates only — field names not recoverable)
+
+**`DeterministicMover` (9260)** payload after header: **10.0, 100.0, 0.5, 8.0, 0.1, 0.1** (+ NavMeshAgent ref 3778). No confirmed labels.
+
+**`Stamina` (9312):** **100.0**, **0.15**, **5.0**, **1.0**, …, **0.5** — matches Survival README stamina pattern (max 100, sprint drain 0.15/tick, attack 5), not soccer-documented.
+
+**`SoccerPlayer` (9316)** float cluster near BallHold ref (raw abs ~216+): **2.5, 4.5, 1.25, 5.0, 0.25, 100.0, 0.1** then later **0.4, 1.2, 10, 60, 4, 5, 0.25, 2, 1, 10, 15, …**  
+Strong *candidates* for walk/sprint/interact (e.g. 2.5 / 4.5 and 1.25 matching agent stopping distance), but **not name-verified** (metadata encrypted; Il2CppDumper failed).
+
+---
+
+## 3. Ball hold / possession-related ball script
+
+**Hold point (static):** `BallHoldLocation` local **(0, 0.25, 1.6699999570846558)** under player root — evidence the held ball is parented/snapped here in code, not via collider alone.
+
+**`SoccerBall` MonoBehaviour** (sharedassets MB **10695** / level0 **53472**, script `SoccerBall`): unnamed floats include **0.125, 0.25, 3.0, 30.0, 0.75, 0.1, 7.0, 3.0**.
+
+Inspector strings in `global-metadata.dat` next to that class:
+- *“How long the shooter alone cannot **re-pickup/tackle** after releasing a shot…”*
+- *“**Maximum free-ball speed** in m/s. Set to 0 or less for unlimited.”* → strongly maps to serialized **30.0**
+- Nested type **`SoccerBall|TouchRecord`** (touches tracked)
+
+Ball physics Rigidbody/SphereCollider are already mined (`worldcup_ball_physics.json` / `_sim_mine_raw.json`); not repeated here.
+
+---
+
+## 4. Soccer API / saves — movement & pickup labels
+
+Sources: LocalLow saves + `soccer_api_dump.md` / `worldcup_soccer_modifiers_mined.json` / `AIGamePyLibrary` literals.
+
+### Present (relevant)
+
+| Getter | Labels |
+|--------|--------|
+| **SoccerGetFloat** | **`Player Interact Radius`**, stamina family, **`Ball Carrier Shot Charge`**, scores/distances |
+| **SoccerGetBool** | **`Is Ball Loose`**, **`Is Ball Nearby Team Player 1–4`**, **`Team/Opponent/Team Player N Has Ball`**, … |
+| **SoccerGetVector3** | **`Ball Velocity`** (only velocity label) |
+| **SoccerGetTransform** | **`Team Player 1–4`**, **`Ball`**, … |
+| Controllers | `SoccerControllerN`: **Bool1=sprint**, **Vector31=moveTo**, **Bool2=interact** |
+
+### Absent across all Soccer saves scanned
+
+- **`Player Speed` / `Player Velocity` / `Player Acceleration`**
+- Any `*Speed*` / `*Acceleration*` SoccerGet modifier except none
+- Only velocity label: **`Ball Velocity`**
+
+Saves checked:  
+`C:\Users\Terminatort8000\AppData\LocalLow\Unicorn One\AIComp\Saves\Soccer\`  
+(`AIA.txt`, `Titanium.txt`, `Poponeta.txt`, `Controller.txt`, …)
+
+Embedded copies of those graphs also live as TextAssets in `sharedassets0` (path_ids 430/431) — same labels, still no player speed.
+
+### Possession / auto-capture (inference + bot evidence)
+
+From AIA graph design (`AIATest_readable.py` / overview):
+- **`Player Interact(ready, ballNearby, hasBall)`** drives the **interact** controller bit
+- **`Is Ball Nearby`** and **`Has Ball`** are separate
+- Sprint/chase use **`Is Ball Loose`** + **`Player Interact Radius`** for proximity
+
+From assets/tooltips:
+- Explicit **pickup/tackle** language and post-shot **re-pickup cooldown**
+- **`TouchRecord`** ≠ automatic possession
+
+**Conclusion:** Static data strongly indicates **interact (and tackle/stamina rules) gate possession**, not “any touch = own ball.” Exact touch→possession branching is **only in `SoccerPlayer` / `SoccerBall` / `SoccerGameManager` IL2CPP code** (not statically readable here).
+
+Tackle rule (from project docs/API dump, not asset floats): stamina delta; tackler wins if more stamina **after** tackle.
+
+---
+
+## 5. `SoccerGameManager` (level0)
+
+- GO **`GameManager`** path_id **2904**, MB **52713**, len 1020  
+- Many unnamed floats (match timers, crowd, stale-ball, etc.) including values like **2.5, 5.0, 8.0, 0.1, 0.1** that *resemble* player/mover knobs — **cannot assign without field names**
+- Source file: `C:\gitProjects\worldcup4\Aialanders_Data\level0`
+
+---
+
+## 6. What cannot be statically scraped (lives in MonoBehaviour / IL2CPP)
+
+| Topic | Why blocked |
+|-------|-------------|
+| Confirmed **walk / sprint / accel** field names & which float is which | `SoccerPlayer` / `DeterministicMover` type trees fail; **global-metadata encrypted** (`Il2CppDumper`: “Metadata file not found or encrypted”); no `MelonLoader/Il2CppAssemblies` dump yet |
+| Numeric **`Player Interact Radius`** | Runtime getter only; label in graphs, value not in assets as a named constant |
+| Whether **collision alone** captures the ball | Logic in `SoccerPlayer`/`SoccerBall` code |
+| Sprint **multiplier** vs absolute sprint speed | Unlabeled floats only |
+| When NavMeshAgent.speed is assigned | Runtime (`DeterministicMover` / `SoccerPlayer`) |
+| Dropdown option arrays on `SoccerGet*` UI nodes | MonoBehaviour payloads not deserializable; labels recovered from **saves**, not prefab option lists (`worldcup_soccer_mined.json` `option_hits: {}`) |
+
+---
+
+## 7. Mining scripts / dumps used (read-only)
+
+| Path | Role |
+|------|------|
+| `worldcupteams\_mine_sim_physics.py` → `_sim_mine_raw.json` | Named Soccer/ball objects |
+| `worldcupteams\_mine_unitypy.py`, `_dump_soccer_prefabs.py`, `_mine_modifiers.py` | Gate/prefab/label mining |
+| `worldcupteams\soccer_api_dump.json` / `.md` | Consolidated API + physics notes |
+| `worldcupteams\worldcup_soccer_modifiers_mined.json` | Labels from saves |
+| Live UnityPy reads of `sharedassets0.assets` / `level0` | Player collider / MB byte parse |
+| `global-metadata.dat` string harvest | Tooltips (`DeterministicMover`, re-pickup, max free-ball speed) |
+
+**Bottom line for bot work:** use **`SoccerGetFloat("Player Interact Radius")`**, **`Is Ball Nearby` / `Has Ball` / `Is Ball Loose`**, and controller **sprint/interact**; do not expect a SoccerGet for player velocity/accel. For numeric move speeds, need a **live UnityExplorer / decrypted IL2CPP dump** of `SoccerPlayer` + `DeterministicMover` fields — not available from current static assets alone.

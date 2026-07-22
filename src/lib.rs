@@ -8,6 +8,7 @@
 
 pub mod api;
 pub mod ball;
+pub mod batch;
 pub mod brain;
 pub mod graph;
 pub mod graph_vm;

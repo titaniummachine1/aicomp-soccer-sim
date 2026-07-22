@@ -38,6 +38,7 @@ fast_link = ["bevy/dynamic_linking"]
 [dependencies]
 # Top-down 2D only.
 bevy = { version = "0.19" }
+micropool = "0.3"
 rfd = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

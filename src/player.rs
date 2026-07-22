@@ -49,7 +49,7 @@ impl SimpleMover {
         Self {
             max_speed: params.player_max_speed,
             accel: params.player_accel,
-            stopping_distance: params.minimum_move_delta_m.max(0.05),
+            stopping_distance: params.stopping_distance_m.max(0.05),
         }
     }
 }

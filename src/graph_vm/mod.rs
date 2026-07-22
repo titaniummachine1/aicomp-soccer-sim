@@ -21,6 +21,6 @@ pub use interpreter::Interpreter;
 pub use lower::{ApiKind, ApiSlotTable, CompileResult, Lowerer, VariableTable};
 pub use opcode::{Instruction, OpCode, OpEffect, OpInfo};
 pub use program::RuntimeProgram;
-pub use runtime_brain::RuntimeBrain;
+pub use runtime_brain::{CachedProgram, RuntimeBrain};
 pub use trace::{compare_traces, ObservableTrace, TraceMismatch};
 pub use value::{RegisterKind, VmValue};

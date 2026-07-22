@@ -14,6 +14,14 @@ use crate::graph_vm::program::{Backend, RuntimeProgram};
 use crate::graph_vm::trace::ObservableTrace;
 use crate::graph_vm::value::VmValue;
 
+/// Shared compiled program + tables — clone cheaply to spawn many RuntimeBrain instances.
+#[derive(Debug, Clone)]
+pub struct CachedProgram {
+    pub program: Arc<RuntimeProgram>,
+    pub vars: VariableTable,
+    pub apis: ApiSlotTable,
+}
+
 #[derive(Debug)]
 pub struct RuntimeBrain {
     program: Arc<RuntimeProgram>,
@@ -26,14 +34,34 @@ pub struct RuntimeBrain {
 
 impl RuntimeBrain {
     pub fn compile(graph: TeamGraph) -> Self {
+        Self::from_cached(Self::compile_cached(graph))
+    }
+
+    /// Lower + O1 optimize once; reuse via [`Self::from_cached`] / [`CachedProgram`].
+    pub fn compile_cached(graph: TeamGraph) -> CachedProgram {
         let mut compiled = Lowerer::compile(graph);
         // O1: ConstFold → RelayRemoval → CSE → Fusion → RegAlloc.
         let pm = PassManager::o1();
         pm.run_all(&mut compiled.settle);
         pm.run_all(&mut compiled.controllers);
-        let vars = compiled.vars.clone();
-        let apis = compiled.apis.clone();
-        let program = Arc::new(ProgramBuilder.pack(&compiled));
+        CachedProgram {
+            program: Arc::new(ProgramBuilder.pack(&compiled)),
+            vars: compiled.vars,
+            apis: compiled.apis,
+        }
+    }
+
+    /// Spawn a fresh brain from a cached program — does **not** re-lower/re-opt.
+    pub fn from_cached(cached: CachedProgram) -> Self {
+        Self::from_program(cached.program, cached.vars, cached.apis)
+    }
+
+    /// Spawn a fresh brain from an already-packed program — own persistent_vars + Interpreter.
+    pub fn from_program(
+        program: Arc<RuntimeProgram>,
+        vars: VariableTable,
+        apis: ApiSlotTable,
+    ) -> Self {
         let persistent_vars = vec![VmValue::Null; program.variable_count as usize];
         Self {
             program,

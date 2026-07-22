@@ -103,18 +103,20 @@
     "note": "Ground Coulomb slide ONLY while grounded. Airborne XZ coasts (TimePlot planar decay=0). Bounce e≈0.23 from landing vy ratio (material 0.4 too high). Hang scales with lift (~0.28s@0.5 → ~0.61s@1.0)."
   },
     "player_candidates": {
-    "status": "frida_live_dump_2026-07-22",
-    "model": "perfect_simple_movers",
-    "source_dump": "worldcupv0.5/_modding_dumps/soccer_live_constants.json + soccer_mover_stamina.json",
+    "status": "prefab_locked_2026-07-22",
+    "model": "DeterministicMover + Rigidbody + CapsuleCollider + NavMeshAgent (path only)",
+    "source_dump": "data/reference/soccer_player_prefab_evidence_2026-07-22.txt (AIALander - Soccer path_id 2860)",
     "walk_speed_mps": 7.0,
     "sprint_speed_mps": 8.0,
     "intercept_defaults_mps": { "max_speed": 8.0, "acceleration": 100.0 },
     "minimum_move_delta_m": 0.25,
-    "body_radius_m": 0.5,
-    "hold_offset_m": 1.557,
+    "body_radius_m": 0.7618736,
+    "nav_agent_radius_m": 0.5,
+    "hold_offset_m": 1.67,
+    "stopping_distance_m": 1.25,
     "interact_radius_m": 1.75,
     "tackle_range_m": 1.75,
-    "free_ball_pickup": "interact/tackle required",
+    "free_ball_pickup": "interact/tackle required (not collision auto-capture)",
     "global_pickup_delay_after_shot_s": 0.125,
     "global_pickup_delay_after_exchange_s": 0.25,
     "shot_charge_warmup_s": 0.30,
@@ -147,7 +149,7 @@
       "regen_rate": 5.0,
       "regen_delay_s": 0.0,
       "tackle_regen_delay_s": 0.0,
-      "note": "TimePlot 18-27-41: stam-advantage steal, no mutual dump, loser regen immediate (Frida tackle 1.5s / sprint 1.0s both wrong). Equal stam keeps carrier."
+      "note": "Equal stam → tackler wins + both dump; higher stam steals no dump (user 2026-07-22). Frida tackle 1.5s / sprint 1.0s delays not live."
     },
     "stamina_drain_full_s": 34.5,
     "stamina_regen_full_s": 20.0,
@@ -160,7 +162,17 @@
       "snap_refill_at_zero": false,
       "note": "Continuous sprint+has segments. Discord instant-refill at 0 NOT seen."
     },
-    "note": "Frida: walkSpeed=7 sprintSpeed=8 mover.acceleration=100 tackleRange=1.75. player_max_speed uses sprint 8. Pickup lockout after shot=0.125s; after exchange=0.25s on tackle win. hold_offset 1.557m TimePlot-locked."
+    "prefab_evidence": {
+      "gameobject": "AIALander - Soccer",
+      "capsule_radius_m": 0.7618736,
+      "capsule_height_m": 3.029176,
+      "ball_hold_location_local": [0.0, 0.25, 1.67],
+      "nav_agent_radius_m": 0.5,
+      "nav_agent_stopping_distance_m": 1.25,
+      "deterministic_mover_unnamed_floats": [10.0, 100.0, 0.5, 8.0, 0.1, 0.1],
+      "note": "100≈accel, 8≈sprint already TimePlot-locked. No CharacterController. Interact gates possession."
+    },
+    "note": "Prefab: capsule body 0.762, BallHoldLocation Z=1.67, NavMesh stoppingDistance=1.25. Walk 7 / sprint 8 / accel 100. Interact-gated pickup. Equal-stam tackle: tackler wins + both dump."
   },
   "bevy_impl_hints": [
     "Ball: Dynamic RigidBody, LockedAxes::ROTATION_LOCKED, sphere collider radius radius_world, friction/restitution as contacts above OR custom Coulomb slide force -accel*normalize(vel) while grounded",

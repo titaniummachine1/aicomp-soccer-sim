@@ -151,8 +151,10 @@ pub fn apply_interact(
         }
     }
 
-    // Tackle: interact near held ball. Strict stamina advantage steals;
-    // equal/lower keeps carrier. No mutual stam dump (TimePlot 18-27-41).
+    // Tackle: interact near held ball.
+    // - Higher stam → steal, no mutual dump (TimePlot 18-27-41).
+    // - Equal stam → tackler wins; BOTH stamina dumped (user lock 2026-07-22).
+    // - Lower stam → carrier keeps; no dump.
     if ball.held {
         if let Some((ct, cid)) = poss.carrier {
             if ct != player.team {
@@ -161,11 +163,17 @@ pub fn apply_interact(
                     .min((player.pos - ball.pos).length());
                 if dist <= params.interact_radius {
                     let carrier_stam = carrier_stamina.unwrap_or(0.0);
-                    // TimePlot 18-27-41 (Test1/Test2): equal stam → carrier keeps;
-                    // strictly higher stam steals with NO mutual dump. Frida
-                    // "zeros both" / 1.5s tackle regen delay not observed.
-                    let attacker_wins = player.stamina > carrier_stam + 1e-4;
-                    let drain = 0.0;
+                    let eps = 1e-4;
+                    let higher = player.stamina > carrier_stam + eps;
+                    let equal = (player.stamina - carrier_stam).abs() <= eps;
+                    let attacker_wins = higher || equal;
+                    let drain = if equal { carrier_stam } else { 0.0 };
+                    if equal {
+                        player.stamina = 0.0;
+                        player.stamina_regen_lock_left = params
+                            .stamina_tackle_regen_delay_s
+                            .max(player.stamina_regen_lock_left);
+                    }
                     if attacker_wins {
                         poss.carrier = Some((player.team, player.id.0));
                         player.shot_charge = 0.0;
@@ -273,7 +281,7 @@ mod tests {
     use crate::player::{Player, PlayerId};
 
     #[test]
-    fn equal_stamina_tackle_carrier_keeps() {
+    fn equal_stamina_tackle_tackler_wins_both_drain() {
         let params = SimParams::default();
         let mut ball = Ball {
             pos: Vec2::ZERO,
@@ -312,13 +320,13 @@ mod tests {
             Some(1.0),
             Some(0.0),
         );
-        assert!(drain.is_some());
-        // Equal stamina: carrier keeps (TimePlot).
-        assert!(!drain.unwrap().attacker_wins);
-        assert_eq!(poss.carrier, Some((TeamId::Home, 1)));
+        let drain = drain.expect("equal-stam tackle returns drain");
+        assert!(drain.attacker_wins);
+        assert!((drain.drain - 1.0).abs() < 1e-5, "carrier drain={}", drain.drain);
+        assert_eq!(poss.carrier, Some((TeamId::Away, 1)));
         assert!(
-            (attacker.stamina - 1.0).abs() < 1e-5,
-            "failed probe must not drain, got {}",
+            attacker.stamina.abs() < 1e-5,
+            "equal stam must dump tackler stamina, got {}",
             attacker.stamina
         );
     }

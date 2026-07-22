@@ -74,6 +74,8 @@ pub struct SimParams {
     pub hold_marker_radius: f32,
     /// Frida walkSpeed (cruise); sim uses [`player_max_speed`] for sprint cap.
     pub player_walk_speed: f32,
+    /// NavMeshAgent.m_StoppingDistance on `AIALander - Soccer` prefab (**1.25**).
+    pub stopping_distance_m: f32,
     /// Ball.pickupDelayAfterExchange — wired on successful tackle exchange.
     pub pickup_delay_after_exchange_s: f32,
     /// Whistle idle timeout (staleBallTimeoutSeconds). Wired in `tick_stale_ball`.
@@ -97,7 +99,6 @@ impl Default for SimParams {
 
 impl SimParams {
     pub fn fallback(source_path: PathBuf) -> Self {
-        let body_radius = 0.5;
         let ball_radius = 0.40637236;
         Self {
             ball_radius,
@@ -139,10 +140,13 @@ impl SimParams {
             shot_charge_warmup_s: 0.30,
             shot_charge_time_s: 0.38,
             interact_radius: 1.75,
-            body_radius,
-            hold_offset: 1.557,
+            // CapsuleCollider.m_Radius on AIALander - Soccer (prefab evidence).
+            body_radius: 0.7618736,
+            // BallHoldLocation local Z on prefab (TimePlot first hold ≈1.67).
+            hold_offset: 1.67,
             hold_marker_radius: ball_radius * 0.55,
             player_walk_speed: 7.0,
+            stopping_distance_m: 1.25,
             pickup_delay_after_exchange_s: 0.25,
             stale_ball_timeout_s: 5.0,
             stale_ball_distance_threshold_m: 2.5,
@@ -280,6 +284,9 @@ impl SimParams {
             }
             if let Some(m) = pl.minimum_move_delta_m {
                 p.minimum_move_delta_m = m;
+            }
+            if let Some(s) = pl.stopping_distance_m {
+                p.stopping_distance_m = s;
             }
             if let Some(k) = pl.kickoff_frida {
                 if let Some(r) = k.circle_radius_m {
@@ -436,6 +443,7 @@ struct RawPlayers {
     body_radius_m: Option<f32>,
     nav_agent_radius_m: Option<f32>,
     hold_offset_m: Option<f32>,
+    stopping_distance_m: Option<f32>,
     interact_radius_m: Option<f32>,
     tackle_range_m: Option<f32>,
 }

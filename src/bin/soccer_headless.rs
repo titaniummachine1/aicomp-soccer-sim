@@ -1,10 +1,11 @@
 //! Headless match runner — fishtest-style offline AI evaluation.
 //!
-//! No window. Fixed-dt `MatchWorld` only. Prints one JSON result line to stdout
-//! (and a short summary on stderr) so agents / scripts can aggregate runs.
+//! No window. Fixed-dt `MatchWorld` only. Prints JSON (or JSONL for `--batch`)
+//! to stdout so agents / scripts can aggregate runs.
 //!
 //! ```text
 //! cargo run --release --bin soccer_headless -- --secs 30 --home chase --away idle
+//! cargo run --release --bin soccer_headless -- --batch 16 --jobs 8 --home chase --away idle
 //! cargo run --release --bin soccer_headless -- --help
 //! ```
 
@@ -13,91 +14,19 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use aicomp_soccer_sim::brain::{ChaseBallBrain, IdleBrain, TeamBrain, TeamId};
-use aicomp_soccer_sim::graph::{load_team_graph, GraphBrain};
-use aicomp_soccer_sim::graph_vm::RuntimeBrain;
+use aicomp_soccer_sim::batch::{
+    run_batch_parallel, run_match_job, reserved_worker_threads, BatchMatchResult, BrainInput,
+    GraphEngine, MatchJob, ProgramCache,
+};
+use aicomp_soccer_sim::brain::TeamId;
 use aicomp_soccer_sim::params::{default_params_path, SimParams};
-use aicomp_soccer_sim::probe_brains::{Test1Brain, Test2Brain};
-use aicomp_soccer_sim::world::{MatchWorld, FIXED_DT};
-use serde::Serialize;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GraphEngine {
-    /// Permanent oracle — recursive GraphBrain.
-    Reference,
-    /// O0 compiled RuntimeProgram (single-sim speed path).
-    Runtime,
-}
-
-#[derive(Debug, Clone)]
-enum BrainSpec {
-    Chase,
-    Idle,
-    Test1,
-    Test2,
-    Aia,
-    Graph(PathBuf),
-}
-
-impl BrainSpec {
-    fn parse(s: &str) -> Result<Self, String> {
-        let t = s.trim();
-        if let Some(rest) = t.strip_prefix("graph:") {
-            return Ok(Self::Graph(PathBuf::from(rest)));
-        }
-        match t.to_ascii_lowercase().as_str() {
-            "chase" => Ok(Self::Chase),
-            "idle" | "park" => Ok(Self::Idle),
-            "test1" => Ok(Self::Test1),
-            "test2" => Ok(Self::Test2),
-            "aia" => Ok(Self::Aia),
-            other => Err(format!(
-                "unknown brain '{other}' (chase|idle|test1|test2|aia|graph:<path>)"
-            )),
-        }
-    }
-
-    fn label(&self) -> String {
-        match self {
-            Self::Chase => "chase".into(),
-            Self::Idle => "idle".into(),
-            Self::Test1 => "test1".into(),
-            Self::Test2 => "test2".into(),
-            Self::Aia => "aia".into(),
-            Self::Graph(p) => format!("graph:{}", p.display()),
-        }
-    }
-
-    fn build(&self, engine: GraphEngine) -> Result<Box<dyn TeamBrain>, String> {
-        Ok(match self {
-            Self::Chase => Box::new(ChaseBallBrain),
-            Self::Idle => Box::new(IdleBrain),
-            Self::Test1 => Box::new(Test1Brain::default()),
-            Self::Test2 => Box::new(Test2Brain::default()),
-            Self::Aia => {
-                let path = soccer_saves_dir().join("AIA.txt");
-                let g = load_team_graph(&path).map_err(|e| format!("load AIA {path:?}: {e}"))?;
-                match engine {
-                    GraphEngine::Reference => Box::new(GraphBrain::new(g)),
-                    GraphEngine::Runtime => Box::new(RuntimeBrain::compile(g)),
-                }
-            }
-            Self::Graph(path) => {
-                let g = load_team_graph(path).map_err(|e| format!("load graph {path:?}: {e}"))?;
-                match engine {
-                    GraphEngine::Reference => Box::new(GraphBrain::new(g)),
-                    GraphEngine::Runtime => Box::new(RuntimeBrain::compile(g)),
-                }
-            }
-        })
-    }
-}
+use aicomp_soccer_sim::world::FIXED_DT;
 
 #[derive(Debug)]
 struct Args {
     secs: f32,
-    home: BrainSpec,
-    away: BrainSpec,
+    home: BrainInput,
+    away: BrainInput,
     opening: TeamId,
     seed: Option<u64>,
     params: Option<PathBuf>,
@@ -105,6 +34,9 @@ struct Args {
     until_goal: bool,
     quiet: bool,
     engine: GraphEngine,
+    /// When `Some`, run N matches and emit JSONL (even if N == 1).
+    batch: Option<usize>,
+    jobs: Option<usize>,
 }
 
 fn print_help() {
@@ -121,10 +53,13 @@ OPTIONS:
   --away <brain>            Away brain (default: chase)
   --opening home|away       Opening kickoff side (default: home)
   --seed <u64>              Deterministic opening: even=home, odd=away
+                            With --batch: base seed; match i uses seed+i
   --params <path>           Params JSON (default: bevy_sim_params_v05.json)
-  --json <path>             Also write result JSON to this file
+  --json <path>             Also write result JSON to this file (single match)
   --engine reference|runtime  Graph backend for aia/graph: (default: runtime)
   --until-goal              Stop at first goal (still capped by --secs)
+  --batch <N>               Run N matches in parallel; stdout is JSONL
+  --jobs <N>                Thread pool size (default: logical CPUs − 1, min 1)
   --quiet                   No stderr heartbeats
   -h, --help                Show this help
 
@@ -133,27 +68,30 @@ BRAINS:
 
 NOTE:
   Headless always runs max-speed (no wall-clock wait). Prefer --engine runtime
-  for single-match throughput; multi-instance batch is secondary.
+  for throughput. --batch uses a micropool that reserves one logical CPU for
+  the system/UI (override with --jobs).
 
 EXIT:
   0  finished
   1  bad args / load failure
 
 STDOUT:
-  One JSON object (MatchResult) — aggregate this for batch / fishtest-style runs.
+  Single match (no --batch): one JSON object (MatchResult).
+  --batch: one JSON object per line (JSONL), order = job index.
 
 EXAMPLES:
   cargo run --release --bin soccer_headless -- --secs 20 --home chase --away idle
   cargo run --release --bin soccer_headless -- --secs 40 --home test1 --away test2 --opening home
   cargo run --release --bin soccer_headless -- --home aia --away aia --until-goal --secs 60
+  cargo run --release --bin soccer_headless -- --batch 16 --jobs 8 --secs 20 --home chase --away idle --quiet
 "
     );
 }
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut secs = 30.0f32;
-    let mut home = BrainSpec::Chase;
-    let mut away = BrainSpec::Chase;
+    let mut home = BrainInput::Chase;
+    let mut away = BrainInput::Chase;
     let mut opening = TeamId::Home;
     let mut seed = None;
     let mut params = None;
@@ -161,6 +99,8 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut until_goal = false;
     let mut quiet = false;
     let mut engine = GraphEngine::Runtime;
+    let mut batch = None;
+    let mut jobs = None;
 
     let mut i = 0;
     while i < argv.len() {
@@ -179,11 +119,11 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             }
             "--home" => {
                 i += 1;
-                home = BrainSpec::parse(argv.get(i).ok_or("--home needs a value")?)?;
+                home = BrainInput::parse(argv.get(i).ok_or("--home needs a value")?)?;
             }
             "--away" => {
                 i += 1;
-                away = BrainSpec::parse(argv.get(i).ok_or("--away needs a value")?)?;
+                away = BrainInput::parse(argv.get(i).ok_or("--away needs a value")?)?;
             }
             "--opening" => {
                 i += 1;
@@ -230,6 +170,30 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                     }
                 };
             }
+            "--batch" => {
+                i += 1;
+                let n: usize = argv
+                    .get(i)
+                    .ok_or("--batch needs a value")?
+                    .parse()
+                    .map_err(|e| format!("--batch: {e}"))?;
+                if n == 0 {
+                    return Err("--batch must be >= 1".into());
+                }
+                batch = Some(n);
+            }
+            "--jobs" => {
+                i += 1;
+                let n: usize = argv
+                    .get(i)
+                    .ok_or("--jobs needs a value")?
+                    .parse()
+                    .map_err(|e| format!("--jobs: {e}"))?;
+                if n == 0 {
+                    return Err("--jobs must be >= 1".into());
+                }
+                jobs = Some(n);
+            }
             "--until-goal" => until_goal = true,
             "--quiet" => quiet = true,
             other => return Err(format!("unknown arg '{other}' (see --help)")),
@@ -237,12 +201,14 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         i += 1;
     }
 
-    if let Some(s) = seed {
-        opening = if s % 2 == 0 {
-            TeamId::Home
-        } else {
-            TeamId::Away
-        };
+    if batch.is_none() {
+        if let Some(s) = seed {
+            opening = if s % 2 == 0 {
+                TeamId::Home
+            } else {
+                TeamId::Away
+            };
+        }
     }
 
     Ok(Args {
@@ -256,122 +222,19 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         until_goal,
         quiet,
         engine,
+        batch,
+        jobs,
     })
 }
 
-fn soccer_saves_dir() -> PathBuf {
-    let home = env::var("USERPROFILE")
-        .or_else(|_| env::var("HOME"))
-        .unwrap_or_else(|_| ".".into());
-    PathBuf::from(home)
-        .join("AppData")
-        .join("LocalLow")
-        .join("Unicorn One")
-        .join("AIComp")
-        .join("Saves")
-        .join("Soccer")
-}
-
-#[derive(Serialize)]
-struct MatchResult {
-    ok: bool,
-    fixed_dt: f32,
-    secs_requested: f32,
-    clock_s: f32,
-    ticks: u64,
-    opening: &'static str,
-    seed: Option<u64>,
-    home: String,
-    away: String,
-    score_home: u32,
-    score_away: u32,
-    phase: String,
-    until_goal: bool,
-    goal_stopped: bool,
-}
-
-fn opening_str(t: TeamId) -> &'static str {
-    match t {
-        TeamId::Home => "home",
-        TeamId::Away => "away",
-    }
-}
-
-fn phase_str(world: &MatchWorld) -> String {
-    format!("{:?}", world.match_state.phase)
-}
-
-fn run(args: Args) -> Result<MatchResult, String> {
-    let params_path = args
-        .params
-        .clone()
-        .unwrap_or_else(default_params_path);
-    let params = SimParams::load_from_disk(&params_path).unwrap_or_else(|e| {
-        eprintln!("warn: params load failed ({e}); using fallbacks ({})", params_path.display());
-        SimParams::default()
-    });
-
-    let mut home = args.home.build(args.engine)?;
-    let mut away = args.away.build(args.engine)?;
-    let mut world = MatchWorld::new_kickoff_opening(params, args.opening);
-
-    if !args.quiet {
-        let eng = match args.engine {
-            GraphEngine::Reference => "reference",
-            GraphEngine::Runtime => "runtime",
-        };
+fn load_params(path: Option<&PathBuf>) -> SimParams {
+    let params_path = path.cloned().unwrap_or_else(default_params_path);
+    SimParams::load_from_disk(&params_path).unwrap_or_else(|e| {
         eprintln!(
-            "soccer_headless home={} away={} opening={} secs={} until_goal={} engine={eng} FIXED_DT={FIXED_DT} (max-speed)",
-            args.home.label(),
-            args.away.label(),
-            opening_str(args.opening),
-            args.secs,
-            args.until_goal
+            "warn: params load failed ({e}); using fallbacks ({})",
+            params_path.display()
         );
-    }
-
-    let start_score = world.match_state.score_home + world.match_state.score_away;
-    let mut ticks = 0u64;
-    let mut goal_stopped = false;
-    // Use wall sim time (ticks*dt), not match clock_s — clock pauses in Kickoff/GoalPause.
-    let max_ticks = ((args.secs / FIXED_DT).ceil() as u64).max(1);
-
-    while ticks < max_ticks {
-        world.step_brains(&mut *home, &mut *away, FIXED_DT);
-        ticks += 1;
-        if args.until_goal {
-            let scored = world.match_state.score_home + world.match_state.score_away;
-            if scored > start_score {
-                goal_stopped = true;
-                break;
-            }
-        }
-        if !args.quiet && ticks % 500 == 0 {
-            eprintln!(
-                "  t={:.1}s score={}-{} phase={:?}",
-                ticks as f32 * FIXED_DT,
-                world.match_state.score_home,
-                world.match_state.score_away,
-                world.match_state.phase
-            );
-        }
-    }
-
-    Ok(MatchResult {
-        ok: true,
-        fixed_dt: FIXED_DT,
-        secs_requested: args.secs,
-        clock_s: ticks as f32 * FIXED_DT,
-        ticks,
-        opening: opening_str(args.opening),
-        seed: args.seed,
-        home: args.home.label(),
-        away: args.away.label(),
-        score_home: world.match_state.score_home,
-        score_away: world.match_state.score_away,
-        phase: phase_str(&world),
-        until_goal: args.until_goal,
-        goal_stopped,
+        SimParams::default()
     })
 }
 
@@ -382,6 +245,60 @@ fn write_json(path: &Path, json: &str) -> Result<(), String> {
         }
     }
     fs::write(path, json).map_err(|e| e.to_string())
+}
+
+fn run_single(args: &Args, params: SimParams) -> Result<BatchMatchResult, String> {
+    let job = MatchJob {
+        secs: args.secs,
+        home: args.home.clone(),
+        away: args.away.clone(),
+        opening: args.opening,
+        seed: args.seed,
+        until_goal: args.until_goal,
+        engine: args.engine,
+        params,
+        job_index: None,
+    };
+    let cache = ProgramCache::new();
+    run_match_job(&job, Some(&cache), args.quiet)
+}
+
+fn run_batch(args: &Args, params: SimParams) -> Vec<Result<BatchMatchResult, String>> {
+    let n = args.batch.expect("batch present");
+    let base_seed = args.seed.unwrap_or(0);
+    let jobs: Vec<MatchJob> = (0..n)
+        .map(|i| {
+            let seed = base_seed.wrapping_add(i as u64);
+            MatchJob {
+                secs: args.secs,
+                home: args.home.clone(),
+                away: args.away.clone(),
+                opening: if seed % 2 == 0 {
+                    TeamId::Home
+                } else {
+                    TeamId::Away
+                },
+                seed: Some(seed),
+                until_goal: args.until_goal,
+                engine: args.engine,
+                params: params.clone(),
+                job_index: Some(i),
+            }
+        })
+        .collect();
+
+    if !args.quiet {
+        let pool_n = args.jobs.unwrap_or_else(reserved_worker_threads);
+        eprintln!(
+            "soccer_headless batch={n} jobs={pool_n} home={} away={} secs={} until_goal={} FIXED_DT={FIXED_DT} (max-speed, JSONL)",
+            args.home.label(),
+            args.away.label(),
+            args.secs,
+            args.until_goal
+        );
+    }
+
+    run_batch_parallel(jobs, args.jobs)
 }
 
 fn main() -> ExitCode {
@@ -395,26 +312,72 @@ fn main() -> ExitCode {
         }
     };
     let json_path = args.json_out.clone();
-    match run(args) {
-        Ok(result) => {
-            let json = serde_json::to_string(&result).expect("serialize MatchResult");
-            println!("{json}");
-            if let Some(path) = json_path {
-                if let Err(e) = write_json(&path, &json) {
-                    eprintln!("error writing --json: {e}");
-                    return ExitCode::from(1);
+    let params = load_params(args.params.as_ref());
+
+    if args.batch.is_some() {
+        let results = run_batch(&args, params);
+        let mut any_err = false;
+        for r in results {
+            match r {
+                Ok(result) => {
+                    let json = serde_json::to_string(&result).expect("serialize BatchMatchResult");
+                    println!("{json}");
+                    if !result.ok {
+                        any_err = true;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    let fail = serde_json::json!({ "ok": false, "error": e });
+                    println!("{fail}");
+                    any_err = true;
                 }
             }
-            if !result.ok {
-                return ExitCode::from(1);
-            }
+        }
+        if any_err {
+            ExitCode::from(1)
+        } else {
             ExitCode::SUCCESS
         }
-        Err(e) => {
-            eprintln!("error: {e}");
-            let fail = serde_json::json!({ "ok": false, "error": e });
-            println!("{fail}");
-            ExitCode::from(1)
+    } else {
+        match run_single(&args, params) {
+            Ok(result) => {
+                // Omit batch-only fields for single-match parity with historical MatchResult.
+                let json = serde_json::to_string(&serde_json::json!({
+                    "ok": result.ok,
+                    "fixed_dt": result.fixed_dt,
+                    "secs_requested": result.secs_requested,
+                    "clock_s": result.clock_s,
+                    "ticks": result.ticks,
+                    "opening": result.opening,
+                    "seed": result.seed,
+                    "home": result.home,
+                    "away": result.away,
+                    "score_home": result.score_home,
+                    "score_away": result.score_away,
+                    "phase": result.phase,
+                    "until_goal": result.until_goal,
+                    "goal_stopped": result.goal_stopped,
+                }))
+                .expect("serialize MatchResult");
+                println!("{json}");
+                if let Some(path) = json_path {
+                    if let Err(e) = write_json(&path, &json) {
+                        eprintln!("error writing --json: {e}");
+                        return ExitCode::from(1);
+                    }
+                }
+                if !result.ok {
+                    return ExitCode::from(1);
+                }
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                let fail = serde_json::json!({ "ok": false, "error": e });
+                println!("{fail}");
+                ExitCode::from(1)
+            }
         }
     }
 }
