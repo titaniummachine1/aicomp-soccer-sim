@@ -5,10 +5,10 @@ use std::collections::HashMap;
 use bevy::prelude::Vec2;
 
 use crate::graph::load::{GraphNode, TeamGraph};
+use crate::graph_vm::context::VariableId;
 use crate::graph_vm::ir::{IrInst, LoweredIR, Reg, LOWERED_IR_VERSION};
 use crate::graph_vm::opcode::{ApiSlot, OpCode};
 use crate::graph_vm::value::RegisterKind;
-use crate::graph_vm::context::VariableId;
 
 #[derive(Debug, Clone)]
 pub struct VariableTable {
@@ -118,6 +118,23 @@ impl Lowerer {
         };
 
         for sid in &set_variable_sids {
+            if let Some(node) = lowerer.graph.nodes.get(sid) {
+                lowerer.vars.intern(&node.modifier);
+            }
+        }
+        let mut variable_nodes: Vec<_> = lowerer
+            .graph
+            .nodes
+            .values()
+            .filter(|node| node.id == "SetVariable" || node.id == "GetVariable")
+            .map(|node| (node.sid.clone(), node.modifier.clone()))
+            .collect();
+        variable_nodes.sort_by(|a, b| a.0.cmp(&b.0));
+        for (_, name) in variable_nodes {
+            lowerer.vars.intern(&name);
+        }
+
+        for sid in &set_variable_sids {
             lowerer.lower_set_variable(sid);
         }
         let settle = lowerer.take_ir();
@@ -155,6 +172,7 @@ impl Lowerer {
         r
     }
 
+    #[allow(dead_code)] // O0 helper; settle/controllers push IrInst directly.
     fn emit(&mut self, inst: IrInst) -> Reg {
         let dest = inst.dest;
         self.ir.push(inst);
@@ -231,7 +249,7 @@ impl Lowerer {
             return r;
         }
         let Some(pref) = self.graph.ports.get(port_sid).cloned() else {
-            return self.emit_const_null("", "");
+            return self.emit_const_null(port_sid, "missing");
         };
         let reg = self.lower_node_output(&pref.node_sid, &pref.port_name);
         self.cache_set(port_sid.to_string(), reg);
@@ -253,7 +271,8 @@ impl Lowerer {
                         "Any4" => 3,
                         _ => return self.emit_const_null(node_sid, port_name),
                     };
-                    return frame.args[idx];
+                    let arg = frame.args[idx];
+                    return self.emit_move(node_sid, port_name, arg, RegisterKind::Null);
                 }
             }
             return self.emit_const_null(node_sid, port_name);
@@ -805,8 +824,8 @@ mod tests {
     use super::*;
     use crate::graph::load::{index_graph, RawConnection, RawGraph, RawNode, RawPort};
     use crate::graph_vm::builder::ProgramBuilder;
-    use crate::graph_vm::interpreter::Interpreter;
     use crate::graph_vm::context::ExecutionContext;
+    use crate::graph_vm::interpreter::Interpreter;
     use crate::graph_vm::program::Backend;
 
     fn port(id: &str, sid: &str, pol: i32, node: &str) -> RawPort {

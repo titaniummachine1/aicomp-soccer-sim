@@ -17,7 +17,7 @@ impl ProgramBuilder {
         let mut ops = Vec::new();
         let settle_count = pack_ir(&mut ops, &compiled.settle);
         pack_ir(&mut ops, &compiled.controllers);
-        let register_count = max_reg(&compiled.settle) .max(max_reg(&compiled.controllers));
+        let register_count = max_reg(&compiled.settle).max(max_reg(&compiled.controllers));
         let program_hash = hash_ops(&ops);
         RuntimeProgram {
             abi_version: GRAPH_ABI_VERSION,
@@ -31,6 +31,26 @@ impl ProgramBuilder {
             set_variable_sids: Arc::from(compiled.set_variable_sids.clone()),
             api_labels: Arc::from(compiled.apis.labels.clone()),
             api_kinds: Arc::from(compiled.apis.kinds.clone()),
+        }
+    }
+
+    /// Pack one hand-built IR as a settle-only program (primarily for O0 tests).
+    pub fn pack_lowered(&self, ir: &LoweredIR, variable_count: u32) -> RuntimeProgram {
+        let mut ops = Vec::with_capacity(ir.instructions.len());
+        let settle_count = pack_ir(&mut ops, ir) as u32;
+        let program_hash = hash_ops(&ops);
+        RuntimeProgram {
+            abi_version: GRAPH_ABI_VERSION,
+            ir_version: ir.ir_version,
+            program_hash,
+            register_count: max_reg(ir),
+            variable_count,
+            settle_count,
+            ops: ops.into(),
+            var_names: Arc::from([]),
+            set_variable_sids: Arc::from([]),
+            api_labels: Arc::from([]),
+            api_kinds: Arc::from([]),
         }
     }
 }

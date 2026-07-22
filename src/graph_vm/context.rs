@@ -29,7 +29,9 @@ impl ApiSnapshot {
     }
 
     pub fn load_slot(&self, slot: u16) -> VmValue {
-        let idx = slot as usize - 1;
+        let Some(idx) = slot.checked_sub(1).map(usize::from) else {
+            return VmValue::Null;
+        };
         let label = match self.slot_labels.get(idx) {
             Some(l) => l.as_str(),
             None => return VmValue::Null,

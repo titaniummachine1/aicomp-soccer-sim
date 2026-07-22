@@ -43,7 +43,8 @@ fn run_inst(inst: &Instruction, ctx: &mut ExecutionContext) {
         }
         OpCode::ConstBool => {
             if let Some(&dst) = ops.first() {
-                ctx.frame.registers[dst as usize] = VmValue::Bool(ops.get(1).copied().unwrap_or(0) != 0);
+                ctx.frame.registers[dst as usize] =
+                    VmValue::Bool(ops.get(1).copied().unwrap_or(0) != 0);
             }
         }
         OpCode::ConstVec => {
@@ -93,12 +94,50 @@ fn run_inst(inst: &Instruction, ctx: &mut ExecutionContext) {
                 ctx.frame.registers[dst] = VmValue::Float(a + (b - a) * t);
             }
         }
-        OpCode::Abs => unary_f(ctx, ops, |a, kind| eval_operation(a, kind)),
+        OpCode::Abs => unary_f(ctx, ops, |a, _| a.abs()),
+        OpCode::Operation => unary_f(ctx, ops, eval_operation),
+        OpCode::Move => {
+            if ops.len() >= 2 {
+                let value = ctx
+                    .frame
+                    .registers
+                    .get(ops[1] as usize)
+                    .copied()
+                    .unwrap_or(VmValue::Null);
+                ctx.frame.registers[ops[0] as usize] = value;
+            }
+        }
+        OpCode::IsNull => {
+            if ops.len() >= 2 {
+                let value = ctx
+                    .frame
+                    .registers
+                    .get(ops[1] as usize)
+                    .copied()
+                    .unwrap_or(VmValue::Null);
+                ctx.frame.registers[ops[0] as usize] = VmValue::Bool(value == VmValue::Null);
+            }
+        }
         OpCode::Not => {
             if ops.len() >= 2 {
                 let dst = ops[0] as usize;
                 let b = reg_b(ctx, ops[1] as usize);
                 ctx.frame.registers[dst] = VmValue::Bool(!b);
+            }
+        }
+        OpCode::And | OpCode::Or | OpCode::Nor | OpCode::Nand => {
+            if ops.len() >= 3 {
+                let dst = ops[0] as usize;
+                let a = reg_b(ctx, ops[1] as usize);
+                let b = reg_b(ctx, ops[2] as usize);
+                let value = match inst.opcode {
+                    OpCode::And => a && b,
+                    OpCode::Or => a || b,
+                    OpCode::Nor => !(a || b),
+                    OpCode::Nand => !(a && b),
+                    _ => unreachable!(),
+                };
+                ctx.frame.registers[dst] = VmValue::Bool(value);
             }
         }
         OpCode::Lt | OpCode::Gt | OpCode::Le | OpCode::Ge | OpCode::Eq | OpCode::Ne => {
@@ -186,27 +225,10 @@ fn run_inst(inst: &Instruction, ctx: &mut ExecutionContext) {
         OpCode::Select => {
             if ops.len() >= 4 {
                 let dst = ops[0] as usize;
-                let mode = ops.get(3).copied().unwrap_or(0);
-                if mode >= 10 {
-                    let a = reg_b(ctx, ops[1] as usize);
-                    let b = reg_b(ctx, ops[2] as usize);
-                    let op = mode - 10;
-                    let r = match op {
-                        1 => a || b,
-                        2 => a == b,
-                        3 => a ^ b,
-                        4 => !(a || b),
-                        5 => !(a && b),
-                        6 => a == b,
-                        _ => a && b,
-                    };
-                    ctx.frame.registers[dst] = VmValue::Bool(r);
-                } else {
-                    let cond = reg_b(ctx, ops[1] as usize);
-                    let t = ctx.frame.registers[ops[2] as usize];
-                    let f = ctx.frame.registers[ops[3] as usize];
-                    ctx.frame.registers[dst] = if cond { t } else { f };
-                }
+                let cond = reg_b(ctx, ops[1] as usize);
+                let t = ctx.frame.registers[ops[2] as usize];
+                let f = ctx.frame.registers[ops[3] as usize];
+                ctx.frame.registers[dst] = if cond { t } else { f };
             }
         }
         OpCode::EmitController => {
@@ -258,14 +280,23 @@ fn unary_f(ctx: &mut ExecutionContext, ops: &[u32], f: impl Fn(f32, u32) -> f32)
 fn reg_f(ctx: &ExecutionContext, i: usize) -> f32 {
     match ctx.frame.registers.get(i).copied().unwrap_or(VmValue::Null) {
         VmValue::Float(x) => x,
-        _ => 0.0,
+        VmValue::Bool(value) => {
+            if value {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        VmValue::Vector(value) => value.length(),
+        VmValue::Null => 0.0,
     }
 }
 
 fn reg_b(ctx: &ExecutionContext, i: usize) -> bool {
     match ctx.frame.registers.get(i).copied().unwrap_or(VmValue::Null) {
         VmValue::Bool(x) => x,
-        _ => false,
+        VmValue::Float(value) => value != 0.0,
+        VmValue::Vector(_) | VmValue::Null => false,
     }
 }
 
@@ -305,5 +336,61 @@ fn eval_operation(a: f32, kind: u32) -> f32 {
         11 => a.exp(),
         12 => 10f32.powf(a),
         _ => a,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::brain::TeamId;
+    use crate::graph_vm::builder::ProgramBuilder;
+    use crate::graph_vm::ir::{IrInst, LoweredIR, Reg};
+    use crate::graph_vm::value::RegisterKind;
+
+    #[test]
+    fn hand_built_lowered_ir_add_executes() {
+        let mut ir = LoweredIR::new();
+        ir.instructions = vec![
+            IrInst {
+                dest: Some(Reg(0)),
+                kind: RegisterKind::Float,
+                op: OpCode::ConstFloat,
+                args: vec![],
+                immediates: vec![2.5_f32.to_bits()],
+                source_sid: "left".into(),
+                source_port: "Float1".into(),
+            },
+            IrInst {
+                dest: Some(Reg(1)),
+                kind: RegisterKind::Float,
+                op: OpCode::ConstFloat,
+                args: vec![],
+                immediates: vec![4.0_f32.to_bits()],
+                source_sid: "right".into(),
+                source_port: "Float1".into(),
+            },
+            IrInst {
+                dest: Some(Reg(2)),
+                kind: RegisterKind::Float,
+                op: OpCode::Add,
+                args: vec![Reg(0), Reg(1)],
+                immediates: vec![],
+                source_sid: "add".into(),
+                source_port: "Float1".into(),
+            },
+        ];
+        let program = ProgramBuilder.pack_lowered(&ir, 0);
+        let api = crate::api::TeamApi {
+            team: TeamId::Home,
+            bools: Default::default(),
+            floats: Default::default(),
+            transforms: Default::default(),
+            vectors: Default::default(),
+        };
+        let mut ctx = ExecutionContext::new(api, 0, program.register_count as usize);
+
+        Interpreter.execute_settle(&program, &mut ctx);
+
+        assert_eq!(ctx.frame.registers[2], VmValue::Float(6.5));
     }
 }
