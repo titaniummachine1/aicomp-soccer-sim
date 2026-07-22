@@ -8,7 +8,13 @@
 //! cargo run --release --bin soccer_headless -- --help
 //! ```
 //!
-//! See README.md / AGENTS.md. Hotkeys: Space=pause, F=fast, R=reload params.
+//! See README.md / AGENTS.md.
+//! Hotkeys: Space=pause, F=fast (skip idle wait after tick lock), R=restart.
+//!
+//! Timing model:
+//! - **Tick lock** always: both brains must finish before physics / next tick.
+//! - **Paced mode**: after a tick, idle-wait until FIXED_DT / timescale wall time.
+//! - **Fast mode**: skip that idle wait; fire next tick as soon as tick lock clears.
 
 use std::path::{Path, PathBuf};
 
@@ -25,17 +31,18 @@ use aicomp_soccer_sim::team_threads::{think_barrier, ThinkTimings};
 use aicomp_soccer_sim::world::{MatchWorld, FIXED_DT};
 use bevy::picking::prelude::*;
 use bevy::prelude::*;
+use bevy::ui::RelativeCursorPosition;
 use bevy::window::PresentMode;
 
 const PPM: f32 = 10.0;
 /// Render target. Sim ticks stay on FIXED_DT (≈52.6 Hz / 19 ms) unless Fast.
 const RENDER_HZ: f64 = 60.0;
-/// Wall-clock paced mode: at most one sim tick per render frame.
-const MAX_TICKS_PER_FRAME: u32 = 1;
-/// Fast mode: burst this many FIXED_DT ticks per render frame (no wall wait).
+/// Fast mode: burst this many FIXED_DT ticks per render frame (no idle wait).
 const MAX_TICKS_PER_FRAME_FAST: u32 = 64;
 /// Status / tick HUD text refresh rate (keep readable).
 const UI_HZ: f32 = 10.0;
+const TIMESCALE_MIN: f32 = 0.25;
+const TIMESCALE_MAX: f32 = 8.0;
 
 /// Draw order when players overlap (higher Z draws on top).
 /// Left(Home) P1 → Right(Away) P1 → Left P2 → … → Right P4.
@@ -76,6 +83,7 @@ fn portable_asset_root() -> PathBuf {
 
 struct ViewerArgs {
     fast: bool,
+    timescale: f32,
     home: BrainInput,
     away: BrainInput,
 }
@@ -89,15 +97,22 @@ USAGE:
   cargo run --release -- [OPTIONS]
 
 OPTIONS:
-  --home <brain>   Home / Team A brain (default: aia)
-  --away <brain>   Away / Team B brain (default: aia)
-  --both <brain>   Set home and away to the same brain
-  --fast, -f       Speedrun: process ticks ASAP (no wall-clock FIXED_DT wait)
-  -h, --help       Show this help
+  --home <brain>        Home / Team A brain (default: aia)
+  --away <brain>        Away / Team B brain (default: aia)
+  --both <brain>        Set home and away to the same brain
+  --fast, -f            Skip idle wait after tick lock (brains still barrier)
+  --timescale <f32>     Idle budget = FIXED_DT / scale (default 1.0; ignored
+                        while Fast; cannot outrun tick processing)
+  -h, --help            Show this help
 
 BRAINS:
   chase | idle | test1 | test2 | aia | graph:<path>
-  (graph/aia always compile to RuntimeBrain O1 — no slow reference interpreter)
+  (graph/aia always compile to RuntimeBrain O1)
+
+TIMING:
+  Tick lock always waits for both brains before a step.
+  Timescale only shortens/lengthens the idle wait *after* that.
+  Fast skips the idle wait entirely (still tick-locked).
 
 HOTKEYS:
   Space  pause / resume
@@ -107,7 +122,7 @@ HOTKEYS:
 EXAMPLES:
   cargo run --release -- --home chase --away idle
   cargo run --release -- --both aia --fast
-  cargo run --release -- --home graph:C:\\path\\Team.txt --away chase
+  cargo run --release -- --timescale 2 --home aia --away chase
 "
     );
 }
@@ -115,12 +130,26 @@ EXAMPLES:
 fn parse_viewer_args() -> ViewerArgs {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut fast = false;
+    let mut timescale = 1.0f32;
     let mut home = BrainInput::Aia;
     let mut away = BrainInput::Aia;
     let mut i = 0usize;
     while i < argv.len() {
         match argv[i].as_str() {
             "--fast" | "-f" => fast = true,
+            "--timescale" => {
+                i += 1;
+                let v = argv.get(i).map(|s| s.as_str()).unwrap_or_else(|| {
+                    eprintln!("error: --timescale needs a value");
+                    print_viewer_help();
+                    std::process::exit(1);
+                });
+                timescale = v.parse().unwrap_or_else(|_| {
+                    eprintln!("error: --timescale must be a number");
+                    std::process::exit(1);
+                });
+                timescale = timescale.clamp(TIMESCALE_MIN, TIMESCALE_MAX);
+            }
             "--home" => {
                 i += 1;
                 let v = argv.get(i).map(|s| s.as_str()).unwrap_or_else(|| {
@@ -171,7 +200,12 @@ fn parse_viewer_args() -> ViewerArgs {
         }
         i += 1;
     }
-    ViewerArgs { fast, home, away }
+    ViewerArgs {
+        fast,
+        timescale,
+        home,
+        away,
+    }
 }
 
 fn main() {
@@ -185,13 +219,16 @@ fn main() {
 
     let asset_root = portable_asset_root();
     eprintln!(
-        "viewer home={} away={} fast={}",
+        "viewer home={} away={} fast={} timescale={:.2}",
         args.home.label(),
         args.away.label(),
-        args.fast
+        args.fast,
+        args.timescale
     );
     if args.fast {
-        eprintln!("viewer Fast mode ON (F toggles; ticks ASAP, up to {MAX_TICKS_PER_FRAME_FAST}/frame)");
+        eprintln!(
+            "viewer Fast ON — skip idle wait after tick lock (≤{MAX_TICKS_PER_FRAME_FAST} ticks/frame)"
+        );
     }
     App::new()
         .add_plugins(
@@ -226,6 +263,7 @@ fn main() {
         .insert_resource(DebugSelection::default())
         .insert_resource(SimPaused(false))
         .insert_resource(SimFast(args.fast))
+        .insert_resource(SimTimeScale(args.timescale))
         .insert_resource(TickClock::default())
         .insert_resource(InterpState::default())
         .insert_resource(UiPulse::default())
@@ -237,12 +275,15 @@ fn main() {
                 tick_ui_pulse,
                 handle_hotkeys,
                 handle_ui_buttons,
+                handle_timescale_slider,
                 handle_player_click,
                 sync_visuals,
                 sync_stamina_arcs,
+                sync_team_buttons,
                 draw_debug,
                 refresh_pause_ui,
                 refresh_tick_hud,
+                refresh_timescale_ui,
             ),
         )
         .run();
@@ -359,9 +400,21 @@ struct DebugSelection {
 #[derive(Resource, Default)]
 struct SimPaused(bool);
 
-/// When true, skip wall-clock FIXED_DT wait and burst ticks each frame (F / `--fast`).
+/// Fast = skip **idle wait** after tick lock (FIXED_DT / timescale pacing).
+/// Tick lock still always waits for both brains before a step.
 #[derive(Resource, Default)]
 struct SimFast(bool);
+
+/// Paced idle budget multiplier: wall idle target = FIXED_DT / timescale.
+/// Does **not** make ticks finish faster than brains+physics; ignored while Fast.
+#[derive(Resource)]
+struct SimTimeScale(f32);
+
+impl Default for SimTimeScale {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
 
 fn run_label(paused: bool, fast: bool) -> &'static str {
     if paused {
@@ -535,6 +588,7 @@ enum UiAction {
     LoadAway,
     Restart,
     TogglePause,
+    ToggleFast,
 }
 
 #[derive(Component)]
@@ -542,6 +596,23 @@ struct StatusText;
 
 #[derive(Component)]
 struct PauseButtonText;
+
+#[derive(Component)]
+struct FastButtonText;
+
+#[derive(Component)]
+struct TeamNameText {
+    side: TeamId,
+}
+
+#[derive(Component)]
+struct TimeScaleTrack;
+
+#[derive(Component)]
+struct TimeScaleFill;
+
+#[derive(Component)]
+struct TimeScaleLabel;
 
 fn setup_board(
     mut commands: Commands,
@@ -905,62 +976,174 @@ fn spawn_pitch_lines(
     }
 }
 
-fn setup_ui(mut commands: Commands, scripts: Res<TeamScripts>, fast: Res<SimFast>) {
+fn setup_ui(
+    mut commands: Commands,
+    scripts: Res<TeamScripts>,
+    fast: Res<SimFast>,
+    timescale: Res<SimTimeScale>,
+) {
+    // Top bar: team pickers + transport + score.
     commands
         .spawn((
             Node {
                 width: Val::Percent(100.0),
-                height: Val::Px(48.0),
+                min_height: Val::Px(64.0),
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
-                column_gap: Val::Px(8.0),
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                column_gap: Val::Px(10.0),
+                padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.05, 0.05, 0.08, 0.92)),
         ))
         .with_children(|parent| {
-            ui_btn(parent, "Load Team A (home/left)", UiAction::LoadHome);
-            ui_btn(parent, "Load Team B (away/right)", UiAction::LoadAway);
-            ui_btn(parent, "Restart (R)", UiAction::Restart);
+            team_slot_btn(
+                parent,
+                TeamId::Home,
+                "Home",
+                &file_stem(&scripts.home_path),
+                UiAction::LoadHome,
+                Color::srgb(0.18, 0.32, 0.55),
+            );
+            team_slot_btn(
+                parent,
+                TeamId::Away,
+                "Away",
+                &file_stem(&scripts.away_path),
+                UiAction::LoadAway,
+                Color::srgb(0.55, 0.22, 0.18),
+            );
+
+            transport_btn(parent, UiAction::Restart, "Restart\n(R)");
             parent
                 .spawn((
                     Button,
                     UiAction::TogglePause,
                     Node {
-                        padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                        padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                        min_width: Val::Px(88.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
                         ..default()
                     },
-                    BackgroundColor(Color::srgb(0.2, 0.2, 0.28)),
+                    BackgroundColor(Color::srgb(0.22, 0.22, 0.30)),
                 ))
                 .with_children(|b| {
                     b.spawn((
                         PauseButtonText,
-                        Text::new("Pause (Space)"),
-                        TextFont::from_font_size(14.0),
+                        Text::new("Pause\n(Space)"),
+                        TextFont::from_font_size(13.0),
                         TextColor(Color::WHITE),
+                        TextLayout::new(Justify::Center, LineBreak::NoWrap),
                     ));
                 });
+            parent
+                .spawn((
+                    Button,
+                    UiAction::ToggleFast,
+                    Node {
+                        padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                        min_width: Val::Px(88.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    BackgroundColor(if fast.0 {
+                        Color::srgb(0.55, 0.40, 0.12)
+                    } else {
+                        Color::srgb(0.22, 0.22, 0.30)
+                    }),
+                ))
+                .with_children(|b| {
+                    b.spawn((
+                        FastButtonText,
+                        Text::new(if fast.0 {
+                            "Fast ON\n(F)"
+                        } else {
+                            "Fast OFF\n(F)"
+                        }),
+                        TextFont::from_font_size(13.0),
+                        TextColor(Color::WHITE),
+                        TextLayout::new(Justify::Center, LineBreak::NoWrap),
+                    ));
+                });
+
             parent.spawn((
                 StatusText,
                 Text::new(format!(
-                    "[{}] 0-0 | A: {} | B: {} | {}",
+                    "[{}]  {} — {}",
                     run_label(false, fast.0),
-                    file_stem(&scripts.home_path),
-                    file_stem(&scripts.away_path),
-                    scripts.status
+                    0,
+                    0
                 )),
-                TextFont::from_font_size(13.0),
-                TextColor(Color::srgb(0.9, 0.9, 0.9)),
+                TextFont::from_font_size(18.0),
+                TextColor(Color::srgb(0.95, 0.95, 0.95)),
+                Node {
+                    margin: UiRect::left(Val::Px(8.0)),
+                    ..default()
+                },
             ));
         });
 
-    // Top-right tick / brain timing HUD (Unity FIXED_DT budget ≈ 19 ms).
+    // Bottom-left: timescale slider (paced mode only).
     commands
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
-                top: Val::Px(56.0),
+                left: Val::Px(12.0),
+                bottom: Val::Px(12.0),
+                width: Val::Px(260.0),
+                padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(6.0),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.02, 0.02, 0.04, 0.82)),
+        ))
+        .with_children(|p| {
+            p.spawn((
+                TimeScaleLabel,
+                Text::new(format!("Timescale  {:.2}×  (paced)", timescale.0)),
+                TextFont::from_font_size(13.0),
+                TextColor(Color::srgb(0.85, 0.9, 0.95)),
+            ));
+            p.spawn((
+                TimeScaleTrack,
+                RelativeCursorPosition::default(),
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Px(14.0),
+                    border_radius: BorderRadius::all(Val::Px(4.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.15, 0.15, 0.2)),
+            ))
+            .with_children(|track| {
+                let fill_pct = timescale_to_fill(timescale.0) * 100.0;
+                track.spawn((
+                    TimeScaleFill,
+                    Node {
+                        width: Val::Percent(fill_pct),
+                        height: Val::Percent(100.0),
+                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.35, 0.7, 0.95)),
+                ));
+            });
+            p.spawn((
+                Text::new("Drag · Fast ignores this idle wait"),
+                TextFont::from_font_size(11.0),
+                TextColor(Color::srgb(0.65, 0.7, 0.75)),
+            ));
+        });
+
+    // Top-right tick / brain timing HUD.
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(76.0),
                 right: Val::Px(12.0),
                 padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
                 flex_direction: FlexDirection::Column,
@@ -979,22 +1162,81 @@ fn setup_ui(mut commands: Commands, scripts: Res<TeamScripts>, fast: Res<SimFast
         });
 }
 
-fn ui_btn(parent: &mut ChildSpawnerCommands, label: &str, action: UiAction) {
+fn timescale_to_fill(ts: f32) -> f32 {
+    let t = ((ts.ln() - TIMESCALE_MIN.ln()) / (TIMESCALE_MAX.ln() - TIMESCALE_MIN.ln()))
+        .clamp(0.0, 1.0);
+    t
+}
+
+fn fill_to_timescale(fill: f32) -> f32 {
+    let t = fill.clamp(0.0, 1.0);
+    (TIMESCALE_MIN.ln() + t * (TIMESCALE_MAX.ln() - TIMESCALE_MIN.ln())).exp()
+}
+
+fn team_slot_btn(
+    parent: &mut ChildSpawnerCommands,
+    side: TeamId,
+    side_label: &str,
+    team_name: &str,
+    action: UiAction,
+    accent: Color,
+) {
     parent
         .spawn((
             Button,
             action,
             Node {
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                min_width: Val::Px(140.0),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::FlexStart,
+                row_gap: Val::Px(1.0),
+                border_radius: BorderRadius::all(Val::Px(6.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgb(0.2, 0.2, 0.28)),
+            BackgroundColor(accent),
+        ))
+        .with_children(|b| {
+            b.spawn((
+                Text::new(side_label),
+                TextFont::from_font_size(11.0),
+                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.7)),
+            ));
+            b.spawn((
+                TeamNameText { side },
+                Text::new(team_name.to_string()),
+                TextFont::from_font_size(16.0),
+                TextColor(Color::WHITE),
+            ));
+            b.spawn((
+                Text::new("(click to change)"),
+                TextFont::from_font_size(11.0),
+                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.55)),
+            ));
+        });
+}
+
+fn transport_btn(parent: &mut ChildSpawnerCommands, action: UiAction, label: &str) {
+    parent
+        .spawn((
+            Button,
+            action,
+            Node {
+                padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                min_width: Val::Px(80.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                border_radius: BorderRadius::all(Val::Px(6.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.22, 0.22, 0.30)),
         ))
         .with_children(|b| {
             b.spawn((
                 Text::new(label),
-                TextFont::from_font_size(14.0),
+                TextFont::from_font_size(13.0),
                 TextColor(Color::WHITE),
+                TextLayout::new(Justify::Center, LineBreak::NoWrap),
             ));
         });
 }
@@ -1006,10 +1248,39 @@ fn file_stem(path: &Path) -> String {
         .to_string()
 }
 
+/// One locked tick: both brains finish, then physics. Returns wall ms for the whole tick.
+fn step_locked_tick(
+    viewer: &mut ViewerWorld,
+    clock: &mut TickClock,
+    interp: &mut InterpState,
+) -> f32 {
+    let tick0 = std::time::Instant::now();
+    let ViewerWorld {
+        world,
+        home,
+        away,
+        last_home,
+        last_away,
+    } = viewer;
+    let (home_api, away_api) = world.build_apis();
+    // Tick lock: both brains must finish before physics.
+    let (home_out, away_out, timings) = think_barrier(home, away, home_api, away_api);
+    *last_home = home_out.clone();
+    *last_away = away_out.clone();
+
+    let phys0 = std::time::Instant::now();
+    world.step_with_commands(&home_out, &away_out, FIXED_DT);
+    clock.physics_ms = phys0.elapsed().as_secs_f32() * 1000.0;
+    interp.push_tick(world);
+    clock.last = timings;
+    tick0.elapsed().as_secs_f32() * 1000.0
+}
+
 fn sim_tick_barrier(
     time: Res<Time>,
     paused: Res<SimPaused>,
     fast: Res<SimFast>,
+    timescale: Res<SimTimeScale>,
     mut viewer: ResMut<ViewerWorld>,
     mut clock: ResMut<TickClock>,
     mut interp: ResMut<InterpState>,
@@ -1027,30 +1298,10 @@ fn sim_tick_barrier(
     clock.ticks_this_frame = 0;
 
     if fast.0 {
-        // Speedrun: no wall-clock wait — as soon as both brains finish, next tick.
-        let max_ticks = MAX_TICKS_PER_FRAME_FAST;
+        // Fast: skip idle budget entirely. Still tick-locked; cannot outrun processing.
         let mut last_ms = 0.0f32;
-        for _ in 0..max_ticks {
-            let tick0 = std::time::Instant::now();
-            let ViewerWorld {
-                world,
-                home,
-                away,
-                last_home,
-                last_away,
-            } = &mut *viewer;
-            let (home_api, away_api) = world.build_apis();
-            let (home_out, away_out, timings) = think_barrier(home, away, home_api, away_api);
-            *last_home = home_out.clone();
-            *last_away = away_out.clone();
-
-            let phys0 = std::time::Instant::now();
-            world.step_with_commands(&home_out, &away_out, FIXED_DT);
-            clock.physics_ms = phys0.elapsed().as_secs_f32() * 1000.0;
-            interp.push_tick(world);
-
-            clock.last = timings;
-            last_ms = tick0.elapsed().as_secs_f32() * 1000.0;
+        for _ in 0..MAX_TICKS_PER_FRAME_FAST {
+            last_ms = step_locked_tick(&mut viewer, &mut clock, &mut interp);
             clock.ticks_this_frame += 1;
         }
         clock.tick_ms = last_ms;
@@ -1060,69 +1311,24 @@ fn sim_tick_barrier(
         return;
     }
 
-    // Wall-clock paced: one FIXED_DT tick after ~19 ms real time.
-    // If a tick is slow, match time slows with it — same tick sequence on every PC.
+    // Paced: timescale only shrinks the *idle budget* between ticks
+    // (budget = FIXED_DT / timescale). One tick when budget elapses.
+    // Tick lock + real think/phys time still gate progress — never faster than processed.
+    let scale = timescale.0.clamp(TIMESCALE_MIN, TIMESCALE_MAX);
+    let idle_budget = FIXED_DT / scale;
     clock.accumulator += time.delta_secs();
 
-    if clock.accumulator >= FIXED_DT {
-        let tick0 = std::time::Instant::now();
-        let ViewerWorld {
-            world,
-            home,
-            away,
-            last_home,
-            last_away,
-        } = &mut *viewer;
-        let (home_api, away_api) = world.build_apis();
-        // Barrier: both brains finish before physics (no partial ticks).
-        let (home_out, away_out, timings) = think_barrier(home, away, home_api, away_api);
-        *last_home = home_out.clone();
-        *last_away = away_out.clone();
-
-        let phys0 = std::time::Instant::now();
-        world.step_with_commands(&home_out, &away_out, FIXED_DT);
-        clock.physics_ms = phys0.elapsed().as_secs_f32() * 1000.0;
-        interp.push_tick(world);
-
-        clock.last = timings;
-        clock.tick_ms = tick0.elapsed().as_secs_f32() * 1000.0;
-        clock.ticks_this_frame = MAX_TICKS_PER_FRAME;
-        clock.accumulator -= FIXED_DT;
-        // Discard overtime instead of queueing extra ticks (proportional slowdown).
-        if clock.accumulator >= FIXED_DT {
-            clock.backlog_ticks = clock.accumulator / FIXED_DT;
-            clock.accumulator = 0.0;
-        } else {
-            clock.backlog_ticks = 0.0;
-        }
-
-        #[cfg(debug_assertions)]
-        {
-            let budget_ms = FIXED_DT * 1000.0;
-            let ball = world.ball.pos;
-            let near_wall = ball.x.abs() > world.params.x_max - 2.0
-                || ball.y.abs() > world.params.z_max - 2.0;
-            let overdue = clock.tick_ms > budget_ms * 1.05;
-            if overdue || (near_wall && clock.tick_ms > budget_ms * 0.5) {
-                eprintln!(
-                    "[spike] t={:.2}s tick={:.2}ms home={:.2}ms away={:.2}ms phys={:.2}ms \
-                     ball=({:.1},{:.1}) vel={:.1} held={} phase={:?} near_wall={near_wall}",
-                    world.match_state.clock_s,
-                    clock.tick_ms,
-                    clock.last.home_ms(),
-                    clock.last.away_ms(),
-                    clock.physics_ms,
-                    ball.x,
-                    ball.y,
-                    world.ball.vel.length(),
-                    world.ball.held,
-                    world.match_state.phase,
-                );
-            }
-        }
+    if clock.accumulator >= idle_budget {
+        let last_ms = step_locked_tick(&mut viewer, &mut clock, &mut interp);
+        clock.tick_ms = last_ms;
+        clock.ticks_this_frame = 1;
+        // Consume one budget slot. Extra wall time from a slow tick is idle already used —
+        // drop leftover so we don't queue catch-up ticks (can't outrun processing).
+        clock.accumulator = 0.0;
+        clock.backlog_ticks = 0.0;
     }
 
-    clock.alpha = (clock.accumulator / FIXED_DT).clamp(0.0, 1.0);
+    clock.alpha = (clock.accumulator / idle_budget).clamp(0.0, 1.0);
 }
 
 fn handle_hotkeys(
@@ -1155,15 +1361,26 @@ fn toggle_fast(fast: &mut SimFast, clock: &mut TickClock) {
     fast.0 = !fast.0;
     clock.accumulator = 0.0;
     clock.alpha = 1.0;
-    info!(fast = fast.0, "simulation fast mode toggled");
+    info!(fast = fast.0, "fast mode toggled (idle-wait skip; tick lock unchanged)");
+}
+
+fn format_status(paused: bool, fast: bool, home: u32, away: u32) -> String {
+    format!("[{}]  {} — {}", run_label(paused, fast), home, away)
 }
 
 fn refresh_pause_ui(
     paused: Res<SimPaused>,
     fast: Res<SimFast>,
     mut pause_label: Query<&mut Text, With<PauseButtonText>>,
-    mut status_q: Query<&mut Text, (With<StatusText>, Without<PauseButtonText>)>,
-    scripts: Res<TeamScripts>,
+    mut fast_label: Query<&mut Text, (With<FastButtonText>, Without<PauseButtonText>)>,
+    mut status_q: Query<
+        &mut Text,
+        (
+            With<StatusText>,
+            Without<PauseButtonText>,
+            Without<FastButtonText>,
+        ),
+    >,
     viewer: Res<ViewerWorld>,
 ) {
     if !paused.is_changed() && !fast.is_changed() {
@@ -1172,21 +1389,27 @@ fn refresh_pause_ui(
     if paused.is_changed() {
         if let Ok(mut text) = pause_label.single_mut() {
             *text = Text::new(if paused.0 {
-                "Resume (Space)"
+                "Resume\n(Space)"
             } else {
-                "Pause (Space)"
+                "Pause\n(Space)"
+            });
+        }
+    }
+    if fast.is_changed() {
+        if let Ok(mut text) = fast_label.single_mut() {
+            *text = Text::new(if fast.0 {
+                "Fast ON\n(F)"
+            } else {
+                "Fast OFF\n(F)"
             });
         }
     }
     if let Ok(mut text) = status_q.single_mut() {
-        *text = Text::new(format!(
-            "[{}] {}-{} | A: {} | B: {} | {}",
-            run_label(paused.0, fast.0),
+        *text = Text::new(format_status(
+            paused.0,
+            fast.0,
             viewer.world.match_state.score_home,
             viewer.world.match_state.score_away,
-            file_stem(&scripts.home_path),
-            file_stem(&scripts.away_path),
-            scripts.status
         ));
     }
 }
@@ -1209,17 +1432,25 @@ fn handle_ui_buttons(
     >,
     mut viewer: ResMut<ViewerWorld>,
     mut scripts: ResMut<TeamScripts>,
-    mut status_q: Query<&mut Text, (With<StatusText>, Without<PauseButtonText>)>,
+    mut status_q: Query<&mut Text, With<StatusText>>,
     mut selection: ResMut<DebugSelection>,
     mut paused: ResMut<SimPaused>,
-    fast: Res<SimFast>,
+    mut fast: ResMut<SimFast>,
     mut interp: ResMut<InterpState>,
     mut clock: ResMut<TickClock>,
 ) {
     for (interaction, action, mut bg) in &mut interactions {
+        let base = match action {
+            UiAction::LoadHome => Color::srgb(0.18, 0.32, 0.55),
+            UiAction::LoadAway => Color::srgb(0.55, 0.22, 0.18),
+            UiAction::ToggleFast if fast.0 => Color::srgb(0.55, 0.40, 0.12),
+            _ => Color::srgb(0.22, 0.22, 0.30),
+        };
         match *interaction {
-            Interaction::Hovered => *bg = BackgroundColor(Color::srgb(0.3, 0.3, 0.4)),
-            Interaction::None => *bg = BackgroundColor(Color::srgb(0.2, 0.2, 0.28)),
+            Interaction::Hovered => {
+                *bg = BackgroundColor(Color::srgb(0.35, 0.38, 0.48));
+            }
+            Interaction::None => *bg = BackgroundColor(base),
             Interaction::Pressed => {
                 *bg = BackgroundColor(Color::srgb(0.15, 0.45, 0.25));
                 match action {
@@ -1227,45 +1458,97 @@ fn handle_ui_buttons(
                         restart_match(&mut viewer, &mut interp, &mut clock);
                         selection.selected = None;
                     }
-                    UiAction::TogglePause => {
-                        toggle_pause(&mut paused);
-                    }
+                    UiAction::TogglePause => toggle_pause(&mut paused),
+                    UiAction::ToggleFast => toggle_fast(&mut fast, &mut clock),
                     UiAction::LoadHome => {
-                        if let Some(path) = pick_team_script("Load Team A (home / left)") {
+                        if let Some(path) = pick_team_script("Load Home team") {
                             viewer.home = load_graph_brain(&path);
                             scripts.home_path = path;
-                            scripts.status = format!(
-                                "Team A {} ({})",
-                                viewer.home.label(),
-                                file_stem(&scripts.home_path)
-                            );
+                            scripts.status =
+                                format!("Home {}", file_stem(&scripts.home_path));
                         }
                     }
                     UiAction::LoadAway => {
-                        if let Some(path) = pick_team_script("Load Team B (away / right)") {
+                        if let Some(path) = pick_team_script("Load Away team") {
                             viewer.away = load_graph_brain(&path);
                             scripts.away_path = path;
-                            scripts.status = format!(
-                                "Team B {} ({})",
-                                viewer.away.label(),
-                                file_stem(&scripts.away_path)
-                            );
+                            scripts.status =
+                                format!("Away {}", file_stem(&scripts.away_path));
                         }
                     }
                 }
                 if let Ok(mut text) = status_q.single_mut() {
-                    *text = Text::new(format!(
-                        "[{}] {}-{} | A: {} | B: {} | {}",
-                        run_label(paused.0, fast.0),
+                    *text = Text::new(format_status(
+                        paused.0,
+                        fast.0,
                         viewer.world.match_state.score_home,
                         viewer.world.match_state.score_away,
-                        file_stem(&scripts.home_path),
-                        file_stem(&scripts.away_path),
-                        scripts.status
                     ));
                 }
             }
         }
+    }
+}
+
+fn handle_timescale_slider(
+    mouse: Res<ButtonInput<MouseButton>>,
+    track_q: Query<&RelativeCursorPosition, With<TimeScaleTrack>>,
+    mut timescale: ResMut<SimTimeScale>,
+) {
+    if !mouse.pressed(MouseButton::Left) {
+        return;
+    }
+    let Ok(rel) = track_q.single() else {
+        return;
+    };
+    let Some(pos) = rel.normalized else {
+        return;
+    };
+    if !(0.0..=1.0).contains(&pos.x) || !(0.0..=1.0).contains(&pos.y) {
+        // Still allow drag if cursor was pressed on track and slid; RelativeCursorPosition
+        // may leave normalized while over — only accept when over or recently dragging.
+        if !rel.cursor_over() {
+            return;
+        }
+    }
+    let x = pos.x.clamp(0.0, 1.0);
+    timescale.0 = fill_to_timescale(x).clamp(TIMESCALE_MIN, TIMESCALE_MAX);
+}
+
+fn sync_team_buttons(
+    scripts: Res<TeamScripts>,
+    mut names: Query<(&TeamNameText, &mut Text)>,
+) {
+    if !scripts.is_changed() {
+        return;
+    }
+    for (slot, mut text) in &mut names {
+        let name = match slot.side {
+            TeamId::Home => file_stem(&scripts.home_path),
+            TeamId::Away => file_stem(&scripts.away_path),
+        };
+        *text = Text::new(name);
+    }
+}
+
+fn refresh_timescale_ui(
+    timescale: Res<SimTimeScale>,
+    fast: Res<SimFast>,
+    mut label: Query<&mut Text, With<TimeScaleLabel>>,
+    mut fill: Query<&mut Node, With<TimeScaleFill>>,
+) {
+    if !timescale.is_changed() && !fast.is_changed() {
+        return;
+    }
+    if let Ok(mut text) = label.single_mut() {
+        *text = Text::new(if fast.0 {
+            format!("Timescale  {:.2}×  (ignored while Fast)", timescale.0)
+        } else {
+            format!("Timescale  {:.2}×  (paced idle)", timescale.0)
+        });
+    }
+    if let Ok(mut node) = fill.single_mut() {
+        node.width = Val::Percent(timescale_to_fill(timescale.0) * 100.0);
     }
 }
 
@@ -1303,8 +1586,7 @@ fn sync_visuals(
     mut q_ball: Query<&mut Transform, (With<BallDisc>, Without<PlayerDisc>)>,
     paused: Res<SimPaused>,
     fast: Res<SimFast>,
-    scripts: Res<TeamScripts>,
-    mut status_q: Query<&mut Text, (With<StatusText>, Without<PauseButtonText>)>,
+    mut status_q: Query<&mut Text, With<StatusText>>,
 ) {
     let w = &viewer.world;
     let alpha = if paused.0 || fast.0 {
@@ -1358,14 +1640,11 @@ fn sync_visuals(
     // Status strip only at 10 Hz.
     if pulse.fire {
         if let Ok(mut text) = status_q.single_mut() {
-            *text = Text::new(format!(
-                "[{}] {}-{} | A: {} | B: {} | {}",
-                run_label(paused.0, fast.0),
+            *text = Text::new(format_status(
+                paused.0,
+                fast.0,
                 w.match_state.score_home,
                 w.match_state.score_away,
-                file_stem(&scripts.home_path),
-                file_stem(&scripts.away_path),
-                scripts.status
             ));
         }
     }
@@ -1375,6 +1654,7 @@ fn refresh_tick_hud(
     clock: Res<TickClock>,
     pulse: Res<UiPulse>,
     fast: Res<SimFast>,
+    timescale: Res<SimTimeScale>,
     mut hud: Query<(&mut Text, &mut TextColor), With<TickHudText>>,
 ) {
     if !pulse.fire {
@@ -1384,26 +1664,29 @@ fn refresh_tick_hud(
         return;
     };
     let budget = FIXED_DT * 1000.0;
-    let overdue = !fast.0 && clock.tick_ms > budget * 1.05;
+    let idle_target = budget / timescale.0.clamp(TIMESCALE_MIN, TIMESCALE_MAX);
+    let overdue = !fast.0 && clock.tick_ms > idle_target * 1.05;
     let slow = clock.last.slowest_label();
     let home_ms = clock.last.home_ms();
     let away_ms = clock.last.away_ms();
     let flag = if overdue { " OVER" } else { "" };
     let pace = if fast.0 {
-        format!("FAST (F) ≤{MAX_TICKS_PER_FRAME_FAST} ticks/frame")
+        format!("FAST — skip idle after tick lock (≤{MAX_TICKS_PER_FRAME_FAST}/f)")
     } else {
-        format!("paced (F=fast) | slow-mo if OVER")
+        format!(
+            "paced idle ~{idle_target:.1}ms (×{:.2}) | F=fast",
+            timescale.0
+        )
     };
     *text = Text::new(format!(
         "render ~{:.0}fps | UI {}Hz | sim dt {:.1}ms\n\
-         tick {:.2}ms{flag} (budget {:.1}) | {pace}\n\
-         Home(A) think {home_ms:.2}ms | Away(B) {away_ms:.2}ms\n\
+         tick {:.2}ms{flag} | {pace}\n\
+         Home think {home_ms:.2}ms | Away {away_ms:.2}ms | lock=both\n\
          slowest: {slow} | phys {:.2}ms | dropped {:.1}t | did {}",
         RENDER_HZ,
         UI_HZ,
         budget,
         clock.tick_ms,
-        budget,
         clock.physics_ms,
         clock.backlog_ticks,
         clock.ticks_this_frame,
