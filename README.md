@@ -4,8 +4,9 @@
 Agents should **self-test here** (headless / unit tests) instead of asking a
 human to click around in Unity.
 
-Measured quirks live in [`AIA_UPSTREAM_QUIRKS.md`](AIA_UPSTREAM_QUIRKS.md).
+Measured quirks live in [`docs/AIA_UPSTREAM_QUIRKS.md`](docs/AIA_UPSTREAM_QUIRKS.md).
 Agent-oriented commands: [`AGENTS.md`](AGENTS.md).
+Reference dumps: [`data/reference/`](data/reference/).
 
 | Need | Command |
 |------|---------|

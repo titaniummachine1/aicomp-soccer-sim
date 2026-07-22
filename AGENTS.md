@@ -42,8 +42,9 @@ Exit `0` = steal seen; `2` = failed assert.
 
 | File | Use |
 |------|-----|
-| `AIA_UPSTREAM_QUIRKS.md` | Locked Unity measurements + sim checklist |
-| `bevy_sim_params_v05.json` | Live numbers |
+| `docs/AIA_UPSTREAM_QUIRKS.md` | Locked Unity measurements + sim checklist |
+| `bevy_sim_params_v05.json` | Live numbers (crate root) |
+| `data/reference/` | API / Frida dumps (read-only) |
 | `README.md` | Human entry points |
 
 ## Don't

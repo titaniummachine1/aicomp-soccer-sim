@@ -1,4 +1,4 @@
-//! Exact SoccerGet* label strings from `soccer_api_dump.md`.
+//! Exact SoccerGet* label strings from `data/reference/soccer_api_dump.md`.
 
 pub const GET_BOOL: &[&str] = &[
     "Ball On Team Side",

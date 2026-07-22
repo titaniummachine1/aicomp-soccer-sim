@@ -2,8 +2,8 @@
 
 **Purpose:** One living description of how Soccer works for bots, ball prediction, and a Bevy/Rust reimplementation.  
 **Last updated:** 2026-07-22  
-**Machine params:** `soccer_ball_sim_params.json`, `bevy_sim_params_v05.json`  
-**API labels:** `soccer_api_dump.md` / `.json` (not repeated here)
+**Machine params:** `../bevy_sim_params_v05.json`, `../data/reference/soccer_ball_sim_params.json`  
+**API labels:** `../data/reference/soccer_api_dump.md` / `.json` (not repeated here)
 
 ### Confidence tags
 
@@ -237,11 +237,11 @@ Offline sim: `ball_physics_sim.py`. Bevy pack: `bevy_sim_params_v05.json`.
 
 ## 9. Related files
 
-| File                          | Role                                                      |
-| ----------------------------- | --------------------------------------------------------- |
-| `SOCCER_GAME_MODEL.md`        | **This document** — human game model                      |
-| `soccer_ball_sim_params.json` | Numbers for ball sim + community block                    |
-| `bevy_sim_params_v05.json`    | Bevy/Rust extract                                         |
-| `soccer_api_dump.md`          | Getter label lists                                        |
-| `ball_physics_sim.py`         | Offline free-ball simulator                               |
-| `AIGamePyLibrary/README.md`   | Official Soccer node docs (kickoff, sensors, controllers) |
+| File | Role |
+| ---- | ---- |
+| `docs/SOCCER_GAME_MODEL.md` | **This document** — human game model |
+| `data/reference/soccer_ball_sim_params.json` | Numbers for ball sim + community block |
+| `bevy_sim_params_v05.json` | Bevy/Rust extract (crate root) |
+| `data/reference/soccer_api_dump.md` | Getter label lists |
+| `ball_physics_sim.py` (worldcupteams) | Offline free-ball simulator |
+| `AIGamePyLibrary/README.md` | Official Soccer node docs (kickoff, sensors, controllers) |
