@@ -62,7 +62,7 @@ OPTIONS:
   -h, --help                Show this help
 
 BRAINS:
-  chase | idle | test1 | test2 | aia | graph:<path>
+  chase | idle | test1 | test2 | perfect (kb|keyboard) | aia | graph:<path>
 
 NOTE:
   Headless always runs max-speed (no wall-clock wait). Graph teams always use

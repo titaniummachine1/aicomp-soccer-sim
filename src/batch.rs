@@ -16,7 +16,7 @@ use crate::brain::{ChaseBallBrain, IdleBrain, TeamBrain, TeamId};
 use crate::graph::{load_team_graph, GraphBrain};
 use crate::graph_vm::{CachedProgram, RuntimeBrain};
 use crate::params::SimParams;
-use crate::probe_brains::{Test1Brain, Test2Brain};
+use crate::probe_brains::{PerfectControllerBrain, Test1Brain, Test2Brain};
 use crate::world::{MatchWorld, FIXED_DT};
 
 /// Leave one logical CPU free ("core 0" reservation for system/UI).
@@ -83,6 +83,7 @@ pub enum BrainInput {
     Idle,
     Test1,
     Test2,
+    Perfect,
     Aia,
     Graph(PathBuf),
 }
@@ -98,9 +99,10 @@ impl BrainInput {
             "idle" | "park" => Ok(Self::Idle),
             "test1" => Ok(Self::Test1),
             "test2" => Ok(Self::Test2),
+            "perfect" | "kb" | "keyboard" => Ok(Self::Perfect),
             "aia" => Ok(Self::Aia),
             other => Err(format!(
-                "unknown brain '{other}' (chase|idle|test1|test2|aia|graph:<path>)"
+                "unknown brain '{other}' (chase|idle|test1|test2|perfect|aia|graph:<path>)"
             )),
         }
     }
@@ -111,6 +113,7 @@ impl BrainInput {
             Self::Idle => "idle".into(),
             Self::Test1 => "test1".into(),
             Self::Test2 => "test2".into(),
+            Self::Perfect => "perfect".into(),
             Self::Aia => "aia".into(),
             Self::Graph(p) => format!("graph:{}", p.display()),
         }
@@ -192,6 +195,7 @@ fn build_brain(
         BrainInput::Idle => Box::new(IdleBrain),
         BrainInput::Test1 => Box::new(Test1Brain::default()),
         BrainInput::Test2 => Box::new(Test2Brain::default()),
+        BrainInput::Perfect => Box::new(PerfectControllerBrain),
         BrainInput::Aia => {
             let path = soccer_saves_dir().join("AIA.txt");
             build_graph_brain(&path, engine, cache)?

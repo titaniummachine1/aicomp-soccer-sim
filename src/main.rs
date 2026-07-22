@@ -25,7 +25,7 @@ use aicomp_soccer_sim::graph_vm::RuntimeBrain;
 use aicomp_soccer_sim::keypress;
 use aicomp_soccer_sim::params::{default_params_path, SimParams};
 use aicomp_soccer_sim::player::PlayerId;
-use aicomp_soccer_sim::probe_brains::{Test1Brain, Test2Brain};
+use aicomp_soccer_sim::probe_brains::{PerfectControllerBrain, Test1Brain, Test2Brain};
 use aicomp_soccer_sim::team_threads::{think_barrier, ThinkTimings};
 use aicomp_soccer_sim::world::{MatchWorld, FIXED_DT};
 use bevy::picking::prelude::*;
@@ -107,7 +107,7 @@ OPTIONS:
   -h, --help            Show this help
 
 BRAINS:
-  chase | idle | test1 | test2 | aia | graph:<path>
+  chase | idle | test1 | test2 | perfect (kb|keyboard) | aia | graph:<path>
 
 TIMING:
   Tick lock always waits for both brains.
@@ -241,12 +241,18 @@ fn main() {
                 }),
         )
         .insert_resource(ClearColor(Color::srgb(0.10, 0.40, 0.16)))
-        .insert_resource(ViewerWorld {
-            world: MatchWorld::new_kickoff(params),
-            home: home_brain,
-            away: away_brain,
-            last_home: BrainOutput::default(),
-            last_away: BrainOutput::default(),
+        .insert_resource({
+            let mut world = MatchWorld::new_kickoff(params);
+            // Viewer: no post-goal freeze (looks like lag on stream/demo).
+            // Headless keeps Unity ~4.9s kickoff_delay for parity.
+            world.params.kickoff_delay_s = 0.0;
+            ViewerWorld {
+                world,
+                home: home_brain,
+                away: away_brain,
+                last_home: BrainOutput::default(),
+                last_away: BrainOutput::default(),
+            }
         })
         .insert_resource(TeamScripts {
             home_path,
@@ -313,6 +319,7 @@ enum ActiveBrain {
     Idle(IdleBrain),
     Test1(Test1Brain),
     Test2(Test2Brain),
+    Perfect(PerfectControllerBrain),
 }
 
 impl ActiveBrain {
@@ -323,6 +330,7 @@ impl ActiveBrain {
             ActiveBrain::Idle(_) => "idle",
             ActiveBrain::Test1(_) => "test1",
             ActiveBrain::Test2(_) => "test2",
+            ActiveBrain::Perfect(_) => "perfect",
         }
     }
 }
@@ -335,6 +343,7 @@ impl TeamBrain for ActiveBrain {
             ActiveBrain::Idle(b) => b.think(api),
             ActiveBrain::Test1(b) => b.think(api),
             ActiveBrain::Test2(b) => b.think(api),
+            ActiveBrain::Perfect(b) => b.think(api),
         }
     }
 }
@@ -351,6 +360,10 @@ fn resolve_brain(input: &BrainInput) -> (ActiveBrain, PathBuf) {
         BrainInput::Test2 => (
             ActiveBrain::Test2(Test2Brain::default()),
             PathBuf::from("test2"),
+        ),
+        BrainInput::Perfect => (
+            ActiveBrain::Perfect(PerfectControllerBrain),
+            PathBuf::from("perfect"),
         ),
         BrainInput::Aia => {
             let path = soccer_saves_dir().join("AIA.txt");
@@ -1521,7 +1534,8 @@ fn refresh_pause_ui(
 }
 
 fn restart_match(viewer: &mut ViewerWorld, interp: &mut InterpState, clock: &mut TickClock) {
-    let params = viewer.world.params.clone();
+    let mut params = viewer.world.params.clone();
+    params.kickoff_delay_s = 0.0;
     viewer.world = MatchWorld::new_kickoff(params);
     viewer.last_home = BrainOutput::default();
     viewer.last_away = BrainOutput::default();

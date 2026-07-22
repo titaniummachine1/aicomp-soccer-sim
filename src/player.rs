@@ -102,9 +102,8 @@ pub fn step_mover(
         return;
     }
 
-    // Facing: carriers track Clear when provided (not MoveTo). During charge
-    // warmup, facing is sticky — reject ~90° flips so C→H Clear does not yank
-    // Ball.Z down early. Cap by TimePlot/Frida angularSpeed=2500 deg/s.
+    // Facing follows MoveTo (held ball sits on facing × hold_offset). Carriers
+    // only override via `face_aim` during charge warmup (Clear sticky, quirk #24).
     let want_move = to.normalize();
     let want_face = face_aim
         .filter(|d| d.length_squared() > 1e-8)

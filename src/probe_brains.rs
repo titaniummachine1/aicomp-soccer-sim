@@ -1,10 +1,12 @@
 //! Scripted Test1 / Test2 brains — mirror worldcupteams build_test1/2.py
 //! so we can debug tackle flow in-sim before Unity.
+//! Also `PerfectControllerBrain`: P1 keyboard only; P2–4 park in team corner.
 
 use bevy::prelude::Vec2;
 
 use crate::api::TeamApi;
-use crate::brain::{BrainCommand, BrainOutput, TeamBrain};
+use crate::brain::{BrainCommand, BrainOutput, TeamBrain, TeamId};
+use crate::keypress;
 use crate::player::PlayerId;
 
 const BURN_BELOW: f32 = 0.65;
@@ -12,6 +14,11 @@ const AWAY_ENGAGE_STAM: f32 = 0.80;
 const WAYPOINT_Z: f32 = 20.0;
 const FLIP_AT: f32 = 16.0;
 const SHORT_CHARGE: f32 = 0.35;
+/// WASD MoveTo step (meters) — matches basic controller ±2 floats.
+const KB_STEP: f32 = 2.0;
+/// Fallback park if Upper Corner Team Side is missing.
+const PARK_FALLBACK_X: f32 = 38.0;
+const PARK_FALLBACK_Z: f32 = 22.0;
 
 fn park_others(out: &mut BrainOutput, api: &TeamApi) {
     for slot in PlayerId::ALL.iter().skip(1) {
@@ -30,6 +37,18 @@ fn park_others(out: &mut BrainOutput, api: &TeamApi) {
     }
 }
 
+fn park_corner(api: &TeamApi) -> Vec2 {
+    api.get_vector3("Upper Corner Team Side")
+        .flatten()
+        .unwrap_or_else(|| {
+            let x = match api.team {
+                TeamId::Home => -PARK_FALLBACK_X,
+                TeamId::Away => PARK_FALLBACK_X,
+            };
+            Vec2::new(x, PARK_FALLBACK_Z)
+        })
+}
+
 fn sticky_wp(z: f32, prev: &mut f32) -> f32 {
     if prev.abs() < 1.0 {
         *prev = WAYPOINT_Z;
@@ -40,6 +59,47 @@ fn sticky_wp(z: f32, prev: &mut f32) -> f32 {
         *prev = WAYPOINT_Z;
     }
     *prev
+}
+
+/// Viewer keyboard: WASD MoveTo (face that way), Shift sprint, E interact.
+/// P2–4 sit in Upper Corner Team Side.
+#[derive(Debug, Default)]
+pub struct PerfectControllerBrain;
+
+impl TeamBrain for PerfectControllerBrain {
+    fn think(&mut self, api: &TeamApi) -> BrainOutput {
+        let mut out = BrainOutput::default();
+        let park = park_corner(api);
+        for i in 1..4 {
+            out.commands[i] = BrainCommand {
+                move_to: park,
+                sprint: false,
+                interact: false,
+            };
+        }
+
+        let me = api.get_transform("Team Player 1").unwrap_or(Vec2::ZERO);
+        // Board-relative (same as basic controller): W/S = ±Z (sim y), A/D = ±X.
+        let mut d = Vec2::ZERO;
+        if keypress::is_pressed("W") {
+            d.y += KB_STEP;
+        }
+        if keypress::is_pressed("S") {
+            d.y -= KB_STEP;
+        }
+        if keypress::is_pressed("A") {
+            d.x -= KB_STEP;
+        }
+        if keypress::is_pressed("D") {
+            d.x += KB_STEP;
+        }
+        out.commands[0] = BrainCommand {
+            move_to: me + d,
+            sprint: keypress::is_pressed("LeftShift"),
+            interact: keypress::is_pressed("E"),
+        };
+        out
+    }
 }
 
 /// Home: short kick → N/S sprint-burn → walk+charge bait.

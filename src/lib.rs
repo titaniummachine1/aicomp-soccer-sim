@@ -29,6 +29,6 @@ pub use match_state::{MatchPhase, MatchState};
 pub use params::SimParams;
 pub use player::{Player, PlayerId, SimpleMover};
 pub use possession::Possession;
-pub use probe_brains::{Test1Brain, Test2Brain};
+pub use probe_brains::{PerfectControllerBrain, Test1Brain, Test2Brain};
 pub use timeplot::TimePlotRecorder;
 pub use world::{MatchWorld, FIXED_DT};

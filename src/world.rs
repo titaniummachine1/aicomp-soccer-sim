@@ -198,7 +198,10 @@ impl MatchWorld {
                 self.possession.carrier,
                 Some((t, _)) if t != team
             );
-            let face_aim = if is_carrier {
+            let face_aim = if is_carrier && self.players[i].charge_warmup_left > 0.0 {
+                // AIA quirk #24: during charge warmup only, hold faces Clear
+                // (MoveTo may already track H). While walking / keyboard MoveTo,
+                // face the walk target so the held ball follows where you look.
                 let origin = self.players[i].pos;
                 let is_home = team == TeamId::Home;
                 let blockers: Vec<Vec2> = self

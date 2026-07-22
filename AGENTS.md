@@ -19,7 +19,7 @@ cargo run --release
 
 ## Fishtest-style batch
 
-1. Pick brains (`chase`, `idle`, `test1`, `test2`, `aia`, `graph:<path>`).
+1. Pick brains (`chase`, `idle`, `test1`, `test2`, `perfect`, `aia`, `graph:<path>`).
 2. Run many headless jobs with different `--seed` / openings.
 3. Parse **stdout JSON** (`ok`, `score_home`, `score_away`, `clock_s`, `ticks`).
 4. Aggregate win rates / goal diffs externally.

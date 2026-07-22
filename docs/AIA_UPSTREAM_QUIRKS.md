@@ -370,6 +370,36 @@ Editor / saves (workflow, not sim physics):
   order prefers D (−X), so sim releases were v≈(−21,−11). When Away
   `shot_charge≥0.75`, `pos.y < -1`, and facing near −X, snap kick dir to F.
 
+### 27. Held ball vs walls — clamp rotation / rub / walk-through bug
+
+- **Where:** `ENGINE` · **OBSERVED** (user 2026-07-23,
+  `PerfectController`)
+- **Status:** **not yet TimePlot-locked**. These are hands-on observations,
+  not confirmed collider or transform measurements.
+- **Observations:**
+  1. **Intended-ish clamp:** the player cannot rotate facing into a wall when
+     that would put the held ball outside the pitch bounds.
+  2. **Sideways rub:** after moving sideways to a wall, rotating toward it
+     makes the ball rub along the wall while staying in bounds; the player
+     cannot finish a “look down” into the wall.
+  3. **Walk-through bug:** walking straight into a wall can push the held ball
+     behind / outside the wall. Turning `Interact` off to kick is ignored
+     there—no launch impulse; the ball stays near the hold / kick origin and
+     slowly rolls back onto the pitch.
+  4. **180° sweep loophole:** continuous left↔right yaw can sweep the facing
+     and held ball through wall geometry even when discrete into-wall rotation
+     is blocked. The clamp is therefore path-dependent.
+- **Author reproduction tip:** load `PerfectController`, park the other
+  players, hold `E` while using WASD at a wall, and try both a sideways rub
+  and continuous 180° yaw. Offline reproduction:
+
+  ```bat
+  cargo run --release -- --home perfect --away idle
+  ```
+
+- **Sim:** Not mirrored yet; keep this as an upstream observation until
+  hold-bounds and out-of-bounds held-kick rejection are measured.
+
 ---
 
 ## Sim parity checklist (ours — not upstream)

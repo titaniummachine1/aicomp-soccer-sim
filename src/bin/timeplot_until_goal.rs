@@ -24,7 +24,7 @@ use aicomp_soccer_sim::brain::{
 use aicomp_soccer_sim::graph::load_team_graph;
 use aicomp_soccer_sim::graph_vm::RuntimeBrain;
 use aicomp_soccer_sim::params::{default_params_path, SimParams};
-use aicomp_soccer_sim::probe_brains::{Test1Brain, Test2Brain};
+use aicomp_soccer_sim::probe_brains::{PerfectControllerBrain, Test1Brain, Test2Brain};
 use aicomp_soccer_sim::world::{MatchWorld, FIXED_DT};
 use aicomp_soccer_sim::TimePlotRecorder;
 
@@ -74,7 +74,7 @@ OPTIONS:
   -h, --help           Help
 
 BRAINS:
-  chase | idle | test1 | test2 | aia | graph:<path>
+  chase | idle | test1 | test2 | perfect (kb|keyboard) | aia | graph:<path>
 
 UNITY CAPTURE:
   1. In AIComp Soccer, set Home (or both) to AIA_Debug.txt or AIA.txt
@@ -180,6 +180,7 @@ fn build_brain(input: &BrainInput) -> Result<Box<dyn TeamBrain>, String> {
         BrainInput::Idle => Box::new(IdleBrain),
         BrainInput::Test1 => Box::new(Test1Brain::default()),
         BrainInput::Test2 => Box::new(Test2Brain::default()),
+        BrainInput::Perfect => Box::new(PerfectControllerBrain),
         BrainInput::Aia => {
             let path = soccer_saves_dir().join("AIA.txt");
             let g = load_team_graph(&path).map_err(|e| format!("load AIA: {e}"))?;
