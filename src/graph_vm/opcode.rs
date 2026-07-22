@@ -113,7 +113,12 @@ pub struct Instruction {
 }
 
 impl Instruction {
-    pub fn new(opcode: OpCode, operands: &[u32], source_sid: impl Into<String>, source_port: impl Into<String>) -> Self {
+    pub fn new(
+        opcode: OpCode,
+        operands: &[u32],
+        source_sid: impl Into<String>,
+        source_port: impl Into<String>,
+    ) -> Self {
         Self {
             opcode,
             operands: Operands::from_slice(operands),

@@ -228,7 +228,34 @@ fn run_inst(inst: &Instruction, ctx: &mut ExecutionContext) {
                 let cond = reg_b(ctx, ops[1] as usize);
                 let t = ctx.frame.registers[ops[2] as usize];
                 let f = ctx.frame.registers[ops[3] as usize];
-                ctx.frame.registers[dst] = if cond { t } else { f };
+                let chosen = if cond { t } else { f };
+                // immediates[0] / ops[4]: 0=Float, 1=Bool, 2=Vector, else passthrough
+                // Matches GraphBrain ConditionalSet* as_float/as_bool/as_vec coercion.
+                let coerced = match ops.get(4).copied().unwrap_or(3) {
+                    0 => VmValue::Float(match chosen {
+                        VmValue::Float(x) => x,
+                        VmValue::Bool(b) => {
+                            if b {
+                                1.0
+                            } else {
+                                0.0
+                            }
+                        }
+                        VmValue::Vector(v) => v.length(),
+                        VmValue::Null => 0.0,
+                    }),
+                    1 => VmValue::Bool(match chosen {
+                        VmValue::Bool(b) => b,
+                        VmValue::Float(f) => f != 0.0,
+                        VmValue::Vector(_) | VmValue::Null => false,
+                    }),
+                    2 => VmValue::Vector(match chosen {
+                        VmValue::Vector(v) => v,
+                        _ => Vec2::ZERO,
+                    }),
+                    _ => chosen,
+                };
+                ctx.frame.registers[dst] = coerced;
             }
         }
         OpCode::EmitController => {

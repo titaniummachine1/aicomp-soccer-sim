@@ -61,7 +61,12 @@ pub fn compare_traces(
     reference: &ObservableTrace,
     runtime: &ObservableTrace,
 ) -> Option<TraceMismatch> {
-    for (pi, (rp, tp)) in reference.passes.iter().zip(runtime.passes.iter()).enumerate() {
+    for (pi, (rp, tp)) in reference
+        .passes
+        .iter()
+        .zip(runtime.passes.iter())
+        .enumerate()
+    {
         if rp.len() != tp.len() {
             return Some(TraceMismatch {
                 tick,

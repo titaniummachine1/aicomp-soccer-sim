@@ -15,10 +15,19 @@ use std::process::ExitCode;
 
 use aicomp_soccer_sim::brain::{ChaseBallBrain, IdleBrain, TeamBrain, TeamId};
 use aicomp_soccer_sim::graph::{load_team_graph, GraphBrain};
+use aicomp_soccer_sim::graph_vm::RuntimeBrain;
 use aicomp_soccer_sim::params::{default_params_path, SimParams};
 use aicomp_soccer_sim::probe_brains::{Test1Brain, Test2Brain};
 use aicomp_soccer_sim::world::{MatchWorld, FIXED_DT};
 use serde::Serialize;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GraphEngine {
+    /// Permanent oracle — recursive GraphBrain.
+    Reference,
+    /// O0 compiled RuntimeProgram (single-sim speed path).
+    Runtime,
+}
 
 #[derive(Debug, Clone)]
 enum BrainSpec {
@@ -59,7 +68,7 @@ impl BrainSpec {
         }
     }
 
-    fn build(&self) -> Result<Box<dyn TeamBrain>, String> {
+    fn build(&self, engine: GraphEngine) -> Result<Box<dyn TeamBrain>, String> {
         Ok(match self {
             Self::Chase => Box::new(ChaseBallBrain),
             Self::Idle => Box::new(IdleBrain),
@@ -68,11 +77,17 @@ impl BrainSpec {
             Self::Aia => {
                 let path = soccer_saves_dir().join("AIA.txt");
                 let g = load_team_graph(&path).map_err(|e| format!("load AIA {path:?}: {e}"))?;
-                Box::new(GraphBrain::new(g))
+                match engine {
+                    GraphEngine::Reference => Box::new(GraphBrain::new(g)),
+                    GraphEngine::Runtime => Box::new(RuntimeBrain::compile(g)),
+                }
             }
             Self::Graph(path) => {
                 let g = load_team_graph(path).map_err(|e| format!("load graph {path:?}: {e}"))?;
-                Box::new(GraphBrain::new(g))
+                match engine {
+                    GraphEngine::Reference => Box::new(GraphBrain::new(g)),
+                    GraphEngine::Runtime => Box::new(RuntimeBrain::compile(g)),
+                }
             }
         })
     }
@@ -89,6 +104,7 @@ struct Args {
     json_out: Option<PathBuf>,
     until_goal: bool,
     quiet: bool,
+    engine: GraphEngine,
 }
 
 fn print_help() {
@@ -107,12 +123,17 @@ OPTIONS:
   --seed <u64>              Deterministic opening: even=home, odd=away
   --params <path>           Params JSON (default: bevy_sim_params_v05.json)
   --json <path>             Also write result JSON to this file
+  --engine reference|runtime  Graph backend for aia/graph: (default: runtime)
   --until-goal              Stop at first goal (still capped by --secs)
   --quiet                   No stderr heartbeats
   -h, --help                Show this help
 
 BRAINS:
   chase | idle | test1 | test2 | aia | graph:<path>
+
+NOTE:
+  Headless always runs max-speed (no wall-clock wait). Prefer --engine runtime
+  for single-match throughput; multi-instance batch is secondary.
 
 EXIT:
   0  finished
@@ -139,6 +160,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut json_out = None;
     let mut until_goal = false;
     let mut quiet = false;
+    let mut engine = GraphEngine::Runtime;
 
     let mut i = 0;
     while i < argv.len() {
@@ -193,6 +215,21 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 i += 1;
                 json_out = Some(PathBuf::from(argv.get(i).ok_or("--json needs a path")?));
             }
+            "--engine" => {
+                i += 1;
+                engine = match argv
+                    .get(i)
+                    .ok_or("--engine needs reference|runtime")?
+                    .to_ascii_lowercase()
+                    .as_str()
+                {
+                    "reference" | "ref" | "graphbrain" => GraphEngine::Reference,
+                    "runtime" | "vm" | "o0" => GraphEngine::Runtime,
+                    other => {
+                        return Err(format!("--engine: expected reference|runtime, got {other}"))
+                    }
+                };
+            }
             "--until-goal" => until_goal = true,
             "--quiet" => quiet = true,
             other => return Err(format!("unknown arg '{other}' (see --help)")),
@@ -218,6 +255,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         json_out,
         until_goal,
         quiet,
+        engine,
     })
 }
 
@@ -273,13 +311,17 @@ fn run(args: Args) -> Result<MatchResult, String> {
         SimParams::default()
     });
 
-    let mut home = args.home.build()?;
-    let mut away = args.away.build()?;
+    let mut home = args.home.build(args.engine)?;
+    let mut away = args.away.build(args.engine)?;
     let mut world = MatchWorld::new_kickoff_opening(params, args.opening);
 
     if !args.quiet {
+        let eng = match args.engine {
+            GraphEngine::Reference => "reference",
+            GraphEngine::Runtime => "runtime",
+        };
         eprintln!(
-            "soccer_headless home={} away={} opening={} secs={} until_goal={} FIXED_DT={FIXED_DT}",
+            "soccer_headless home={} away={} opening={} secs={} until_goal={} engine={eng} FIXED_DT={FIXED_DT} (max-speed)",
             args.home.label(),
             args.away.label(),
             opening_str(args.opening),

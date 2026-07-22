@@ -9,6 +9,8 @@ use bevy::prelude::Vec2;
 
 use crate::api::TeamApi;
 use crate::brain::{BrainCommand, BrainOutput, TeamBrain};
+use crate::graph_vm::trace::{ObservableTrace, VarCommit};
+use crate::graph_vm::value::VmValue;
 
 use super::load::TeamGraph;
 use super::value::GraphValue;
@@ -19,6 +21,8 @@ pub struct GraphBrain {
     pub graph: TeamGraph,
     /// Last committed variable values (also used mid-tick during multi-pass).
     pub vars: HashMap<String, GraphValue>,
+    /// Optional TRACE for GraphBrain ≡ RuntimeBrain acceptance.
+    trace: Option<ObservableTrace>,
 }
 
 impl GraphBrain {
@@ -26,7 +30,17 @@ impl GraphBrain {
         Self {
             graph,
             vars: HashMap::new(),
+            trace: None,
         }
+    }
+
+    pub fn with_trace(mut self) -> Self {
+        self.trace = Some(ObservableTrace::empty());
+        self
+    }
+
+    pub fn take_trace(&mut self) -> Option<ObservableTrace> {
+        self.trace.take()
     }
 }
 
@@ -34,6 +48,7 @@ impl TeamBrain for GraphBrain {
     fn think(&mut self, api: &TeamApi) -> BrainOutput {
         let set_vars = self.graph.set_variables.clone();
         let controllers = self.graph.controllers.clone();
+        let tracing = self.trace.is_some();
 
         let mut ctx = EvalCtx {
             graph: &self.graph,
@@ -41,16 +56,25 @@ impl TeamBrain for GraphBrain {
             vars: &mut self.vars,
             cache: HashMap::new(),
             call_stack: Vec::new(),
+            trace: if tracing {
+                Some(ObservableTrace::empty())
+            } else {
+                None
+            },
+            current_pass: None,
         };
 
         // Multi-pass so SetVariables that depend on other GetVariables settle.
-        for _ in 0..8 {
+        for pass in 0..8 {
+            ctx.current_pass = Some(pass);
             for sid in &set_vars {
                 ctx.commit_set_variable(sid);
             }
             // Clear port cache between passes so GetVariable sees fresh vars.
             ctx.cache.clear();
         }
+        // Controller eval may still hit SetVariable sinks; do not TRACE those.
+        ctx.current_pass = None;
 
         let mut out = BrainOutput::default();
         for (i, ctrl_sid) in controllers.iter().enumerate() {
@@ -59,6 +83,12 @@ impl TeamBrain for GraphBrain {
             };
             out.commands[i] = ctx.eval_controller(sid);
         }
+
+        if let Some(mut trace) = ctx.trace.take() {
+            trace.controllers = out.clone();
+            self.trace = Some(trace);
+        }
+
         out
     }
 }
@@ -75,9 +105,27 @@ struct EvalCtx<'a> {
     vars: &'a mut HashMap<String, GraphValue>,
     cache: HashMap<String, GraphValue>,
     call_stack: Vec<CallFrame>,
+    trace: Option<ObservableTrace>,
+    /// `Some(0..7)` during settle passes; `None` while evaluating controllers.
+    current_pass: Option<usize>,
 }
 
 impl<'a> EvalCtx<'a> {
+    fn record_var_commit(&mut self, name: &str, value: &GraphValue) {
+        let Some(pass) = self.current_pass else {
+            return;
+        };
+        let Some(trace) = self.trace.as_mut() else {
+            return;
+        };
+        if pass < 8 {
+            trace.passes[pass].push(VarCommit {
+                name: name.to_string(),
+                value: VmValue::from_graph(value),
+            });
+        }
+    }
+
     fn commit_set_variable(&mut self, node_sid: &str) {
         let Some(node) = self.graph.nodes.get(node_sid).cloned() else {
             return;
@@ -88,6 +136,7 @@ impl<'a> EvalCtx<'a> {
         let value = self
             .input_named(node_sid, "Any1")
             .unwrap_or(GraphValue::Null);
+        self.record_var_commit(&node.modifier, &value);
         self.vars.insert(node.modifier, value);
     }
 
@@ -180,26 +229,24 @@ impl<'a> EvalCtx<'a> {
                 .unwrap_or(GraphValue::Null),
             "SetVariable" => {
                 // Side-effect sink; if something reads it, return stored value.
+                // Nested commits during settle must TRACE like VM StoreVar deps.
                 let value = self
                     .input_named(node_sid, "Any1")
                     .unwrap_or(GraphValue::Null);
+                self.record_var_commit(&node.modifier, &value);
                 self.vars.insert(node.modifier.clone(), value.clone());
                 value
             }
 
             "Function" => self.eval_function_call(&node),
 
-            "SoccerGetBool" => GraphValue::Bool(
-                self.api.get_bool(&node.modifier).unwrap_or(false),
-            ),
+            "SoccerGetBool" => GraphValue::Bool(self.api.get_bool(&node.modifier).unwrap_or(false)),
             "SoccerGetFloat" => {
                 GraphValue::Float(self.api.get_float(&node.modifier).unwrap_or(0.0))
             }
-            "SoccerGetTransform" => GraphValue::Transform(
-                self.api
-                    .get_transform(&node.modifier)
-                    .unwrap_or(Vec2::ZERO),
-            ),
+            "SoccerGetTransform" => {
+                GraphValue::Transform(self.api.get_transform(&node.modifier).unwrap_or(Vec2::ZERO))
+            }
             "SoccerGetVector3" => match self.api.get_vector3(&node.modifier) {
                 Some(Some(v)) => GraphValue::Vec(v),
                 _ => GraphValue::Null,
@@ -245,21 +292,29 @@ impl<'a> EvalCtx<'a> {
             "AddFloats" => bin_f(self, node_sid, |a, b| a + b),
             "SubtractFloats" => bin_f(self, node_sid, |a, b| a - b),
             "MultiplyFloats" => bin_f(self, node_sid, |a, b| a * b),
-            "DivideFloats" => bin_f(self, node_sid, |a, b| {
-                if b.abs() < 1e-12 {
-                    0.0
-                } else {
-                    a / b
-                }
-            }),
+            "DivideFloats" => bin_f(
+                self,
+                node_sid,
+                |a, b| {
+                    if b.abs() < 1e-12 {
+                        0.0
+                    } else {
+                        a / b
+                    }
+                },
+            ),
             "Power" => bin_f(self, node_sid, |a, b| a.powf(b)),
-            "Modulo" => bin_f(self, node_sid, |a, b| {
-                if b.abs() < 1e-12 {
-                    0.0
-                } else {
-                    a % b
-                }
-            }),
+            "Modulo" => bin_f(
+                self,
+                node_sid,
+                |a, b| {
+                    if b.abs() < 1e-12 {
+                        0.0
+                    } else {
+                        a % b
+                    }
+                },
+            ),
             "Lerp" => {
                 let a = self
                     .input_named(node_sid, "Float1")
@@ -472,10 +527,16 @@ impl<'a> EvalCtx<'a> {
                 GraphValue::Bool(matches!(v, None | Some(GraphValue::Null)))
             }
 
-            "Debug" | "DebugDrawDisc" | "DebugDrawLine" | "TimePlot" | "Region"
-            | "ConstructSoccerProperties" | "Spherecast" | "Color" | "Country" | "Stat" => {
-                GraphValue::Null
-            }
+            "Debug"
+            | "DebugDrawDisc"
+            | "DebugDrawLine"
+            | "TimePlot"
+            | "Region"
+            | "ConstructSoccerProperties"
+            | "Spherecast"
+            | "Color"
+            | "Country"
+            | "Stat" => GraphValue::Null,
 
             other if other.starts_with("SoccerPlayerSensors") => GraphValue::Null,
             other if other.starts_with("SoccerController") => GraphValue::Null,
@@ -519,11 +580,7 @@ impl<'a> EvalCtx<'a> {
     }
 }
 
-fn bin_f(
-    ctx: &mut EvalCtx<'_>,
-    node_sid: &str,
-    f: impl Fn(f32, f32) -> f32,
-) -> GraphValue {
+fn bin_f(ctx: &mut EvalCtx<'_>, node_sid: &str, f: impl Fn(f32, f32) -> f32) -> GraphValue {
     let a = ctx
         .input_named(node_sid, "Float1")
         .map(|v| v.as_float())
@@ -535,11 +592,7 @@ fn bin_f(
     GraphValue::Float(f(a, b))
 }
 
-fn bin_v(
-    ctx: &mut EvalCtx<'_>,
-    node_sid: &str,
-    f: impl Fn(Vec2, Vec2) -> Vec2,
-) -> GraphValue {
+fn bin_v(ctx: &mut EvalCtx<'_>, node_sid: &str, f: impl Fn(Vec2, Vec2) -> Vec2) -> GraphValue {
     let a = ctx
         .input_named(node_sid, "Vector31")
         .map(|v| v.as_vec())

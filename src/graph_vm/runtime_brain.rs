@@ -297,4 +297,124 @@ mod tests {
         assert!((vm_out.commands[0].move_to.x - 5.0).abs() < 1e-4);
         assert!((vm_out.commands[0].move_to.y - 2.0).abs() < 1e-4);
     }
+
+    /// O0 acceptance smoke: AIA GraphBrain ≡ RuntimeBrain controllers over many ticks.
+    /// Skips when Unity saves `AIA.txt` is absent on this machine.
+    #[test]
+    fn runtime_aia_matches_graph_brain_controllers() {
+        use crate::brain::{IdleBrain, TeamId};
+        use crate::params::SimParams;
+        use crate::world::{MatchWorld, FIXED_DT};
+        use std::path::PathBuf;
+
+        let path = PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default())
+            .join(r"AppData\LocalLow\Unicorn One\AIComp\Saves\Soccer\AIA.txt");
+        if !path.exists() {
+            eprintln!("skip: AIA.txt not found at {path:?}");
+            return;
+        }
+
+        let graph = crate::graph::load_team_graph(&path).expect("load AIA.txt");
+        let mut graph_brain = GraphBrain::new(graph.clone());
+        let mut vm_brain = RuntimeBrain::compile(graph).with_trace();
+        let mut away = IdleBrain;
+        let mut world = MatchWorld::new_kickoff_opening(SimParams::default(), TeamId::Home);
+
+        const TICKS: u64 = 40;
+        const EPS: f32 = 1e-4;
+        let mut last_vm = BrainOutput::default();
+
+        for tick in 0..TICKS {
+            let (home_api, away_api) = world.build_apis();
+            let graph_out = graph_brain.think(&home_api);
+            let vm_out = vm_brain.think(&home_api);
+            assert_controllers_match(tick, &graph_out, &vm_out, EPS);
+            last_vm = vm_out.clone();
+
+            let away_out = away.think(&away_api);
+            // Advance with GraphBrain commands; both brains saw the same snapshot.
+            world.step_with_commands(&graph_out, &away_out, FIXED_DT);
+        }
+
+        // RuntimeBrain TRACE capture (Pass 1–8 var commits).
+        let trace = vm_brain
+            .take_trace()
+            .expect("with_trace should leave ObservableTrace after think");
+        assert_controllers_match(TICKS - 1, &last_vm, &trace.controllers, EPS);
+        let commit_count: usize = trace.passes.iter().map(|p| p.len()).sum();
+        assert!(
+            commit_count > 0,
+            "RuntimeBrain TRACE should record SetVariable commits across settle passes"
+        );
+    }
+
+    /// Full TRACE identity: GraphBrain ≡ RuntimeBrain Pass 1–8 commits + controllers.
+    #[test]
+    fn runtime_aia_trace_matches_graph_brain() {
+        use crate::brain::{IdleBrain, TeamId};
+        use crate::graph_vm::compare_traces;
+        use crate::params::SimParams;
+        use crate::world::{MatchWorld, FIXED_DT};
+        use std::path::PathBuf;
+
+        let path = PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default())
+            .join(r"AppData\LocalLow\Unicorn One\AIComp\Saves\Soccer\AIA.txt");
+        if !path.exists() {
+            eprintln!("skip: AIA.txt not found at {path:?}");
+            return;
+        }
+
+        let graph = crate::graph::load_team_graph(&path).expect("load AIA.txt");
+        let mut graph_brain = GraphBrain::new(graph.clone()).with_trace();
+        let mut vm_brain = RuntimeBrain::compile(graph).with_trace();
+        let mut away = IdleBrain;
+        let mut world = MatchWorld::new_kickoff_opening(SimParams::default(), TeamId::Home);
+
+        const TICKS: u64 = 16;
+
+        for tick in 0..TICKS {
+            let (home_api, away_api) = world.build_apis();
+            let graph_out = graph_brain.think(&home_api);
+            let vm_out = vm_brain.think(&home_api);
+            assert_controllers_match(tick, &graph_out, &vm_out, 1e-4);
+
+            let g_trace = graph_brain.take_trace().expect("GraphBrain with_trace");
+            let r_trace = vm_brain.take_trace().expect("RuntimeBrain with_trace");
+            if let Some(mismatch) = compare_traces(tick, &g_trace, &r_trace) {
+                panic!("{mismatch}");
+            }
+            // take_trace clears the Option; re-arm for the next tick.
+            graph_brain = graph_brain.with_trace();
+            vm_brain = vm_brain.with_trace();
+
+            let away_out = away.think(&away_api);
+            world.step_with_commands(&graph_out, &away_out, FIXED_DT);
+        }
+    }
+
+    fn assert_controllers_match(tick: u64, expected: &BrainOutput, actual: &BrainOutput, eps: f32) {
+        for i in 0..4 {
+            let e = &expected.commands[i];
+            let a = &actual.commands[i];
+            let move_ok = (e.move_to.x - a.move_to.x).abs() <= eps
+                && (e.move_to.y - a.move_to.y).abs() <= eps;
+            if e.sprint != a.sprint || e.interact != a.interact || !move_ok {
+                panic!(
+                    "AIA controller mismatch at tick {tick}, controller {}\n  \
+                     expected: move_to={:?} sprint={} interact={}\n  \
+                     actual:   move_to={:?} sprint={} interact={}\n  \
+                     deltas:   dx={:.6} dy={:.6} (eps={eps})",
+                    i + 1,
+                    e.move_to,
+                    e.sprint,
+                    e.interact,
+                    a.move_to,
+                    a.sprint,
+                    a.interact,
+                    (e.move_to.x - a.move_to.x).abs(),
+                    (e.move_to.y - a.move_to.y).abs(),
+                );
+            }
+        }
+    }
 }

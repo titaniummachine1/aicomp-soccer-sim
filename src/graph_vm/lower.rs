@@ -585,12 +585,19 @@ impl Lowerer {
             RegisterKind::Null => self.emit_const_null(node_sid, port_name),
         };
         let dst = self.fresh_reg(kind);
+        // GraphBrain ConditionalSet* always coerces via as_bool/as_float/as_vec.
+        let kind_imm = match kind {
+            RegisterKind::Float => 0,
+            RegisterKind::Bool => 1,
+            RegisterKind::Vector => 2,
+            RegisterKind::Null => 3,
+        };
         self.ir.push(IrInst {
             dest: Some(dst),
             kind,
             op: OpCode::Select,
             args: vec![cond, t, f],
-            immediates: vec![],
+            immediates: vec![kind_imm],
             source_sid: node_sid.to_string(),
             source_port: port_name.to_string(),
         });
