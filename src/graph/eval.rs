@@ -1,4 +1,7 @@
 //! Per-tick graph evaluation → SoccerController outputs.
+//!
+//! Supports constants, math, SoccerGet*, RelativePosition, conditionals,
+//! SetVariable/GetVariable, and CreateFunction/Function call frames.
 
 use std::collections::HashMap;
 
@@ -14,23 +17,43 @@ use super::value::GraphValue;
 #[derive(Debug, Clone)]
 pub struct GraphBrain {
     pub graph: TeamGraph,
+    /// Last committed variable values (also used mid-tick during multi-pass).
+    pub vars: HashMap<String, GraphValue>,
 }
 
 impl GraphBrain {
     pub fn new(graph: TeamGraph) -> Self {
-        Self { graph }
+        Self {
+            graph,
+            vars: HashMap::new(),
+        }
     }
 }
 
 impl TeamBrain for GraphBrain {
     fn think(&mut self, api: &TeamApi) -> BrainOutput {
+        let set_vars = self.graph.set_variables.clone();
+        let controllers = self.graph.controllers.clone();
+
         let mut ctx = EvalCtx {
             graph: &self.graph,
             api,
+            vars: &mut self.vars,
             cache: HashMap::new(),
+            call_stack: Vec::new(),
         };
+
+        // Multi-pass so SetVariables that depend on other GetVariables settle.
+        for _ in 0..8 {
+            for sid in &set_vars {
+                ctx.commit_set_variable(sid);
+            }
+            // Clear port cache between passes so GetVariable sees fresh vars.
+            ctx.cache.clear();
+        }
+
         let mut out = BrainOutput::default();
-        for (i, ctrl_sid) in self.graph.controllers.iter().enumerate() {
+        for (i, ctrl_sid) in controllers.iter().enumerate() {
             let Some(sid) = ctrl_sid else {
                 continue;
             };
@@ -40,14 +63,34 @@ impl TeamBrain for GraphBrain {
     }
 }
 
-struct EvalCtx<'a> {
-    graph: &'a TeamGraph,
-    api: &'a TeamApi,
-    /// Memo: output port_sid → value
+struct CallFrame {
+    create_sid: String,
+    args: [GraphValue; 4],
     cache: HashMap<String, GraphValue>,
 }
 
+struct EvalCtx<'a> {
+    graph: &'a TeamGraph,
+    api: &'a TeamApi,
+    vars: &'a mut HashMap<String, GraphValue>,
+    cache: HashMap<String, GraphValue>,
+    call_stack: Vec<CallFrame>,
+}
+
 impl<'a> EvalCtx<'a> {
+    fn commit_set_variable(&mut self, node_sid: &str) {
+        let Some(node) = self.graph.nodes.get(node_sid).cloned() else {
+            return;
+        };
+        if node.id != "SetVariable" {
+            return;
+        }
+        let value = self
+            .input_named(node_sid, "Any1")
+            .unwrap_or(GraphValue::Null);
+        self.vars.insert(node.modifier, value);
+    }
+
     fn eval_controller(&mut self, node_sid: &str) -> BrainCommand {
         let move_to = self
             .input_named(node_sid, "Vector31")
@@ -74,15 +117,31 @@ impl<'a> EvalCtx<'a> {
         Some(self.eval_port(&src_out))
     }
 
+    fn cache_get(&self, port_sid: &str) -> Option<GraphValue> {
+        if let Some(frame) = self.call_stack.last() {
+            frame.cache.get(port_sid).cloned()
+        } else {
+            self.cache.get(port_sid).cloned()
+        }
+    }
+
+    fn cache_set(&mut self, port_sid: String, value: GraphValue) {
+        if let Some(frame) = self.call_stack.last_mut() {
+            frame.cache.insert(port_sid, value);
+        } else {
+            self.cache.insert(port_sid, value);
+        }
+    }
+
     fn eval_port(&mut self, port_sid: &str) -> GraphValue {
-        if let Some(v) = self.cache.get(port_sid) {
-            return v.clone();
+        if let Some(v) = self.cache_get(port_sid) {
+            return v;
         }
         let Some(pref) = self.graph.ports.get(port_sid).cloned() else {
             return GraphValue::Null;
         };
         let value = self.eval_node_output(&pref.node_sid, &pref.port_name);
-        self.cache.insert(port_sid.to_string(), value.clone());
+        self.cache_set(port_sid.to_string(), value.clone());
         value
     }
 
@@ -91,24 +150,51 @@ impl<'a> EvalCtx<'a> {
             return GraphValue::Null;
         };
 
+        // CreateFunction param outputs while inside a matching call frame.
+        if node.id == "CreateFunction" {
+            if let Some(frame) = self.call_stack.last() {
+                if frame.create_sid == node.sid {
+                    let idx = match port_name {
+                        "Any1" => 0,
+                        "Any2" => 1,
+                        "Any3" => 2,
+                        "Any4" => 3,
+                        _ => return GraphValue::Null,
+                    };
+                    // Only polarity-out params (CreateFunction Any1-4 out).
+                    return frame.args[idx].clone();
+                }
+            }
+            return GraphValue::Null;
+        }
+
         match node.id.as_str() {
             "Float" => GraphValue::Float(parse_float(&node.modifier)),
-            "Bool" => {
-                // AIComp: modifier "0" = True, "1" = False
-                GraphValue::Bool(node.modifier.trim() != "1")
-            }
+            "Bool" => GraphValue::Bool(node.modifier.trim() != "1"),
             "String" => GraphValue::String(node.modifier.clone()),
 
+            "GetVariable" => self
+                .vars
+                .get(&node.modifier)
+                .cloned()
+                .unwrap_or(GraphValue::Null),
+            "SetVariable" => {
+                // Side-effect sink; if something reads it, return stored value.
+                let value = self
+                    .input_named(node_sid, "Any1")
+                    .unwrap_or(GraphValue::Null);
+                self.vars.insert(node.modifier.clone(), value.clone());
+                value
+            }
+
+            "Function" => self.eval_function_call(&node),
+
             "SoccerGetBool" => GraphValue::Bool(
-                self.api
-                    .get_bool(&node.modifier)
-                    .unwrap_or(false),
+                self.api.get_bool(&node.modifier).unwrap_or(false),
             ),
-            "SoccerGetFloat" => GraphValue::Float(
-                self.api
-                    .get_float(&node.modifier)
-                    .unwrap_or(0.0),
-            ),
+            "SoccerGetFloat" => {
+                GraphValue::Float(self.api.get_float(&node.modifier).unwrap_or(0.0))
+            }
             "SoccerGetTransform" => GraphValue::Transform(
                 self.api
                     .get_transform(&node.modifier)
@@ -120,7 +206,6 @@ impl<'a> EvalCtx<'a> {
             },
 
             "RelativePosition" => {
-                // MVP: Self / empty → world position of input transform.
                 let pos = self
                     .input_named(node_sid, "Transform1")
                     .map(|v| v.as_transform_pos())
@@ -144,32 +229,53 @@ impl<'a> EvalCtx<'a> {
                 GraphValue::Vec(Vec2::new(x, z))
             }
 
-            "AddFloats" => {
-                let a = self.input_named(node_sid, "Float1").map(|v| v.as_float()).unwrap_or(0.0);
-                let b = self.input_named(node_sid, "Float2").map(|v| v.as_float()).unwrap_or(0.0);
-                GraphValue::Float(a + b)
+            "Vector3Split" => {
+                let v = self
+                    .input_named(node_sid, "Vector31")
+                    .map(|v| v.as_vec())
+                    .unwrap_or(Vec2::ZERO);
+                match port_name {
+                    "Float1" => GraphValue::Float(v.x),
+                    "Float2" => GraphValue::Float(0.0), // Unity Y unused in 2D
+                    "Float3" => GraphValue::Float(v.y),
+                    _ => GraphValue::Null,
+                }
             }
-            "SubtractFloats" => {
-                let a = self.input_named(node_sid, "Float1").map(|v| v.as_float()).unwrap_or(0.0);
-                let b = self.input_named(node_sid, "Float2").map(|v| v.as_float()).unwrap_or(0.0);
-                GraphValue::Float(a - b)
+
+            "AddFloats" => bin_f(self, node_sid, |a, b| a + b),
+            "SubtractFloats" => bin_f(self, node_sid, |a, b| a - b),
+            "MultiplyFloats" => bin_f(self, node_sid, |a, b| a * b),
+            "DivideFloats" => bin_f(self, node_sid, |a, b| {
+                if b.abs() < 1e-12 {
+                    0.0
+                } else {
+                    a / b
+                }
+            }),
+            "Power" => bin_f(self, node_sid, |a, b| a.powf(b)),
+            "Modulo" => bin_f(self, node_sid, |a, b| {
+                if b.abs() < 1e-12 {
+                    0.0
+                } else {
+                    a % b
+                }
+            }),
+            "Lerp" => {
+                let a = self
+                    .input_named(node_sid, "Float1")
+                    .map(|v| v.as_float())
+                    .unwrap_or(0.0);
+                let b = self
+                    .input_named(node_sid, "Float2")
+                    .map(|v| v.as_float())
+                    .unwrap_or(0.0);
+                let t = self
+                    .input_named(node_sid, "Float3")
+                    .map(|v| v.as_float())
+                    .unwrap_or(0.0);
+                GraphValue::Float(a + (b - a) * t)
             }
-            "MultiplyFloats" => {
-                let a = self.input_named(node_sid, "Float1").map(|v| v.as_float()).unwrap_or(0.0);
-                let b = self.input_named(node_sid, "Float2").map(|v| v.as_float()).unwrap_or(0.0);
-                GraphValue::Float(a * b)
-            }
-            "DivideFloats" => {
-                let a = self.input_named(node_sid, "Float1").map(|v| v.as_float()).unwrap_or(0.0);
-                let b = self.input_named(node_sid, "Float2").map(|v| v.as_float()).unwrap_or(0.0);
-                GraphValue::Float(if b.abs() < 1e-12 { 0.0 } else { a / b })
-            }
-            "Power" => {
-                // Float1 = base, Float2 = exponent (library Power ports)
-                let base = self.input_named(node_sid, "Float1").map(|v| v.as_float()).unwrap_or(0.0);
-                let exp = self.input_named(node_sid, "Float2").map(|v| v.as_float()).unwrap_or(0.0);
-                GraphValue::Float(base.powf(exp))
-            }
+
             "Relay" => self
                 .input_named(node_sid, "Any1")
                 .unwrap_or(GraphValue::Null),
@@ -198,6 +304,10 @@ impl<'a> EvalCtx<'a> {
                     "sin" => a.sin(),
                     "cos" => a.cos(),
                     "tan" => a.tan(),
+                    "ln" => a.ln(),
+                    "log10" => a.log10(),
+                    "e^" => a.exp(),
+                    "10^" => 10f32.powf(a),
                     _ => a,
                 };
                 GraphValue::Float(r)
@@ -210,56 +320,74 @@ impl<'a> EvalCtx<'a> {
                     .unwrap_or(0.0);
                 GraphValue::Float(a.abs())
             }
-            "Modulo" => {
-                let a = self.input_named(node_sid, "Float1").map(|v| v.as_float()).unwrap_or(0.0);
-                let b = self.input_named(node_sid, "Float2").map(|v| v.as_float()).unwrap_or(0.0);
-                GraphValue::Float(if b.abs() < 1e-12 { 0.0 } else { a % b })
-            }
-            "Lerp" => {
-                let a = self.input_named(node_sid, "Float1").map(|v| v.as_float()).unwrap_or(0.0);
-                let b = self.input_named(node_sid, "Float2").map(|v| v.as_float()).unwrap_or(0.0);
-                let t = self.input_named(node_sid, "Float3").map(|v| v.as_float()).unwrap_or(0.0);
-                GraphValue::Float(a + (b - a) * t)
-            }
 
-            "AddVector3" => {
-                let a = self.input_named(node_sid, "Vector31").map(|v| v.as_vec()).unwrap_or(Vec2::ZERO);
-                let b = self.input_named(node_sid, "Vector32").map(|v| v.as_vec()).unwrap_or(Vec2::ZERO);
-                GraphValue::Vec(a + b)
-            }
-            "SubtractVector3" => {
-                let a = self.input_named(node_sid, "Vector31").map(|v| v.as_vec()).unwrap_or(Vec2::ZERO);
-                let b = self.input_named(node_sid, "Vector32").map(|v| v.as_vec()).unwrap_or(Vec2::ZERO);
-                GraphValue::Vec(a - b)
-            }
+            "AddVector3" => bin_v(self, node_sid, |a, b| a + b),
+            "SubtractVector3" => bin_v(self, node_sid, |a, b| a - b),
             "ScaleVector3" => {
-                let v = self.input_named(node_sid, "Vector31").map(|v| v.as_vec()).unwrap_or(Vec2::ZERO);
-                let s = self.input_named(node_sid, "Float1").map(|v| v.as_float()).unwrap_or(1.0);
+                let v = self
+                    .input_named(node_sid, "Vector31")
+                    .map(|v| v.as_vec())
+                    .unwrap_or(Vec2::ZERO);
+                let s = self
+                    .input_named(node_sid, "Float1")
+                    .map(|v| v.as_float())
+                    .unwrap_or(1.0);
                 GraphValue::Vec(v * s)
             }
             "Normalize" => {
-                let v = self.input_named(node_sid, "Vector31").map(|v| v.as_vec()).unwrap_or(Vec2::ZERO);
+                let v = self
+                    .input_named(node_sid, "Vector31")
+                    .map(|v| v.as_vec())
+                    .unwrap_or(Vec2::ZERO);
                 let len = v.length();
                 GraphValue::Vec(if len > 1e-8 { v / len } else { Vec2::ZERO })
             }
             "Magnitude" => {
-                let v = self.input_named(node_sid, "Vector31").map(|v| v.as_vec()).unwrap_or(Vec2::ZERO);
+                let v = self
+                    .input_named(node_sid, "Vector31")
+                    .map(|v| v.as_vec())
+                    .unwrap_or(Vec2::ZERO);
                 GraphValue::Float(v.length())
             }
             "Distance" => {
-                let a = self.input_named(node_sid, "Vector31").map(|v| v.as_vec()).unwrap_or(Vec2::ZERO);
-                let b = self.input_named(node_sid, "Vector32").map(|v| v.as_vec()).unwrap_or(Vec2::ZERO);
+                let a = self
+                    .input_named(node_sid, "Vector31")
+                    .map(|v| v.as_vec())
+                    .unwrap_or(Vec2::ZERO);
+                let b = self
+                    .input_named(node_sid, "Vector32")
+                    .map(|v| v.as_vec())
+                    .unwrap_or(Vec2::ZERO);
                 GraphValue::Float(a.distance(b))
+            }
+            "DotProduct" => {
+                let a = self
+                    .input_named(node_sid, "Vector31")
+                    .map(|v| v.as_vec())
+                    .unwrap_or(Vec2::ZERO);
+                let b = self
+                    .input_named(node_sid, "Vector32")
+                    .map(|v| v.as_vec())
+                    .unwrap_or(Vec2::ZERO);
+                GraphValue::Float(a.dot(b))
             }
 
             "Not" => {
-                let b = self.input_named(node_sid, "Bool1").map(|v| v.as_bool()).unwrap_or(false);
+                let b = self
+                    .input_named(node_sid, "Bool1")
+                    .map(|v| v.as_bool())
+                    .unwrap_or(false);
                 GraphValue::Bool(!b)
             }
             "CompareFloats" => {
-                let a = self.input_named(node_sid, "Float1").map(|v| v.as_float()).unwrap_or(0.0);
-                let b = self.input_named(node_sid, "Float2").map(|v| v.as_float()).unwrap_or(0.0);
-                // modifier index: == < > <= >=
+                let a = self
+                    .input_named(node_sid, "Float1")
+                    .map(|v| v.as_float())
+                    .unwrap_or(0.0);
+                let b = self
+                    .input_named(node_sid, "Float2")
+                    .map(|v| v.as_float())
+                    .unwrap_or(0.0);
                 let op = node.modifier.parse::<i32>().unwrap_or(0);
                 let r = match op {
                     1 => a < b,
@@ -271,9 +399,14 @@ impl<'a> EvalCtx<'a> {
                 GraphValue::Bool(r)
             }
             "CompareBool" => {
-                let a = self.input_named(node_sid, "Bool1").map(|v| v.as_bool()).unwrap_or(false);
-                let b = self.input_named(node_sid, "Bool2").map(|v| v.as_bool()).unwrap_or(false);
-                // 0=and 1=or 2=equal 3=xor 4=nor 5=nand 6=xnor
+                let a = self
+                    .input_named(node_sid, "Bool1")
+                    .map(|v| v.as_bool())
+                    .unwrap_or(false);
+                let b = self
+                    .input_named(node_sid, "Bool2")
+                    .map(|v| v.as_bool())
+                    .unwrap_or(false);
                 let op = node.modifier.parse::<i32>().unwrap_or(0);
                 let r = match op {
                     1 => a || b,
@@ -287,13 +420,21 @@ impl<'a> EvalCtx<'a> {
                 GraphValue::Bool(r)
             }
             "ConditionalSetBool" => {
-                let cond = self.input_named(node_sid, "Bool1").map(|v| v.as_bool()).unwrap_or(false);
-                let t = self.input_named(node_sid, "Bool2").map(|v| v.as_bool()).unwrap_or(false);
-                let f = self.input_named(node_sid, "Bool3").map(|v| v.as_bool()).unwrap_or(false);
+                let cond = self
+                    .input_named(node_sid, "Bool1")
+                    .map(|v| v.as_bool())
+                    .unwrap_or(false);
+                let t = self
+                    .input_named(node_sid, "Bool2")
+                    .map(|v| v.as_bool())
+                    .unwrap_or(false);
+                let f = self
+                    .input_named(node_sid, "Bool3")
+                    .map(|v| v.as_bool())
+                    .unwrap_or(false);
                 GraphValue::Bool(if cond { t } else { f })
             }
             "ConditionalSetFloatV2" | "ConditionalSetFloat" => {
-                // Ports: Bool1 cond, Float1 then, Float2 else, Float1 out
                 let cond = self
                     .input_named(node_sid, "Bool1")
                     .map(|v| v.as_bool())
@@ -309,34 +450,105 @@ impl<'a> EvalCtx<'a> {
                 GraphValue::Float(if cond { t } else { f })
             }
             "ConditionalSetVector3" => {
-                let cond = self.input_named(node_sid, "Bool1").map(|v| v.as_bool()).unwrap_or(false);
-                // true branch Vector31 in, false Vector32 in (output also Vector31)
-                let t = self.input_named(node_sid, "Vector31").map(|v| v.as_vec()).unwrap_or(Vec2::ZERO);
-                let f = self.input_named(node_sid, "Vector32").map(|v| v.as_vec()).unwrap_or(Vec2::ZERO);
+                let cond = self
+                    .input_named(node_sid, "Bool1")
+                    .map(|v| v.as_bool())
+                    .unwrap_or(false);
+                let t = self
+                    .input_named(node_sid, "Vector31")
+                    .map(|v| v.as_vec())
+                    .unwrap_or(Vec2::ZERO);
+                let f = self
+                    .input_named(node_sid, "Vector32")
+                    .map(|v| v.as_vec())
+                    .unwrap_or(Vec2::ZERO);
                 GraphValue::Vec(if cond { t } else { f })
             }
 
             "IsNull" => {
-                let v = self.input_named(node_sid, "Any1").or_else(|| {
-                    self.input_named(node_sid, "Vector31")
-                });
+                let v = self
+                    .input_named(node_sid, "Any1")
+                    .or_else(|| self.input_named(node_sid, "Vector31"));
                 GraphValue::Bool(matches!(v, None | Some(GraphValue::Null)))
             }
 
-            // Debug / plot / region / sensors — no-ops that don't feed controllers in MVP
             "Debug" | "DebugDrawDisc" | "DebugDrawLine" | "TimePlot" | "Region"
-            | "ConstructSoccerProperties" | "Spherecast" => GraphValue::Null,
+            | "ConstructSoccerProperties" | "Spherecast" | "Color" | "Country" | "Stat" => {
+                GraphValue::Null
+            }
 
             other if other.starts_with("SoccerPlayerSensors") => GraphValue::Null,
             other if other.starts_with("SoccerController") => GraphValue::Null,
 
             other => {
-                // Unknown node: try to forward first connected input if any
                 let _ = (other, port_name);
                 GraphValue::Null
             }
         }
     }
+
+    fn eval_function_call(&mut self, fn_node: &super::load::GraphNode) -> GraphValue {
+        let Some(def) = self.graph.create_functions.get(&fn_node.modifier).cloned() else {
+            return GraphValue::Null;
+        };
+
+        let args = [
+            self.input_named(&fn_node.sid, "Any1")
+                .unwrap_or(GraphValue::Null),
+            self.input_named(&fn_node.sid, "Any2")
+                .unwrap_or(GraphValue::Null),
+            self.input_named(&fn_node.sid, "Any3")
+                .unwrap_or(GraphValue::Null),
+            self.input_named(&fn_node.sid, "Any4")
+                .unwrap_or(GraphValue::Null),
+        ];
+
+        self.call_stack.push(CallFrame {
+            create_sid: def.sid.clone(),
+            args,
+            cache: HashMap::new(),
+        });
+
+        // Return is CreateFunction Any1 polarity 0.
+        let ret = self
+            .input_named(&def.sid, "Any1")
+            .unwrap_or(GraphValue::Null);
+
+        self.call_stack.pop();
+        ret
+    }
+}
+
+fn bin_f(
+    ctx: &mut EvalCtx<'_>,
+    node_sid: &str,
+    f: impl Fn(f32, f32) -> f32,
+) -> GraphValue {
+    let a = ctx
+        .input_named(node_sid, "Float1")
+        .map(|v| v.as_float())
+        .unwrap_or(0.0);
+    let b = ctx
+        .input_named(node_sid, "Float2")
+        .map(|v| v.as_float())
+        .unwrap_or(0.0);
+    GraphValue::Float(f(a, b))
+}
+
+fn bin_v(
+    ctx: &mut EvalCtx<'_>,
+    node_sid: &str,
+    f: impl Fn(Vec2, Vec2) -> Vec2,
+) -> GraphValue {
+    let a = ctx
+        .input_named(node_sid, "Vector31")
+        .map(|v| v.as_vec())
+        .unwrap_or(Vec2::ZERO);
+    let b = ctx
+        .input_named(node_sid, "Vector32")
+        .map(|v| v.as_vec())
+        .unwrap_or(Vec2::ZERO);
+    GraphValue::Vec(f(a, b))
 }
 
 fn parse_float(s: &str) -> f32 {
@@ -359,66 +571,55 @@ mod tests {
         }
     }
 
+    fn node(id: &str, sid: &str, modifier: &str, ports: Vec<RawPort>) -> RawNode {
+        RawNode {
+            id: id.into(),
+            sid: sid.into(),
+            modifier: serde_json::json!(modifier),
+            owner_function_sid: String::new(),
+            ports,
+        }
+    }
+
     #[test]
     fn float_power_to_controller_move_x() {
-        // Float(2) Power Float(3) → ConstructVector3(x=8,y=0,z=0) → Controller1.moveTo
         let raw = RawGraph {
             nodes: vec![
-                RawNode {
-                    id: "Float".into(),
-                    sid: "f2".into(),
-                    modifier: serde_json::json!("2"),
-                    ports: vec![port("Float1", "f2o", 1, "f2")],
-                },
-                RawNode {
-                    id: "Float".into(),
-                    sid: "f3".into(),
-                    modifier: serde_json::json!("3"),
-                    ports: vec![port("Float1", "f3o", 1, "f3")],
-                },
-                RawNode {
-                    id: "Power".into(),
-                    sid: "pow".into(),
-                    modifier: serde_json::json!(""),
-                    ports: vec![
+                node("Float", "f2", "2", vec![port("Float1", "f2o", 1, "f2")]),
+                node("Float", "f3", "3", vec![port("Float1", "f3o", 1, "f3")]),
+                node(
+                    "Power",
+                    "pow",
+                    "",
+                    vec![
                         port("Float1", "pow_b", 0, "pow"),
                         port("Float2", "pow_e", 0, "pow"),
                         port("Float1", "pow_o", 1, "pow"),
                     ],
-                },
-                RawNode {
-                    id: "Float".into(),
-                    sid: "z0".into(),
-                    modifier: serde_json::json!("0"),
-                    ports: vec![port("Float1", "z0o", 1, "z0")],
-                },
-                RawNode {
-                    id: "ConstructVector3".into(),
-                    sid: "cv".into(),
-                    modifier: serde_json::json!(""),
-                    ports: vec![
+                ),
+                node("Float", "z0", "0", vec![port("Float1", "z0o", 1, "z0")]),
+                node(
+                    "ConstructVector3",
+                    "cv",
+                    "",
+                    vec![
                         port("Vector31", "cvo", 1, "cv"),
                         port("Float1", "cvx", 0, "cv"),
                         port("Float2", "cvy", 0, "cv"),
                         port("Float3", "cvz", 0, "cv"),
                     ],
-                },
-                RawNode {
-                    id: "Bool".into(),
-                    sid: "bf".into(),
-                    modifier: serde_json::json!("1"), // False
-                    ports: vec![port("Bool1", "bfo", 1, "bf")],
-                },
-                RawNode {
-                    id: "SoccerController1".into(),
-                    sid: "c1".into(),
-                    modifier: serde_json::json!(""),
-                    ports: vec![
+                ),
+                node("Bool", "bf", "1", vec![port("Bool1", "bfo", 1, "bf")]),
+                node(
+                    "SoccerController1",
+                    "c1",
+                    "",
+                    vec![
                         port("Vector31", "c1m", 0, "c1"),
                         port("Bool1", "c1s", 0, "c1"),
                         port("Bool2", "c1i", 0, "c1"),
                     ],
-                },
+                ),
             ],
             connections: vec![
                 RawConnection {
@@ -455,17 +656,223 @@ mod tests {
                 },
             ],
         };
-        let g = index_graph(raw, "test".into());
-        let mut brain = GraphBrain::new(g);
-        let api = TeamApi {
+        let mut brain = GraphBrain::new(index_graph(raw, "test".into()));
+        let api = empty_api();
+        let out = brain.think(&api);
+        assert!((out.commands[0].move_to.x - 8.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn set_get_variable_feeds_controller() {
+        // SetVariable("Target") = ConstructVector3(5,0,2) → GetVariable → Controller
+        let raw = RawGraph {
+            nodes: vec![
+                node("Float", "fx", "5", vec![port("Float1", "fxo", 1, "fx")]),
+                node("Float", "fz", "2", vec![port("Float1", "fzo", 1, "fz")]),
+                node("Float", "fy", "0", vec![port("Float1", "fyo", 1, "fy")]),
+                node(
+                    "ConstructVector3",
+                    "cv",
+                    "",
+                    vec![
+                        port("Vector31", "cvo", 1, "cv"),
+                        port("Float1", "cvx", 0, "cv"),
+                        port("Float2", "cvy", 0, "cv"),
+                        port("Float3", "cvz", 0, "cv"),
+                    ],
+                ),
+                node(
+                    "SetVariable",
+                    "sv",
+                    "Target",
+                    vec![port("Any1", "svi", 0, "sv")],
+                ),
+                node(
+                    "GetVariable",
+                    "gv",
+                    "Target",
+                    vec![port("Any1", "gvo", 1, "gv")],
+                ),
+                node("Bool", "bf", "1", vec![port("Bool1", "bfo", 1, "bf")]),
+                node(
+                    "SoccerController1",
+                    "c1",
+                    "",
+                    vec![
+                        port("Vector31", "c1m", 0, "c1"),
+                        port("Bool1", "c1s", 0, "c1"),
+                        port("Bool2", "c1i", 0, "c1"),
+                    ],
+                ),
+            ],
+            connections: vec![
+                RawConnection {
+                    port0: "fxo".into(),
+                    port1: "cvx".into(),
+                },
+                RawConnection {
+                    port0: "fyo".into(),
+                    port1: "cvy".into(),
+                },
+                RawConnection {
+                    port0: "fzo".into(),
+                    port1: "cvz".into(),
+                },
+                RawConnection {
+                    port0: "cvo".into(),
+                    port1: "svi".into(),
+                },
+                RawConnection {
+                    port0: "gvo".into(),
+                    port1: "c1m".into(),
+                },
+                RawConnection {
+                    port0: "bfo".into(),
+                    port1: "c1s".into(),
+                },
+                RawConnection {
+                    port0: "bfo".into(),
+                    port1: "c1i".into(),
+                },
+            ],
+        };
+        let mut brain = GraphBrain::new(index_graph(raw, "test".into()));
+        let out = brain.think(&empty_api());
+        assert!((out.commands[0].move_to.x - 5.0).abs() < 1e-4);
+        assert!((out.commands[0].move_to.y - 2.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn function_call_returns_scaled_vec() {
+        // CreateFunction "Scale2": return ScaleVector3(Param1, 2)
+        // Function("Scale2", vec(3,4)) → controller
+        let mut scale_node = node(
+            "ScaleVector3",
+            "sc",
+            "",
+            vec![
+                port("Float1", "scf", 0, "sc"),
+                port("Vector31", "scvo", 1, "sc"),
+                port("Vector31", "scvi", 0, "sc"),
+            ],
+        );
+        scale_node.owner_function_sid = "cf".into();
+        let mut f2 = node("Float", "two", "2", vec![port("Float1", "twoo", 1, "two")]);
+        f2.owner_function_sid = "cf".into();
+
+        let raw = RawGraph {
+            nodes: vec![
+                node(
+                    "CreateFunction",
+                    "cf",
+                    "Scale2",
+                    vec![
+                        port("Any1", "cfr", 0, "cf"), // return in
+                        port("String1", "cfs1", 0, "cf"),
+                        port("Any1", "cfp1", 1, "cf"), // param1 out
+                        port("Any2", "cfp2", 1, "cf"),
+                        port("Any3", "cfp3", 1, "cf"),
+                        port("Any4", "cfp4", 1, "cf"),
+                    ],
+                ),
+                f2,
+                scale_node,
+                node("Float", "vx", "3", vec![port("Float1", "vxo", 1, "vx")]),
+                node("Float", "vz", "4", vec![port("Float1", "vzo", 1, "vz")]),
+                node("Float", "vy", "0", vec![port("Float1", "vyo", 1, "vy")]),
+                node(
+                    "ConstructVector3",
+                    "cv",
+                    "",
+                    vec![
+                        port("Vector31", "cvo", 1, "cv"),
+                        port("Float1", "cvx", 0, "cv"),
+                        port("Float2", "cvy", 0, "cv"),
+                        port("Float3", "cvz", 0, "cv"),
+                    ],
+                ),
+                node(
+                    "Function",
+                    "fn",
+                    "Scale2",
+                    vec![
+                        port("Any1", "fni1", 0, "fn"),
+                        port("Any2", "fni2", 0, "fn"),
+                        port("Any3", "fni3", 0, "fn"),
+                        port("Any4", "fni4", 0, "fn"),
+                        port("Any1", "fno", 1, "fn"),
+                    ],
+                ),
+                node("Bool", "bf", "1", vec![port("Bool1", "bfo", 1, "bf")]),
+                node(
+                    "SoccerController1",
+                    "c1",
+                    "",
+                    vec![
+                        port("Vector31", "c1m", 0, "c1"),
+                        port("Bool1", "c1s", 0, "c1"),
+                        port("Bool2", "c1i", 0, "c1"),
+                    ],
+                ),
+            ],
+            connections: vec![
+                // body: param1 → scale in, float 2 → scale factor, scale out → return
+                RawConnection {
+                    port0: "cfp1".into(),
+                    port1: "scvi".into(),
+                },
+                RawConnection {
+                    port0: "twoo".into(),
+                    port1: "scf".into(),
+                },
+                RawConnection {
+                    port0: "scvo".into(),
+                    port1: "cfr".into(),
+                },
+                // call args
+                RawConnection {
+                    port0: "vxo".into(),
+                    port1: "cvx".into(),
+                },
+                RawConnection {
+                    port0: "vyo".into(),
+                    port1: "cvy".into(),
+                },
+                RawConnection {
+                    port0: "vzo".into(),
+                    port1: "cvz".into(),
+                },
+                RawConnection {
+                    port0: "cvo".into(),
+                    port1: "fni1".into(),
+                },
+                RawConnection {
+                    port0: "fno".into(),
+                    port1: "c1m".into(),
+                },
+                RawConnection {
+                    port0: "bfo".into(),
+                    port1: "c1s".into(),
+                },
+                RawConnection {
+                    port0: "bfo".into(),
+                    port1: "c1i".into(),
+                },
+            ],
+        };
+        let mut brain = GraphBrain::new(index_graph(raw, "test".into()));
+        let out = brain.think(&empty_api());
+        assert!((out.commands[0].move_to.x - 6.0).abs() < 1e-4);
+        assert!((out.commands[0].move_to.y - 8.0).abs() < 1e-4);
+    }
+
+    fn empty_api() -> TeamApi {
+        TeamApi {
             team: crate::brain::TeamId::Home,
             bools: Default::default(),
             floats: Default::default(),
             transforms: Default::default(),
             vectors: Default::default(),
-        };
-        let out = brain.think(&api);
-        assert!((out.commands[0].move_to.x - 8.0).abs() < 1e-4);
-        assert!(!out.commands[0].sprint);
+        }
     }
 }

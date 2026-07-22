@@ -1,0 +1,107 @@
+﻿{
+    "source":  "user_graph_paste_plus_local_saves",
+    "note":  "Modifiers extracted from serializableNodes.modifier. Numeric false-positives stripped.",
+    "from_user_paste":  {
+                            "SoccerPlayerSensors_modifier":  "False",
+                            "example_spherecast":  {
+                                                       "radius":  0.25,
+                                                       "range_or_distance":  20,
+                                                       "locale_note":  "0,25 is European decimal for 0.25"
+                                                   },
+                            "SoccerGetBool":  [
+                                                  "Team Has Ball"
+                                              ],
+                            "SoccerGetFloat":  [
+                                                   "Team Score"
+                                               ],
+                            "ConstructSoccerProperties_ports":  [
+                                                                    "String1",
+                                                                    "Country1",
+                                                                    "Vector31",
+                                                                    "Vector32",
+                                                                    "Vector33",
+                                                                    "Vector34"
+                                                                ],
+                            "SoccerGetVector3":  [
+                                                     "Ball Velocity"
+                                                 ],
+                            "SoccerGetTransform":  [
+                                                       "Ball"
+                                                   ],
+                            "SoccerController_ports":  [
+                                                           "Vector31",
+                                                           "Bool1",
+                                                           "Bool2"
+                                                       ]
+                        },
+    "SoccerGetBool":  [
+                          "Ball On Team Side",
+                          "Is Active Graph",
+                          "Is Ball Loose",
+                          "Is Ball Nearby Team Player 1",
+                          "Is Ball Nearby Team Player 2",
+                          "Is Ball Nearby Team Player 3",
+                          "Is Ball Nearby Team Player 4",
+                          "Is Home Team",
+                          "Is Team Kicking off",
+                          "Is Team Player 1 Closest Teammate to Ball",
+                          "Is Team Player 3 Closest Teammate to Ball",
+                          "Is Team Player 4 Closest Teammate to Ball",
+                          "Opponent Has Ball",
+                          "Team Has Ball",
+                          "Team Player 1 Has Ball",
+                          "Team Player 2 Has Ball",
+                          "Team Player 3 Has Ball",
+                          "Team Player 4 Has Ball"
+                      ],
+    "SoccerGetFloat":  [
+                           "Ball Carrier Shot Charge",
+                           "Ball Carrier Stamina",
+                           "Distance from Team Player 1 to nearest Opponent",
+                           "Distance from Team Player 3 to nearest Opponent",
+                           "Player Interact Radius",
+                           "Stamina of last defending opponent",
+                           "Team Player 1 Stamina",
+                           "Team Player 3 Stamina",
+                           "Team Player 4 Stamina",
+                           "Team Score"
+                       ],
+    "SoccerGetTransform":  [
+                               "Ball",
+                               "Opponent Goal Center",
+                               "Team Goal Center",
+                               "Team Goal Left Post",
+                               "Team Goal Right Post",
+                               "Team Player 1",
+                               "Team Player 2",
+                               "Team Player 3",
+                               "Team Player 4",
+                               "Teammate Nearest Team Player 4"
+                           ],
+    "SoccerGetVector3":  [
+                             "Ball Velocity",
+                             "Clear direction from team carrier",
+                             "Clear direction from team carrier (avoid all walls)",
+                             "Clear direction from team carrier (avoid goal lines)",
+                             "Clear direction from team carrier (avoid sidelines)",
+                             "Clear direction from Teammate 2",
+                             "Clear direction from Teammate 3",
+                             "Clear direction from Teammate 4",
+                             "Direction of clear teammate from Teammate 1",
+                             "Direction of clear teammate from Teammate 2",
+                             "Direction of clear teammate from Teammate 3",
+                             "Direction of clear teammate from Teammate 4",
+                             "Direction of opponent goal from Teammate 1",
+                             "Direction of opponent goal from Teammate 2",
+                             "Direction of opponent goal from Teammate 3",
+                             "Direction of opponent goal from Teammate 4",
+                             "Lower Corner Opposing Side",
+                             "Lower Midfield",
+                             "Upper Corner Opposing Side",
+                             "Upper Corner Team Side",
+                             "Upper Midfield"
+                         ],
+    "parity_hooks":  [
+                         "SoccerGetFloat \u0027Player Interact Radius\u0027 exists in saves — TimePlot this to lock the unknown radius numeric"
+                     ]
+}

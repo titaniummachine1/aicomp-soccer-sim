@@ -1,5 +1,8 @@
 /target/
+/dist/
 Cargo.lock
 .DS_Store
 *.pdb
 cargo_check_out.txt
+parity_capture_report.json
+bruteforce_timeplot_analysis.json

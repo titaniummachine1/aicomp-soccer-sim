@@ -30,6 +30,12 @@ pub struct SimParams {
     pub player_accel: f32,
     pub kick_max_speed: f32,
     pub pickup_delay_s: f32,
+    /// Seconds of Interact-with-ball before shot_charge starts rising.
+    /// Baseline: ~0.30s after pickup (Home T1 and Away O2).
+    pub shot_charge_warmup_s: f32,
+    /// Seconds of charging Interact to reach shot_charge=1.0.
+    /// Baseline: +0.05/tick at ~52.6 Hz ⇒ ~0.38s (not 0.8).
+    pub shot_charge_time_s: f32,
     /// Pickup/tackle reach. **CONFIRMED** 1.75 (ApiProbe timeplot).
     pub interact_radius: f32,
     /// Soft radius for clear-dir blockers / future post-sweep (**CANDIDATE**).
@@ -39,6 +45,20 @@ pub struct SimParams {
     pub hold_offset: f32,
     /// Small ring at BallHoldLocation.
     pub hold_marker_radius: f32,
+    /// Frida walkSpeed (cruise); sim uses [`player_max_speed`] for sprint cap.
+    pub player_walk_speed: f32,
+    /// Ball.pickupDelayAfterExchange — reserved (not wired in possession yet).
+    pub pickup_delay_after_exchange_s: f32,
+    /// Whistle idle timeout (staleBallTimeoutSeconds). Wired in `tick_stale_ball`.
+    pub stale_ball_timeout_s: f32,
+    /// Whistle move epsilon (staleBallDistanceThreshold). Wired in `tick_stale_ball`.
+    pub stale_ball_distance_threshold_m: f32,
+    /// Kickoff spawn circle margin — reserved.
+    pub kickoff_spawn_circle_margin_m: f32,
+    /// Kickoff delay before play — reserved.
+    pub kickoff_delay_s: f32,
+    /// Mover minimumMoveDelta — reserved.
+    pub minimum_move_delta_m: f32,
     pub source_path: PathBuf,
 }
 
@@ -68,14 +88,23 @@ impl SimParams {
             post_radius: 0.3,
             post_contact_radius: 0.3 + 0.40637236,
             kickoff_circle_r: 7.25,
-            player_max_speed: 4.5,
-            player_accel: 2.5,
-            kick_max_speed: 30.0,
-            pickup_delay_s: 0.3,
+            player_max_speed: 8.0,
+            player_accel: 100.0,
+            kick_max_speed: 29.94,
+            pickup_delay_s: 0.125,
+            shot_charge_warmup_s: 0.30,
+            shot_charge_time_s: 0.38,
             interact_radius: 1.75,
             body_radius,
-            hold_offset: body_radius + ball_radius,
+            hold_offset: 1.557,
             hold_marker_radius: ball_radius * 0.55,
+            player_walk_speed: 7.0,
+            pickup_delay_after_exchange_s: 0.25,
+            stale_ball_timeout_s: 5.0,
+            stale_ball_distance_threshold_m: 2.5,
+            kickoff_spawn_circle_margin_m: 0.5,
+            kickoff_delay_s: 1.0,
+            minimum_move_delta_m: 0.25,
             source_path,
         }
     }
@@ -149,12 +178,24 @@ impl SimParams {
         }
         let mut hold_from_file = false;
         if let Some(pl) = raw.player_candidates {
+            if let Some(w) = pl.walk_speed_mps {
+                p.player_walk_speed = w;
+            }
             if let Some(d) = pl.intercept_defaults_mps {
                 p.player_max_speed = d.max_speed.unwrap_or(p.player_max_speed);
                 p.player_accel = d.acceleration.unwrap_or(p.player_accel);
             }
             if let Some(t) = pl.global_pickup_delay_after_shot_s {
                 p.pickup_delay_s = t;
+            }
+            if let Some(t) = pl.global_pickup_delay_after_exchange_s {
+                p.pickup_delay_after_exchange_s = t;
+            }
+            if let Some(t) = pl.shot_charge_warmup_s {
+                p.shot_charge_warmup_s = t;
+            }
+            if let Some(t) = pl.shot_charge_time_s {
+                p.shot_charge_time_s = t;
             }
             if let Some(r) = pl.body_radius_m.or(pl.nav_agent_radius_m) {
                 p.body_radius = r;
@@ -163,8 +204,35 @@ impl SimParams {
                 p.hold_offset = h;
                 hold_from_file = true;
             }
-            if let Some(ir) = pl.interact_radius_m {
+            if let Some(ir) = pl.interact_radius_m.or(pl.tackle_range_m) {
                 p.interact_radius = ir;
+            }
+            if let Some(m) = pl.minimum_move_delta_m {
+                p.minimum_move_delta_m = m;
+            }
+            if let Some(k) = pl.kickoff_frida {
+                if let Some(r) = k.circle_radius_m {
+                    p.kickoff_circle_r = r;
+                }
+                if let Some(m) = k.spawn_circle_margin_m {
+                    p.kickoff_spawn_circle_margin_m = m;
+                }
+                if let Some(d) = k.delay_seconds {
+                    p.kickoff_delay_s = d;
+                }
+            }
+            if let Some(s) = pl.stale_ball_frida {
+                if let Some(t) = s.timeout_seconds {
+                    p.stale_ball_timeout_s = t;
+                }
+                if let Some(d) = s.distance_threshold_m {
+                    p.stale_ball_distance_threshold_m = d;
+                }
+            }
+            if let Some(sh) = pl.shot_frida {
+                if let Some(t) = sh.pickup_charge_delay_s {
+                    p.shot_charge_warmup_s = t;
+                }
             }
         }
         if !hold_from_file {
@@ -176,6 +244,19 @@ impl SimParams {
 }
 
 pub fn default_params_path() -> PathBuf {
+    // Prefer JSON next to the exe (portable alpha builds), then CARGO_MANIFEST_DIR (dev).
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let beside = dir.join("bevy_sim_params_v05.json");
+            if beside.is_file() {
+                return beside;
+            }
+        }
+    }
+    let cwd = PathBuf::from("bevy_sim_params_v05.json");
+    if cwd.is_file() {
+        return cwd;
+    }
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bevy_sim_params_v05.json")
 }
 
@@ -244,12 +325,55 @@ struct RawKick {
 
 #[derive(Deserialize)]
 struct RawPlayers {
+    walk_speed_mps: Option<f32>,
     intercept_defaults_mps: Option<RawIntercept>,
+    minimum_move_delta_m: Option<f32>,
     global_pickup_delay_after_shot_s: Option<f32>,
+    global_pickup_delay_after_exchange_s: Option<f32>,
+    shot_charge_warmup_s: Option<f32>,
+    shot_charge_time_s: Option<f32>,
+    shot_frida: Option<RawShotFrida>,
+    kickoff_frida: Option<RawKickoffFrida>,
+    stale_ball_frida: Option<RawStaleBallFrida>,
+    #[allow(dead_code)]
+    stamina_frida: Option<RawStaminaFrida>,
     body_radius_m: Option<f32>,
     nav_agent_radius_m: Option<f32>,
     hold_offset_m: Option<f32>,
     interact_radius_m: Option<f32>,
+    tackle_range_m: Option<f32>,
+}
+
+#[derive(Deserialize)]
+struct RawShotFrida {
+    pickup_charge_delay_s: Option<f32>,
+}
+
+#[derive(Deserialize)]
+struct RawKickoffFrida {
+    circle_radius_m: Option<f32>,
+    spawn_circle_margin_m: Option<f32>,
+    delay_seconds: Option<f32>,
+}
+
+#[derive(Deserialize)]
+struct RawStaleBallFrida {
+    timeout_seconds: Option<f32>,
+    distance_threshold_m: Option<f32>,
+}
+
+#[derive(Deserialize)]
+struct RawStaminaFrida {
+    #[allow(dead_code)]
+    max: Option<f32>,
+    #[allow(dead_code)]
+    consume_rate: Option<f32>,
+    #[allow(dead_code)]
+    regen_rate: Option<f32>,
+    #[allow(dead_code)]
+    regen_delay_s: Option<f32>,
+    #[allow(dead_code)]
+    tackle_regen_delay_s: Option<f32>,
 }
 
 #[derive(Deserialize)]

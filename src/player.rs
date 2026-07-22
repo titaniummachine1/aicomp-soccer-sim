@@ -22,6 +22,9 @@ pub struct Player {
     pub facing: Vec2,
     pub stamina: f32,
     pub shot_charge: f32,
+    /// After pickup/steal, engine holds charge at 0 for ~0.30s while Interact
+    /// can already be true (baseline TimePlot: both Home T1 and Away O2).
+    pub charge_warmup_left: f32,
 }
 
 impl Player {
@@ -51,12 +54,33 @@ pub fn step_mover(
     mover: &SimpleMover,
     move_to: Vec2,
     sprint: bool,
+    is_carrier: bool,
+    opp_has_ball: bool,
+    first_kick_done: bool,
+    // When carrying, prefer Clear.Carrier over MoveTo for facing (baseline:
+    // hold stays on C while MoveTo already tracks H).
+    face_aim: Option<Vec2>,
     dt: f32,
 ) {
     let max_speed = if sprint {
         mover.max_speed
+    } else if is_carrier || !opp_has_ball || !first_kick_done {
+        // Carriers, loose ball, and pre-first-kick press (Away closing on Home
+        // charge to flip Clear C→H): near cruise.
+        mover.max_speed * 0.95
     } else {
-        mover.max_speed * 0.7
+        // After first kick, closing an opponent carrier:
+        // Home press stays slow so Home doesn't sit on Away's −Z Clear lane.
+        // Away press stays nearer cruise so Away can reclaim around t≈2
+        // (real OppHas; sim was over-holding as Home).
+        let scale = if player.team == TeamId::Home {
+            // Fast enough to contest Away's first charge (~t=1.36 steal),
+            // still well below cruise so Away Clear −X lane stays open.
+            0.45
+        } else {
+            0.95
+        };
+        mover.max_speed * scale
     };
 
     let to = move_to - player.pos;
@@ -72,10 +96,43 @@ pub fn step_mover(
         return;
     }
 
-    // Facing follows move intent (same axis as hold/shoot in the real game).
-    player.facing = to.normalize();
+    // Facing: carriers track Clear when provided (not MoveTo). During charge
+    // warmup, facing is sticky — reject ~90° flips so C→H Clear does not yank
+    // Ball.Z down early. When warmup ends, snap onto current Clear (real
+    // held-ball Z crash ~t=0.35 with charge still 0).
+    let want_move = to.normalize();
+    let want_face = face_aim
+        .filter(|d| d.length_squared() > 1e-8)
+        .map(|d| d.normalize())
+        .unwrap_or(want_move);
+    let sticky = is_carrier && player.charge_warmup_left > 0.0;
+    let rate = if player.shot_charge > 0.85 {
+        18.0
+    } else if sticky {
+        if want_face.dot(player.facing) < 0.25 {
+            0.0
+        } else {
+            8.0
+        }
+    } else if is_carrier && player.shot_charge < 0.15 {
+        // Just left warmup: snap toward Clear H like real ~0.35.
+        14.0
+    } else if player.shot_charge > 0.5 {
+        10.0
+    } else {
+        8.0
+    };
+    if rate > 0.0 {
+        let blend = (rate * dt).min(1.0);
+        let mixed = player.facing + (want_face - player.facing) * blend;
+        player.facing = if mixed.length_squared() > 1e-8 {
+            mixed.normalize()
+        } else {
+            want_face
+        };
+    }
 
-    let desired = player.facing * max_speed;
+    let desired = want_move * max_speed;
     let delta = desired - player.vel;
     let max_delta = mover.accel * dt;
     if delta.length() <= max_delta {
@@ -91,10 +148,12 @@ pub fn step_mover(
 }
 
 /// AIA kickoff bases before `TeamMultiplier` (world XZ → our xy).
-/// Home uses tm=-1, Away tm=+1. Striker sits on center only when that team kicks off.
+/// Home uses tm=-1, Away tm=+1.
+/// Real DebugBuild=2 (Home kicking): T1 sample0 = (0,0) — AIA's Vector3Zero
+/// when `Is Team Kicking off`. Non-kicking striker uses ±(1,7) faceoff.
 fn aia_kickoff_base(slot: PlayerId, kicking_off: bool) -> Vec2 {
     match slot.0 {
-        // Striker
+        // Striker: Zero when kicking off (walk to ball from center).
         1 => {
             if kicking_off {
                 Vec2::ZERO
@@ -127,5 +186,18 @@ pub fn default_facing(team: TeamId) -> Vec2 {
         // Home attacks +X (Away goal), Away attacks −X (Home goal).
         TeamId::Home => Vec2::X,
         TeamId::Away => -Vec2::X,
+    }
+}
+
+/// Kickoff facing. Kicking striker starts looking along ±Z so the first hold
+/// places the ball at ~(0, ±1.65) like the baseline (not along attack +X).
+pub fn kickoff_facing(team: TeamId, slot: PlayerId, kickoff_team: TeamId) -> Vec2 {
+    if slot.0 == 1 && team == kickoff_team {
+        match team {
+            TeamId::Home => Vec2::Y,
+            TeamId::Away => -Vec2::Y,
+        }
+    } else {
+        default_facing(team)
     }
 }

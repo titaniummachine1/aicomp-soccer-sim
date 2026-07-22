@@ -25,6 +25,7 @@ mod tests {
                     facing: default_facing(team),
                     stamina: 1.0,
                     shot_charge: 0.0,
+                    charge_warmup_left: 0.0,
                 });
             }
         }

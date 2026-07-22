@@ -23,6 +23,8 @@ pub struct RawNode {
     pub sid: String,
     #[serde(default)]
     pub modifier: serde_json::Value,
+    #[serde(rename = "ownerFunctionSID", default)]
+    pub owner_function_sid: String,
     #[serde(rename = "serializablePorts", default)]
     pub ports: Vec<RawPort>,
 }
@@ -59,7 +61,15 @@ pub struct GraphNode {
     pub sid: String,
     /// Resolved modifier (dropdown label or raw constant string).
     pub modifier: String,
+    /// Empty = root graph; else CreateFunction sID that owns this body node.
+    pub owner_function_sid: String,
     pub ports: Vec<RawPort>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateFunctionDef {
+    pub sid: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +80,10 @@ pub struct TeamGraph {
     /// For each input port_sid, the output port_sid that feeds it.
     pub input_source: HashMap<String, String>,
     pub controllers: [Option<String>; 4],
+    /// Root-level SetVariable node sIDs (owner empty).
+    pub set_variables: Vec<String>,
+    /// Function name → CreateFunction definition.
+    pub create_functions: HashMap<String, CreateFunctionDef>,
     pub path: String,
 }
 
@@ -84,11 +98,25 @@ pub fn index_graph(raw: RawGraph, path: String) -> TeamGraph {
     let mut nodes = HashMap::new();
     let mut ports = HashMap::new();
     let mut controllers: [Option<String>; 4] = [None, None, None, None];
+    let mut set_variables = Vec::new();
+    let mut create_functions = HashMap::new();
 
     for n in raw.nodes {
         let modifier = normalize_modifier(&n.id, &n.modifier);
         if let Some(slot) = controller_slot(&n.id) {
             controllers[slot] = Some(n.sid.clone());
+        }
+        if n.id == "SetVariable" && n.owner_function_sid.is_empty() {
+            set_variables.push(n.sid.clone());
+        }
+        if n.id == "CreateFunction" {
+            create_functions.insert(
+                modifier.clone(),
+                CreateFunctionDef {
+                    sid: n.sid.clone(),
+                    name: modifier.clone(),
+                },
+            );
         }
         for p in &n.ports {
             ports.insert(
@@ -106,6 +134,7 @@ pub fn index_graph(raw: RawGraph, path: String) -> TeamGraph {
                 id: n.id,
                 sid: n.sid,
                 modifier,
+                owner_function_sid: n.owner_function_sid,
                 ports: n.ports,
             },
         );
@@ -132,6 +161,8 @@ pub fn index_graph(raw: RawGraph, path: String) -> TeamGraph {
         ports,
         input_source,
         controllers,
+        set_variables,
+        create_functions,
         path,
     }
 }

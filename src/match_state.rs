@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use crate::ball::Ball;
 use crate::brain::TeamId;
 use crate::params::SimParams;
-use crate::player::{default_facing, faceoff_world, Player};
+use crate::player::{faceoff_world, kickoff_facing, Player};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MatchPhase {
@@ -24,6 +24,19 @@ pub struct MatchState {
     pub kickoff_team: TeamId,
     pub opening_kickoff_team: TeamId,
     pub phase_timer: f32,
+    /// Receiving team stays outside the center circle until first release (or
+    /// ball leaves the ring). Real Away O3 skirts early; free entry let them
+    /// sit on the carrier C-lane or collapse midfield too soon.
+    pub kickoff_circle_lock: bool,
+    /// Suppress Away "Ball On Team Side" (defender chase) for the same window.
+    pub kickoff_suppress_away_team_side: bool,
+    /// True once someone has held the ball this kickoff (for release unlock).
+    pub kickoff_seen_carrier: bool,
+    /// Anchor for stale-ball whistle: ball must move ≥ threshold from this
+    /// point within [`SimParams::stale_ball_timeout_s`] or kickoff is reset.
+    pub stale_anchor: Vec2,
+    /// Seconds since the ball last moved past the stale distance threshold.
+    pub stale_idle_s: f32,
 }
 
 impl Default for MatchState {
@@ -49,6 +62,11 @@ impl MatchState {
             kickoff_team: opening,
             opening_kickoff_team: opening,
             phase_timer: 0.0,
+            kickoff_circle_lock: true,
+            kickoff_suppress_away_team_side: true,
+            kickoff_seen_carrier: false,
+            stale_anchor: Vec2::ZERO,
+            stale_idle_s: 0.0,
         }
     }
 
@@ -61,6 +79,30 @@ impl MatchState {
         self.phase = MatchPhase::GoalPause;
         self.phase_timer = 1.0;
         self.kickoff_team = scored_on;
+        self.kickoff_circle_lock = true;
+        self.kickoff_suppress_away_team_side = true;
+        self.kickoff_seen_carrier = false;
+        self.reset_stale_tracker(Vec2::ZERO);
+    }
+
+    /// Stale-ball whistle: no score change; kickoff flips to opposite of who
+    /// last received kickoff (Frida: 5s / 2.5m — see `stale_ball_*` params).
+    pub fn on_whistle(&mut self) {
+        self.kickoff_team = match self.kickoff_team {
+            TeamId::Home => TeamId::Away,
+            TeamId::Away => TeamId::Home,
+        };
+        self.phase = MatchPhase::GoalPause;
+        self.phase_timer = 1.0;
+        self.kickoff_circle_lock = true;
+        self.kickoff_suppress_away_team_side = true;
+        self.kickoff_seen_carrier = false;
+        self.reset_stale_tracker(Vec2::ZERO);
+    }
+
+    pub fn reset_stale_tracker(&mut self, anchor: Vec2) {
+        self.stale_anchor = anchor;
+        self.stale_idle_s = 0.0;
     }
 }
 
@@ -85,26 +127,29 @@ pub fn place_kickoff(ball: &mut Ball, players: &mut [Player], kickoff_team: Team
     for p in players.iter_mut() {
         p.pos = faceoff_world(p.team, p.id, kickoff_team);
         p.vel = Vec2::ZERO;
-        p.facing = default_facing(p.team);
+        p.facing = kickoff_facing(p.team, p.id, kickoff_team);
         p.shot_charge = 0.0;
+        p.charge_warmup_left = 0.0;
     }
+}
+
+/// Receiving team may not enter the kickoff circle during Kickoff phase only.
+/// After first touch they may enter; Away chase stays suppressed until release
+/// so O3 holds State0 through the interior (real path X≈5.5, Z→3).
+pub fn receiving_team_circle_locked(match_state: &MatchState) -> bool {
+    match_state.phase == MatchPhase::Kickoff
 }
 
 pub fn kickoff_control_allowed(
     team: TeamId,
-    player_pos: Vec2,
+    _player_pos: Vec2,
     match_state: &MatchState,
-    params: &SimParams,
+    _params: &SimParams,
 ) -> bool {
     match match_state.phase {
         MatchPhase::Play => true,
         MatchPhase::GoalPause => false,
-        MatchPhase::Kickoff => {
-            if team == match_state.kickoff_team {
-                true
-            } else {
-                player_pos.length() >= params.kickoff_circle_r
-            }
-        }
+        // Only the kicking-off team gets graph control until first touch / Play.
+        MatchPhase::Kickoff => team == match_state.kickoff_team,
     }
 }

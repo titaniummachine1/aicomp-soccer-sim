@@ -92,18 +92,55 @@
     "ground_slide_accel_mps2_timeplot": 5.95,
     "note": "Free-ball XZ predictor still ignores Y until airborne kicks are ported; use Coulomb a=5.95 on ground."
   },
-  "player_candidates": {
-    "status": "community_not_confirmed",
+    "player_candidates": {
+    "status": "frida_live_dump_2026-07-22",
     "model": "perfect_simple_movers",
+    "source_dump": "worldcupv0.5/_modding_dumps/soccer_live_constants.json + soccer_mover_stamina.json",
+    "walk_speed_mps": 7.0,
+    "sprint_speed_mps": 8.0,
+    "intercept_defaults_mps": { "max_speed": 8.0, "acceleration": 100.0 },
+    "minimum_move_delta_m": 0.25,
+    "body_radius_m": 0.5,
+    "hold_offset_m": 1.557,
+    "interact_radius_m": 1.75,
+    "tackle_range_m": 1.75,
+    "free_ball_pickup": "interact/tackle required",
+    "global_pickup_delay_after_shot_s": 0.125,
+    "global_pickup_delay_after_exchange_s": 0.25,
+    "shot_charge_warmup_s": 0.30,
+    "shot_charge_time_s": 0.38,
+    "shot_frida": {
+      "pickup_charge_delay_s": 0.3,
+      "max_charge_time_s": 2.0,
+      "charge_rate_per_s": 0.1,
+      "min_charge_for_shot": 0.1,
+      "shot_delay_s": 0.5,
+      "shot_max_strength": 15.0,
+      "shot_min_strength": 0.5,
+      "shot_max_lift": 3.0,
+      "note": "Sim uses warmup 0.30s + charge_time ~0.36-0.38s to reach shot_charge=1.0 (TimePlot 0→0.95 in ~0.665s incl warmup). maxChargeTime=2 and rate=0.1 are upstream fields; strength→m/s mapping vs TimePlot ~30 m/s kick still UNKNOWN."
+    },
+    "kickoff_frida": {
+      "circle_radius_m": 7.25,
+      "spawn_circle_margin_m": 0.5,
+      "delay_seconds": 1.0
+    },
+    "stale_ball_frida": {
+      "timeout_seconds": 5.0,
+      "distance_threshold_m": 2.5,
+      "note": "Wired: MatchWorld.tick_stale_ball — if ball moves <2.5m within 5s of Play, whistle resets kickoff to opposite team (no score)."
+    },
+    "stamina_frida": {
+      "max": 100.0,
+      "consume_rate": 0.15,
+      "regen_rate": 5.0,
+      "regen_delay_s": 1.0,
+      "tackle_regen_delay_s": 1.5,
+      "note": "Sim stamina is 0..1 normalized; tick_stamina still uses community 30s drain / 15s regen until per-second mapping is confirmed. See world.rs tick_stamina TODO."
+    },
     "stamina_drain_full_s": 30.0,
     "stamina_regen_full_s": 15.0,
-    "intercept_defaults_mps": { "max_speed": 4.5, "acceleration": 2.5 },
-    "body_radius_m": 0.5,
-    "hold_offset_m": 0.90637236,
-    "interact_radius_m": 1.75,
-    "free_ball_pickup": "interact/tackle required",
-    "global_pickup_delay_after_shot_s": 0.3,
-    "note": "No navmesh — empty pitch, AABB walk clamp, no player goal-entry for now. Interact radius CONFIRMED 1.75. body_radius only for clear-dir blockers / future post-sweep. Speeds still CANDIDATE."
+    "note": "Frida: walkSpeed=7 sprintSpeed=8 mover.acceleration=100 tackleRange=1.75. player_max_speed uses sprint 8. Pickup lockout after shot=0.125s (Ball.pickupDelayAfterShot); after exchange=0.25s (unused in sim). hold_offset 1.557m TimePlot-locked."
   },
   "bevy_impl_hints": [
     "Ball: Dynamic RigidBody, LockedAxes::ROTATION_LOCKED, sphere collider radius radius_world, friction/restitution as contacts above OR custom Coulomb slide force -accel*normalize(vel) while grounded",

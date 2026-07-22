@@ -1,99 +1,69 @@
-//! Default worker layout: render (main) + team A thread + team B thread.
+//! Default worker layout helpers: timed parallel team brains with a barrier.
 //!
-//! Physics/possession stay on the Bevy fixed-update (render/main) side.
-//! Each team brain evaluates its `TeamApi` snapshot on its own OS thread.
+//! Physics stays on the caller. Both teams must finish `think` before the tick
+//! advances — no partial / skipped brain results.
 
-use std::sync::mpsc;
-use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use crate::api::TeamApi;
-use crate::brain::{BrainOutput, ChaseBallBrain, TeamBrain, TeamId};
+use crate::brain::{BrainOutput, TeamBrain};
 
-enum TeamMsg {
-    Think(TeamApi),
-    Shutdown,
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ThinkTimings {
+    pub home: Duration,
+    pub away: Duration,
+    pub wall: Duration,
 }
 
-/// Persistent home/away brain workers. Main/render thread owns physics + draw.
-pub struct TeamWorkers {
-    home_tx: mpsc::Sender<TeamMsg>,
-    away_tx: mpsc::Sender<TeamMsg>,
-    home_rx: mpsc::Receiver<BrainOutput>,
-    away_rx: mpsc::Receiver<BrainOutput>,
-    home_join: Option<JoinHandle<()>>,
-    away_join: Option<JoinHandle<()>>,
-}
-
-impl TeamWorkers {
-    pub fn spawn() -> Self {
-        let (home_tx, home_in) = mpsc::channel::<TeamMsg>();
-        let (away_tx, away_in) = mpsc::channel::<TeamMsg>();
-        let (home_out_tx, home_rx) = mpsc::channel::<BrainOutput>();
-        let (away_out_tx, away_rx) = mpsc::channel::<BrainOutput>();
-
-        let home_join = thread::Builder::new()
-            .name("team-a-home".into())
-            .spawn(move || team_loop(TeamId::Home, home_in, home_out_tx))
-            .expect("spawn team-a");
-
-        let away_join = thread::Builder::new()
-            .name("team-b-away".into())
-            .spawn(move || team_loop(TeamId::Away, away_in, away_out_tx))
-            .expect("spawn team-b");
-
-        Self {
-            home_tx,
-            away_tx,
-            home_rx,
-            away_rx,
-            home_join: Some(home_join),
-            away_join: Some(away_join),
-        }
+impl ThinkTimings {
+    pub fn home_ms(self) -> f32 {
+        self.home.as_secs_f32() * 1000.0
     }
-
-    /// Dispatch both team brains in parallel; block until both finish this tick.
-    pub fn think_parallel(&self, home_api: TeamApi, away_api: TeamApi) -> (BrainOutput, BrainOutput) {
-        self.home_tx
-            .send(TeamMsg::Think(home_api))
-            .expect("team-a alive");
-        self.away_tx
-            .send(TeamMsg::Think(away_api))
-            .expect("team-b alive");
-        let home = self.home_rx.recv().expect("team-a result");
-        let away = self.away_rx.recv().expect("team-b result");
-        (home, away)
+    pub fn away_ms(self) -> f32 {
+        self.away.as_secs_f32() * 1000.0
     }
-}
-
-impl Drop for TeamWorkers {
-    fn drop(&mut self) {
-        let _ = self.home_tx.send(TeamMsg::Shutdown);
-        let _ = self.away_tx.send(TeamMsg::Shutdown);
-        if let Some(h) = self.home_join.take() {
-            let _ = h.join();
-        }
-        if let Some(h) = self.away_join.take() {
-            let _ = h.join();
+    pub fn wall_ms(self) -> f32 {
+        self.wall.as_secs_f32() * 1000.0
+    }
+    pub fn slowest_label(self) -> &'static str {
+        if self.home >= self.away {
+            "Home(A)"
+        } else {
+            "Away(B)"
         }
     }
 }
 
-fn team_loop(
-    team: TeamId,
-    rx: mpsc::Receiver<TeamMsg>,
-    tx: mpsc::Sender<BrainOutput>,
-) {
-    let mut brain = ChaseBallBrain;
-    while let Ok(msg) = rx.recv() {
-        match msg {
-            TeamMsg::Shutdown => break,
-            TeamMsg::Think(api) => {
-                debug_assert_eq!(api.team, team);
-                let out = brain.think(&api);
-                if tx.send(out).is_err() {
-                    break;
-                }
-            }
-        }
-    }
+/// Run both brains in parallel; block until **both** complete (tick barrier).
+pub fn think_barrier<H: TeamBrain + Send, A: TeamBrain + Send>(
+    home: &mut H,
+    away: &mut A,
+    home_api: TeamApi,
+    away_api: TeamApi,
+) -> (BrainOutput, BrainOutput, ThinkTimings) {
+    let wall0 = Instant::now();
+    let (home_out, home_dt, away_out, away_dt) = std::thread::scope(|scope| {
+        let home_h = scope.spawn(|| {
+            let t0 = Instant::now();
+            let out = home.think(&home_api);
+            (out, t0.elapsed())
+        });
+        let away_h = scope.spawn(|| {
+            let t0 = Instant::now();
+            let out = away.think(&away_api);
+            (out, t0.elapsed())
+        });
+        let (ho, hd) = home_h.join().expect("home think");
+        let (ao, ad) = away_h.join().expect("away think");
+        (ho, hd, ao, ad)
+    });
+    (
+        home_out,
+        away_out,
+        ThinkTimings {
+            home: home_dt,
+            away: away_dt,
+            wall: wall0.elapsed(),
+        },
+    )
 }

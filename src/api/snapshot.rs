@@ -3,7 +3,9 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 
-use super::clear::first_clear_dir;
+use super::clear::{
+    clear_dir_into_goal_mouth, clear_dir_toward_teammate, first_clear_dir,
+};
 use super::TeamApi;
 use crate::ball::Ball;
 use crate::brain::TeamId;
@@ -39,19 +41,35 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
 
     let mut bools = HashMap::new();
     bools.insert("Is Home Team", is_home);
+    bools.insert("Is Away Team", !is_home);
     bools.insert("Is Active Graph", true);
     bools.insert("Is Ball Loose", ball_loose);
     bools.insert("Team Has Ball", team_has_ball);
     bools.insert("Opponent Has Ball", opp_has_ball);
+    bools.insert(
+        "Is Kickoff",
+        world.match_state.phase == MatchPhase::Kickoff,
+    );
     bools.insert(
         "Is Team Kicking off",
         world.match_state.phase == MatchPhase::Kickoff
             && world.match_state.kickoff_team == team,
     );
     bools.insert(
+        "Is Opponent Kicking off",
+        world.match_state.phase == MatchPhase::Kickoff
+            && world.match_state.kickoff_team != team,
+    );
+    // While the receiving team is circle-locked after kickoff, treat Away's
+    // "Ball On Team Side" as false so Defender stays on State0 hold (x≈6+BallX)
+    // instead of chasing Ball onto the ring in the carrier's C-lane (that kept
+    // Clear=H through release and launched deep −Z kicks).
+    bools.insert(
         "Ball On Team Side",
         if is_home {
             world.ball.pos.x <= 0.0
+        } else if world.match_state.kickoff_suppress_away_team_side {
+            false
         } else {
             world.ball.pos.x >= 0.0
         },
@@ -85,11 +103,37 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
             let dist = (hold - world.ball.pos)
                 .length()
                 .min((p.pos - world.ball.pos).length());
-            bools.insert(label_near, dist <= params.interact_radius);
+            // Fat nearby during post-kick opponent reclaim window so Interact
+            // stays true out to the same reach as possession hot_opp_window.
+            let since_kick = if world.possession.kick_exclude_left > 0.0 {
+                (2.5 - world.possession.kick_exclude_left).clamp(0.0, 2.5)
+            } else {
+                999.0
+            };
+            let hot_near = !matches!(world.possession.kick_exclude_team, Some(t) if t == team)
+                && since_kick < 0.25;
+            let near_r = if hot_near {
+                params.interact_radius + 1.0
+            } else {
+                params.interact_radius
+            };
+            bools.insert(label_near, dist <= near_r);
         } else {
             bools.insert(label_near, false);
         }
-        bools.insert(label_closest, closest_teammate_to_ball(&team_players, world.ball) == Some(id));
+        let is_closest = closest_teammate_to_ball(&team_players, world.ball) == Some(id);
+        // During opening suppress, Away Defender chase also keys off Closest_P3
+        // (OR Ball On Team Side). Forcing P3 not-closest keeps State0 hold so O3
+        // doesn't walk onto the carrier C-lane (X dropping toward the ball).
+        let is_closest = if !is_home
+            && world.match_state.kickoff_suppress_away_team_side
+            && id.0 == 3
+        {
+            false
+        } else {
+            is_closest
+        };
+        bools.insert(label_closest, is_closest);
     }
 
     let mut floats = HashMap::new();
@@ -230,6 +274,18 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
     vectors.insert("Upper Midfield", Some(Vec2::new(0.0, params.z_max * 0.5)));
     vectors.insert("Lower Midfield", Some(Vec2::new(0.0, -params.z_max * 0.5)));
 
+    // ~0.75 m (body*1.5): real Clear stays C until ~t=0.25; *1.75 flipped ~0.20.
+    let blocker_r = params.body_radius * 1.5;
+    let range = 12.0;
+    let all_others = |except: Option<(TeamId, u8)>| -> Vec<Vec2> {
+        world
+            .players
+            .iter()
+            .filter(|p| except != Some((p.team, p.id.0)))
+            .map(|p| p.pos)
+            .collect()
+    };
+
     for id in PlayerId::ALL {
         let me = team_players.iter().find(|p| p.id == id);
         let from_ball = match id.0 {
@@ -258,9 +314,36 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
         };
 
         if let Some(p) = me {
+            let blockers = all_others(Some((team, id.0)));
             vectors.insert(from_ball, Some(dir(p.pos, world.ball.pos)));
-            vectors.insert(from_opp_goal, Some(dir(p.pos, opp_goal)));
-            vectors.insert(from_team_goal, Some(dir(p.pos, team_goal)));
+            // Null unless an 8-way lane into the goal mouth is clear.
+            // Goal-dir uses interact-scale probe (not slim clear-dir body*1.1):
+            // midfield E often misses opponents by <1m with slim r → OppGoal
+            // Present → Ready at charge≈0.5 → early dump. Real OppGoal null
+            // ~90% until near box (AIA: null if no clear sensor dir of goal).
+            let goal_blocker_r = params.interact_radius;
+            vectors.insert(
+                from_opp_goal,
+                clear_dir_into_goal_mouth(
+                    p.pos,
+                    !is_home, // toward Away goal when we are Home
+                    &blockers,
+                    goal_blocker_r,
+                    params.goal_line_x,
+                    params.goal_half_width,
+                ),
+            );
+            vectors.insert(
+                from_team_goal,
+                clear_dir_into_goal_mouth(
+                    p.pos,
+                    is_home, // toward own (Home) goal when we are Home
+                    &blockers,
+                    goal_blocker_r,
+                    params.goal_line_x,
+                    params.goal_half_width,
+                ),
+            );
             vectors.insert(
                 from_teammate,
                 nearest_teammate_pos(id, &team_players).map(|t| dir(p.pos, t)),
@@ -274,17 +357,6 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
     }
 
     // Clear directions
-    let blocker_r = params.body_radius * 1.1;
-    let range = 12.0;
-    let all_others = |except: Option<(TeamId, u8)>| -> Vec<Vec2> {
-        world
-            .players
-            .iter()
-            .filter(|p| except != Some((p.team, p.id.0)))
-            .map(|p| p.pos)
-            .collect()
-    };
-
     for id in PlayerId::ALL {
         let label = match id.0 {
             1 => "Clear direction from Teammate 1",
@@ -380,14 +452,33 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
             _ => "Direction of clear teammate from Opponent 4",
         };
         let from_t = team_players.iter().find(|p| p.id == id).map(|p| p.pos);
+        let mate_positions: Vec<Vec2> = team_players
+            .iter()
+            .filter(|p| p.id != id)
+            .map(|p| p.pos)
+            .collect();
+        // Opponents only here; clear_dir_toward_teammate also treats *other*
+        // mates as blockers (not the target mate).
+        let opp_blockers: Vec<Vec2> = opp_players.iter().map(|p| p.pos).collect();
+        let mate_blocker_r = params.body_radius * 2.8;
         vectors.insert(
             t_label,
-            from_t.and_then(|o| open_team.map(|t| dir(o, t))),
+            from_t.and_then(|o| {
+                clear_dir_toward_teammate(o, &mate_positions, &opp_blockers, mate_blocker_r)
+            }),
         );
         let from_o = opp_players.iter().find(|p| p.id == id).map(|p| p.pos);
+        let their_mates: Vec<Vec2> = opp_players
+            .iter()
+            .filter(|p| p.id != id)
+            .map(|p| p.pos)
+            .collect();
+        let our_blockers: Vec<Vec2> = team_players.iter().map(|p| p.pos).collect();
         vectors.insert(
             o_label,
-            from_o.and_then(|o| open_team.map(|t| dir(o, t))),
+            from_o.and_then(|o| {
+                clear_dir_toward_teammate(o, &their_mates, &our_blockers, mate_blocker_r)
+            }),
         );
     }
 

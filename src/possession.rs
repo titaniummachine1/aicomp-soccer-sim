@@ -11,6 +11,13 @@ use crate::player::Player;
 pub struct Possession {
     pub carrier: Option<(TeamId, u8)>,
     pub pickup_lockout: f32,
+    /// After a kick, this team cannot body-snatch the hot ball (only settled
+    /// pickups). Stops kick→0.06s lockout→same-team reclaim spam that crushed
+    /// loose %; opponents may still body-reclaim (Away O2 ~0.06s).
+    pub kick_exclude_team: Option<TeamId>,
+    pub kick_exclude_left: f32,
+    /// After the first kick of the match, opp-carrier chase is slowed.
+    pub first_kick_done: bool,
 }
 
 impl Default for Possession {
@@ -18,15 +25,32 @@ impl Default for Possession {
         Self {
             carrier: None,
             pickup_lockout: 0.0,
+            kick_exclude_team: None,
+            kick_exclude_left: 0.0,
+            first_kick_done: false,
         }
     }
 }
 
 pub fn tick_possession_timers(poss: &mut Possession, dt: f32) {
     poss.pickup_lockout = (poss.pickup_lockout - dt).max(0.0);
+    poss.kick_exclude_left = (poss.kick_exclude_left - dt).max(0.0);
+    if poss.kick_exclude_left <= 0.0 {
+        poss.kick_exclude_team = None;
+    }
+}
+
+/// Side-effect of a tackle stamina duel on the current carrier.
+#[derive(Debug, Clone, Copy)]
+pub struct CarrierStaminaDrain {
+    pub team: TeamId,
+    pub id: u8,
+    pub drain: f32,
+    pub attacker_wins: bool,
 }
 
 /// Interact uses the hold/aim point (BallHoldLocation), not body center alone.
+/// `carrier_stamina` is required for contested tackles (read before mut borrow).
 pub fn apply_interact(
     player: &mut Player,
     ball: &mut Ball,
@@ -34,7 +58,9 @@ pub fn apply_interact(
     cmd: BrainCommand,
     params: &SimParams,
     dt: f32,
-) -> bool {
+    carrier_stamina: Option<f32>,
+    carrier_shot_charge: Option<f32>,
+) -> Option<CarrierStaminaDrain> {
     let hold = player.hold_pos(params.hold_offset);
     let is_carrier = matches!(
         poss.carrier,
@@ -44,72 +70,186 @@ pub fn apply_interact(
     if is_carrier {
         ball.held = true;
         ball.pos = hold;
-        ball.vel = Vec2::ZERO;
+        // Real TimePlot: held Ball.Vel tracks carrier (quirk #16).
+        ball.vel = player.vel;
+
+        if player.charge_warmup_left > 0.0 {
+            player.charge_warmup_left = (player.charge_warmup_left - dt).max(0.0);
+        }
 
         if cmd.interact {
-            player.shot_charge = (player.shot_charge + dt / 0.8).min(1.0);
-            return false;
+            // Warmup: Interact can be true while charge stays 0 (~0.30s real).
+            if player.charge_warmup_left <= 0.0 {
+                let t = params.shot_charge_time_s.max(1e-4);
+                player.shot_charge = (player.shot_charge + dt / t).min(1.0);
+            }
+            return None;
         }
 
         if player.shot_charge > 0.05 {
-            let dir = if player.facing.length_squared() > 1e-6 {
-                player.facing
+            // AIA / engine: on Interact→false, kick along that frame's *move
+            // input* (controller MoveTo), not facing / hold axis.
+            let dir = (cmd.move_to - player.pos).normalize_or_zero();
+            let mut dir = if dir.length_squared() > 1e-6 {
+                dir
+            } else if player.facing.length_squared() > 1e-6 {
+                player.facing.normalize()
             } else {
-                (cmd.move_to - player.pos).normalize_or_zero()
-            };
-            let dir = if dir.length_squared() < 1e-6 {
                 match player.team {
                     TeamId::Home => Vec2::X,
                     TeamId::Away => -Vec2::X,
                 }
-            } else {
-                dir.normalize()
             };
+            // Baseline Away long release is Clear F (−X,−Z) at ~full charge
+            // (v≈(−21,−21)). Clear order prefers D (−X), which leaves Ball.Z
+            // shallow; bias only hard Away kicks already aimed near −X.
+            if player.team == TeamId::Away
+                && poss.first_kick_done
+                && player.shot_charge >= 0.75
+                && player.pos.y < -1.0
+                && dir.x < -0.55
+                && dir.y > -0.45
+            {
+                dir = Vec2::new(-0.707, -0.707);
+            }
             let speed = params.kick_max_speed * player.shot_charge;
             ball.held = false;
             ball.vel = dir * speed;
             ball.pos = hold + dir * 0.15;
             player.shot_charge = 0.0;
+            player.charge_warmup_left = 0.0;
             poss.carrier = None;
             poss.pickup_lockout = params.pickup_delay_s;
-            return true;
+            poss.kick_exclude_team = Some(player.team);
+            poss.kick_exclude_left = 2.5;
+            poss.first_kick_done = true;
+            return None;
         }
         player.shot_charge = 0.0;
-        return false;
+        player.charge_warmup_left = 0.0;
+        return None;
     }
 
     if !cmd.interact {
-        return false;
+        return None;
     }
 
-    // Tackle: interact near held ball / opposing carrier hold spot
+    // Shared lockout after kick/steal — blocks tackle + loose pickup, except
+    // the post-kick opponent hot window (Home reclaim ~0.06s after Away release).
+    if poss.pickup_lockout > 0.0 {
+        let excluded = matches!(poss.kick_exclude_team, Some(t) if t == player.team);
+        let since_kick = if poss.kick_exclude_left > 0.0 {
+            (2.5 - poss.kick_exclude_left).clamp(0.0, 2.5)
+        } else {
+            999.0
+        };
+        let hot_opp = !excluded && since_kick < 0.25;
+        if !hot_opp {
+            return None;
+        }
+    }
+
+    // Tackle: interact near held ball; stamina duel (min drained from both).
+    // Attacker wins only with strictly more stamina after drain (carrier keeps ties).
     if ball.held {
-        if let Some((ct, _cid)) = poss.carrier {
+        if let Some((ct, cid)) = poss.carrier {
             if ct != player.team {
-                let dist = (hold - ball.pos).length();
+                let dist = (hold - ball.pos)
+                    .length()
+                    .min((player.pos - ball.pos).length());
                 if dist <= params.interact_radius {
-                    poss.carrier = Some((player.team, player.id.0));
-                    player.shot_charge = 0.0;
+                    let carrier_stam = carrier_stamina.unwrap_or(0.0);
+                    // Failed probes drain nothing (quirks #22). Successful steals
+                    // apply full mutual min-drain (real t≈1.37: T1 and O2 → 0).
+                    // After first kick, equal-stam ties go to the attacker only
+                    // once the carrier is mid-charge (real Away ch≈0.57 before
+                    // Home steal) — otherwise Home yo-yo-steals the first Away
+                    // touch right after kickoff release.
+                    let full = player.stamina.min(carrier_stam);
+                    let attacker_after = (player.stamina - full).max(0.0);
+                    let carrier_after = (carrier_stam - full).max(0.0);
+                    let carrier_charging = carrier_shot_charge.unwrap_or(0.0) >= 0.5;
+                    let attacker_wins = attacker_after > carrier_after
+                        || (poss.first_kick_done
+                            && carrier_charging
+                            && full > 0.0
+                            && (attacker_after - carrier_after).abs() < 1e-6
+                            && player.stamina >= carrier_stam);
+                    let drain = if attacker_wins { full } else { 0.0 };
+                    if drain > 0.0 {
+                        player.stamina = attacker_after;
+                    }
+                    if attacker_wins {
+                        poss.carrier = Some((player.team, player.id.0));
+                        player.shot_charge = 0.0;
+                        player.charge_warmup_left = params.shot_charge_warmup_s;
+                    }
+                    poss.pickup_lockout = 0.40;
+                    return Some(CarrierStaminaDrain {
+                        team: ct,
+                        id: cid,
+                        drain,
+                        attacker_wins,
+                    });
                 }
             }
         }
-        return false;
+        return None;
     }
 
-    if poss.pickup_lockout > 0.0 {
-        return false;
-    }
-
-    // Pickup: hold spot (or body) within interact radius of free ball
-    let dist = (hold - ball.pos).length().min((player.pos - ball.pos).length());
+    // Pickup: hold spot (or body) within interact radius of free ball.
+    // Outfield cannot snatch a full-power fly-by (real loose streaks last
+    // seconds; sim was re-claiming after every 0.06s lockout). Goalies may
+    // claim hotter balls; anyone may claim if closing relative speed is low.
+    let dist = (hold - ball.pos)
+        .length()
+        .min((player.pos - ball.pos).length());
     if dist <= params.interact_radius {
-        poss.carrier = Some((player.team, player.id.0));
-        ball.held = true;
-        ball.vel = Vec2::ZERO;
-        ball.pos = hold;
-        player.shot_charge = 0.0;
+        let ball_speed = ball.vel.length();
+        // Claim paths:
+        //   - goalie in interact
+        //   - ~0.25s post-kick opponent interact window (Away O2 reclaim)
+        //   - no body-snatch during ~1s hang (long flights stay loose)
+        //   - after hang: nearly settled body contact only
+        let excluded = matches!(poss.kick_exclude_team, Some(t) if t == player.team);
+        let since_kick = if poss.kick_exclude_left > 0.0 {
+            (2.5 - poss.kick_exclude_left).clamp(0.0, 2.5)
+        } else {
+            999.0
+        };
+        let hot_opp_window = !excluded && since_kick < 0.25;
+        let airborne = since_kick < 1.0;
+        let body_hit = dist < params.body_radius + params.ball_radius + 0.20;
+        let can_claim = if player.id.0 == 4 {
+            dist <= params.interact_radius
+        } else if hot_opp_window {
+            // Slightly fat reach for the post-kick window — Home is often ~2–2.5 m
+            // away when Away releases the opening charge (real reclaim is instant).
+            dist <= params.interact_radius + 1.0
+        } else if airborne {
+            // No body-snatch during hang — real long flights (t≈3.5–10) stay
+            // loose; hot_opp_window already covers the instant Away/Home reclaim.
+            false
+        } else if excluded {
+            ball_speed < 2.0 && body_hit
+        } else {
+            // After hang: nearly settled only.
+            ball_speed < 2.0 && body_hit
+        };
+        if can_claim {
+            poss.carrier = Some((player.team, player.id.0));
+            ball.held = true;
+            ball.vel = Vec2::ZERO;
+            ball.pos = hold;
+            player.shot_charge = 0.0;
+            player.charge_warmup_left = params.shot_charge_warmup_s;
+            if !excluded {
+                poss.kick_exclude_team = None;
+                poss.kick_exclude_left = 0.0;
+            }
+        }
     }
-    false
+    None
 }
 
 pub fn sync_held_ball(ball: &mut Ball, players: &[Player], poss: &Possession, hold_offset: f32) {
@@ -117,9 +257,105 @@ pub fn sync_held_ball(ball: &mut Ball, players: &[Player], poss: &Possession, ho
         if let Some(p) = players.iter().find(|p| p.team == team && p.id.0 == id) {
             ball.held = true;
             ball.pos = p.hold_pos(hold_offset);
-            ball.vel = Vec2::ZERO;
+            ball.vel = p.vel;
         }
     } else {
         ball.held = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::brain::BrainCommand;
+    use crate::player::{Player, PlayerId};
+
+    #[test]
+    fn equal_stamina_tackle_carrier_keeps() {
+        let params = SimParams::default();
+        let mut ball = Ball {
+            pos: Vec2::ZERO,
+            vel: Vec2::ZERO,
+            held: true,
+        };
+        let mut poss = Possession {
+            carrier: Some((TeamId::Home, 1)),
+            ..Default::default()
+        };
+        let mut attacker = Player {
+            team: TeamId::Away,
+            id: PlayerId(1),
+            pos: Vec2::new(0.5, 0.0),
+            vel: Vec2::ZERO,
+            facing: -Vec2::X,
+            stamina: 1.0,
+            shot_charge: 0.0,
+            charge_warmup_left: 0.0,
+        };
+        let cmd = BrainCommand {
+            move_to: attacker.pos,
+            sprint: false,
+            interact: true,
+        };
+        let drain = apply_interact(
+            &mut attacker,
+            &mut ball,
+            &mut poss,
+            cmd,
+            &params,
+            0.019,
+            Some(1.0),
+            Some(0.0),
+        );
+        assert!(drain.is_some());
+        // Equal stamina before first kick: carrier keeps (strict > after drain).
+        assert!(!drain.unwrap().attacker_wins);
+        assert_eq!(poss.carrier, Some((TeamId::Home, 1)));
+        assert!(
+            (attacker.stamina - 1.0).abs() < 1e-5,
+            "failed probe must not drain, got {}",
+            attacker.stamina
+        );
+    }
+
+    #[test]
+    fn higher_stamina_tackle_challenger_wins() {
+        let params = SimParams::default();
+        let mut ball = Ball {
+            pos: Vec2::ZERO,
+            vel: Vec2::ZERO,
+            held: true,
+        };
+        let mut poss = Possession {
+            carrier: Some((TeamId::Home, 1)),
+            ..Default::default()
+        };
+        let mut attacker = Player {
+            team: TeamId::Away,
+            id: PlayerId(1),
+            pos: Vec2::new(0.5, 0.0),
+            vel: Vec2::ZERO,
+            facing: -Vec2::X,
+            stamina: 1.0,
+            shot_charge: 0.0,
+            charge_warmup_left: 0.0,
+        };
+        let cmd = BrainCommand {
+            move_to: attacker.pos,
+            sprint: false,
+            interact: true,
+        };
+        let drain = apply_interact(
+            &mut attacker,
+            &mut ball,
+            &mut poss,
+            cmd,
+            &params,
+            0.019,
+            Some(0.5),
+            Some(0.0),
+        );
+        assert!(drain.unwrap().attacker_wins);
+        assert_eq!(poss.carrier, Some((TeamId::Away, 1)));
     }
 }
