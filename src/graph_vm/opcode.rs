@@ -56,6 +56,8 @@ pub enum OpCode {
     Nor,
     Nand,
     ScaleAddVec,
+    /// Runtime Keypress(modifier) — not const-folded (viewer keyboard / headless false).
+    Keypress,
 }
 
 /// Effect class for CSE / fusion / movement barriers.
@@ -85,7 +87,7 @@ impl OpCode {
             Eq | Ne | Lt | Gt | Le | Ge | And | Or | Not | Nor | Nand => OpEffect::Pure,
             ConstructVec | SplitVec | AddVec | SubVec | ScaleVec | ScaleAddVec | Normalize
             | Magnitude | Distance | Dot | Select | Move | Operation | IsNull => OpEffect::Pure,
-            LoadApi | LoadVar => OpEffect::ReadOnly,
+            LoadApi | LoadVar | Keypress => OpEffect::ReadOnly,
             StoreVar => OpEffect::Write,
             Call | Return => OpEffect::Write,
             EmitController | Debug | TimePlot | OpaqueEffect => OpEffect::External,

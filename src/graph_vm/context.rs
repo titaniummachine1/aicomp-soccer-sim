@@ -15,16 +15,16 @@ pub struct VariableId(pub u16);
 #[derive(Debug, Clone)]
 pub struct ApiSnapshot {
     pub api: Arc<TeamApi>,
-    pub slot_labels: Arc<[String]>,
     pub slot_kinds: Arc<[ApiKind]>,
+    pub slot_dense_ids: Arc<[u16]>,
 }
 
 impl ApiSnapshot {
     pub fn from_table(api: TeamApi, table: &ApiSlotTable) -> Self {
         Self {
             api: Arc::new(api),
-            slot_labels: Arc::from(table.labels.clone()),
             slot_kinds: Arc::from(table.kinds.clone()),
+            slot_dense_ids: Arc::from(table.dense_ids.clone()),
         }
     }
 
@@ -32,17 +32,17 @@ impl ApiSnapshot {
         let Some(idx) = slot.checked_sub(1).map(usize::from) else {
             return VmValue::Null;
         };
-        let label = match self.slot_labels.get(idx) {
-            Some(l) => l.as_str(),
-            None => return VmValue::Null,
+        let dense = match self.slot_dense_ids.get(idx).copied() {
+            Some(id) if id != crate::api::UNKNOWN_ID => id,
+            _ => return VmValue::Null,
         };
         match self.slot_kinds.get(idx).copied().unwrap_or(ApiKind::Float) {
-            ApiKind::Bool => VmValue::Bool(self.api.get_bool(label).unwrap_or(false)),
-            ApiKind::Float => VmValue::Float(self.api.get_float(label).unwrap_or(0.0)),
+            ApiKind::Bool => VmValue::Bool(self.api.get_bool_id(dense).unwrap_or(false)),
+            ApiKind::Float => VmValue::Float(self.api.get_float_id(dense).unwrap_or(0.0)),
             ApiKind::Transform => {
-                VmValue::Vector(self.api.get_transform(label).unwrap_or_default())
+                VmValue::Vector(self.api.get_transform_id(dense).unwrap_or_default())
             }
-            ApiKind::Vector3 => match self.api.get_vector3(label) {
+            ApiKind::Vector3 => match self.api.get_vector_id(dense) {
                 Some(Some(v)) => VmValue::Vector(v),
                 _ => VmValue::Null,
             },
@@ -99,8 +99,8 @@ impl ExecutionContext {
             state,
             api: ApiSnapshot {
                 api: Arc::new(api),
-                slot_labels: Arc::from([]),
                 slot_kinds: Arc::from([]),
+                slot_dense_ids: Arc::from([]),
             },
             output: BrainOutput::default(),
             trace: None,

@@ -24,6 +24,7 @@ use aicomp_soccer_sim::brain::{
 };
 use aicomp_soccer_sim::graph::load_team_graph;
 use aicomp_soccer_sim::graph_vm::RuntimeBrain;
+use aicomp_soccer_sim::keypress;
 use aicomp_soccer_sim::params::{default_params_path, SimParams};
 use aicomp_soccer_sim::player::PlayerId;
 use aicomp_soccer_sim::probe_brains::{Test1Brain, Test2Brain};
@@ -1343,11 +1344,20 @@ fn step_locked_tick(
     tick0.elapsed().as_secs_f32() * 1000.0
 }
 
+fn sync_keypress_from_bevy(keyboard: &ButtonInput<KeyCode>) {
+    let pressed: Vec<&'static str> = keyboard
+        .get_pressed()
+        .filter_map(|code| keypress::bevy_key_name(*code))
+        .collect();
+    keypress::set_pressed(pressed);
+}
+
 fn sim_tick_barrier(
     time: Res<Time>,
     paused: Res<SimPaused>,
     fast: Res<SimFast>,
     timescale: Res<SimTimeScale>,
+    keyboard: Res<ButtonInput<KeyCode>>,
     mut viewer: ResMut<ViewerWorld>,
     mut clock: ResMut<TickClock>,
     mut interp: ResMut<InterpState>,
@@ -1361,6 +1371,9 @@ fn sim_tick_barrier(
         clock.backlog_ticks = 0.0;
         return;
     }
+
+    // Feed Unity Keypress nodes before brains think (WASD / sprint / interact).
+    sync_keypress_from_bevy(&keyboard);
 
     clock.ticks_this_frame = 0;
 

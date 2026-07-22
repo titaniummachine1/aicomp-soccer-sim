@@ -142,20 +142,23 @@ impl TimePlotRecorder {
             t,
         );
 
-        // SoccerGet bools / floats (AIA_Debug In.* naming).
-        for (label, v) in &home_api.bools {
+        // SoccerGet bools / floats (AIA_Debug In.* naming) — dense catalogs.
+        use crate::api::{GET_BOOL, GET_FLOAT, GET_FLOAT_FIELD_MARKS};
+        for label in GET_BOOL {
+            let v = home_api.get_bool(label).unwrap_or(false);
             let safe = label.replace(' ', "_");
             push_f(
                 self,
                 &format!("In.Bool.{safe}"),
                 "#FFA500",
-                if *v { 1.0 } else { 0.0 },
+                if v { 1.0 } else { 0.0 },
                 t,
             );
         }
-        for (label, v) in &home_api.floats {
+        for label in GET_FLOAT.iter().chain(GET_FLOAT_FIELD_MARKS.iter()) {
+            let v = home_api.get_float(label).unwrap_or(0.0);
             let safe = label.replace(' ', "_");
-            push_f(self, &format!("In.Float.{safe}"), "#FFA500", *v, t);
+            push_f(self, &format!("In.Float.{safe}"), "#FFA500", v, t);
         }
 
         // Aim.* mirrors AIA_Debug (Present + XZ) for clear/goal dirs.

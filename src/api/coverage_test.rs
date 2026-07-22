@@ -50,19 +50,28 @@ mod tests {
         let api = build_team_api(TeamId::Home, &sensors);
 
         for label in GET_BOOL {
-            assert!(api.bools.contains_key(label), "missing bool {label}");
+            assert!(
+                api.get_bool(label).is_some(),
+                "missing bool {label}"
+            );
         }
         for label in GET_FLOAT {
-            assert!(api.floats.contains_key(label), "missing float {label}");
+            assert!(
+                api.get_float(label).is_some(),
+                "missing float {label}"
+            );
         }
         for label in GET_TRANSFORM {
             assert!(
-                api.transforms.contains_key(label),
+                api.get_transform(label).is_some(),
                 "missing transform {label}"
             );
         }
         for label in GET_VECTOR3 {
-            assert!(api.vectors.contains_key(label), "missing vector3 {label}");
+            assert!(
+                api.get_vector3(label).is_some(),
+                "missing vector3 {label}"
+            );
         }
     }
 

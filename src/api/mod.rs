@@ -5,8 +5,12 @@
 //! Positions are pitch-plane Vec2 (x, z). Unity Y is unused (visual-only).
 //!
 //! Null Vector3 → `None` (same as AIComp null).
+//!
+//! RuntimeBrain LoadApi uses dense `u16` catalog ids (see [`dense`]), not
+//! per-op string HashMap lookups.
 
 mod clear;
+mod dense;
 mod labels;
 mod snapshot;
 
@@ -14,8 +18,11 @@ mod snapshot;
 mod coverage_test;
 
 pub use clear::{
-    first_clear_dir, CLEAR_ORDER_AWAY, CLEAR_ORDER_HOME, SensorDir,
+    first_clear_dir, hit_tags, CLEAR_ORDER_AWAY, CLEAR_ORDER_HOME, SensorDir,
     SPHERECAST_DISTANCE, SPHERECAST_RADIUS,
+};
+pub use dense::{
+    bool_index, float_index, transform_index, vector_index, DenseTeamApi, UNKNOWN_ID,
 };
 pub use labels::*;
 pub use snapshot::{build_team_api, WorldSensors};
@@ -25,35 +32,8 @@ use bevy::prelude::*;
 use crate::brain::{BrainCommand, BrainOutput, TeamId};
 use crate::player::PlayerId;
 
-/// One team's view of the match — what a loaded `.txt` graph would read.
-#[derive(Debug, Clone)]
-pub struct TeamApi {
-    pub team: TeamId,
-    pub bools: std::collections::HashMap<&'static str, bool>,
-    pub floats: std::collections::HashMap<&'static str, f32>,
-    /// Transforms as pitch positions (x, z). Always present for known labels.
-    pub transforms: std::collections::HashMap<&'static str, Vec2>,
-    /// Vector3 getters; `None` = AIComp null.
-    pub vectors: std::collections::HashMap<&'static str, Option<Vec2>>,
-}
-
-impl TeamApi {
-    pub fn get_bool(&self, label: &str) -> Option<bool> {
-        self.bools.get(label).copied()
-    }
-
-    pub fn get_float(&self, label: &str) -> Option<f32> {
-        self.floats.get(label).copied()
-    }
-
-    pub fn get_transform(&self, label: &str) -> Option<Vec2> {
-        self.transforms.get(label).copied()
-    }
-
-    pub fn get_vector3(&self, label: &str) -> Option<Option<Vec2>> {
-        self.vectors.get(label).copied()
-    }
-}
+/// One team's view of the match — dense SoccerGet catalogs (int-indexed).
+pub type TeamApi = DenseTeamApi;
 
 /// Controller outputs for players 1–4 (graph write side).
 #[derive(Debug, Clone, Default)]

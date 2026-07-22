@@ -171,8 +171,10 @@ Locomotion is **controller-driven**, not free Coulomb slide like the ball. Commu
 - `SoccerPlayerSensors` — 8 spherecasts **A–H** @ **45°** around a player
   (AIA: radius **0.25**, distance **20**). Node **Debug** draws those rays
   (green clear / red hit) — that overlay is the sensors, not a separate cast.
-- “Clear direction …” Vector3 getters: first unobstructed direction in
-  attack-priority order, or null.
+- HitInfo String tags: `Ball`, `HomePlayer1..4` / `AwayPlayer1..4`, `Boundary`,
+  `HomeGoal` / `AwayGoal`, `HomeGoalPost` / `AwayGoalPost`.
+- Vector3 “directional” SoccerGets (AIA tip): walk the 8 casts in attack-priority
+  order; return first unobstructed view of the option, else **null**.
 
 | Side | Order                  |
 | ---- | ---------------------- |

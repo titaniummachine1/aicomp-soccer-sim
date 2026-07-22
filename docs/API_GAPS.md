@@ -15,18 +15,25 @@ them as Null today (except controllers, which are **write-only** sinks).
 
 | Node | Used in saves? | Notes / how to infer |
 | ---- | -------------- | -------------------- |
-| **Spherecast** | yes (AIA ×1) | **LOCKED** AIA: Float radius **0.25**, distance **20** → shared into Sensors1..4. Unity SphereCast shape. |
-| **SoccerPlayerSensors1..4** | yes (AIA ×1 each) | 8× casts A–H → RaycastHit. Debug: green=clear, red=hit. Clear-dir order in game-model §5. |
-| **HitInfo** | rare / via sensors | **LOCKED** = Unity `RaycastHit` split: Bool hit?, Float **distance** (`∞` if miss — AIComp), String **collider.tag**. Assume default Unity `Physics.SphereCast` hit rules (players/walls/ball = tagged colliders). |
+| **Spherecast** | yes (AIA ×1) | **LOCKED** AIA: Float radius **0.25**, distance **20** → shared into Sensors1..4. Unity SphereCast shape. Still Null in VM — clear-dirs approximated. |
+| **SoccerPlayerSensors1..4** | yes (AIA ×1 each) | 8× casts A–H → RaycastHit. Debug: green=clear, red=hit. Clear-dir order in game-model §5. Still Null in VM. |
+| **HitInfo** | rare / via sensors | **LOCKED** tags/ports; still Null in VM. |
 | **ConstructSoccerProperties** | yes (faceoff) | Faceoff Vector31–34 + Country. Match setup, not per-tick brain I/O. |
-| **Country** | yes (w/ Construct) | Team/country pick for ConstructSoccerProperties. |
-| **Color** | yes (debug draw) | Visual only; Null OK for headless. |
-| **Stat** | ? | Catalog stub; purpose unknown. |
-| **Keypress** | yes (some graphs) | Falls through catch-all Null. Keyboard gate for debug bots. |
-| **Debug / DebugDrawDisc / DebugDrawLine / TimePlot / Region** | yes | Side effects / viz. Null as values is OK; TimePlot recording is separate (`TimePlotRecorder`). |
+| **Stat** | no (other sims) | Survival/Parking uniform token — not in Soccer Legia. Ignore / Null. |
+| **Country** | yes (w/ Construct) | Outputs selected country (dropdown). Faceoff-only with ConstructSoccerProperties. |
+| **Keypress** | some graphs | **Wired** → always `false` in sim (no keyboard in headless/AI). |
 
 **SoccerController1..4** — not blank for gameplay: graph **writes** moveTo/sprint/interact.
 Reading them as values yields Null (correct).
+
+**Viz / org (no gameplay value):**
+
+| Node | Status |
+| ---- | ------ |
+| **Color** | **Wired** as non-null constant (modifier name). Feeds TimePlot/DebugDraw. |
+| **Region** | No ports — org-only; Null OK. |
+| **Debug / DebugDraw*** / **TimePlot** | Side effects only (no outs). Null as values OK. Debug = “Displays the real-time value of the output connection” (Any1). TimePlot: name/color/icon/value + optional min/max; F1. |
+| **Custom Function** | Calls Construct Custom Function **by name** (up to 4 Any params → Return). Sim already resolves CreateFunction by modifier name at compile. |
 
 ---
 

@@ -8,7 +8,50 @@ Evidence baseline: `timeplot_2026-07-22_05-01-57.json` (Home=AIA_Debug build 2,
 Away=AIA, ~23s, no duplicate channels).
 
 Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic ·
-`CONFIRMED` = measured in TimePlot · `SUSPECTED` = inferred from graph + plots.
+`CONFIRMED` = measured in TimePlot · `SUSPECTED` = inferred from graph + plots ·
+`AIA-TIP` = author / Discord tip (treat as locked unless TimePlot contradicts).
+
+---
+
+## AIA author tips (LOCKED 2026-07-22)
+
+Editor / saves (workflow, not sim physics):
+
+- Open visual scripting with **`~`** or the top-left button (need a team
+  selected — click a player first).
+- Saves under AppData LocalLow `…/AIComp/Saves/Soccer/`; Load → **Open folder**
+  drops files; menu turns each save into a clickable button.
+
+### Tackle (verbal engine rule)
+
+- **Where:** `ENGINE` · `AIA-TIP` (+ TimePlot lock in §18)
+- **What (AIA):** “subtracts the **stamina delta** between players. If the
+  tackling player has **more stamina after** the tackle they win the ball.”
+- **Operational lock (sim §18):** `attacker > carrier` → steal, no mutual dump;
+  `==` → tackler wins + **both dump to 0**; `<` → carrier keeps. Tip doesn’t
+  spell the equal-dump case — keep §18 until a TimePlot says otherwise.
+
+### Vector3 “directional” SoccerGets (clear / opp-goal / clear-mate, …)
+
+- **Where:** `ENGINE` · `AIA-TIP` · matches §1 / game-model §5
+- **What:** Check the **8 sensor spherecasts**; return the **first** direction
+  that has an unobstructed view of the option, else **null**. Priority =
+  attacking direction:
+  - **Home:** `E, C, H, B, G, A, F, D`
+  - **Away:** `D, F, A, G, B, H, C, E`
+    (letters = Player Sensor graphic A–H.)
+
+### Kickoff / whistle / extra time
+
+- **Where:** `ENGINE` · `AIA-TIP` · sim mostly matches
+- **What:**
+  - Opening receiving team = **random**.
+  - After a goal, **scored-on** team receives next kickoff.
+  - **Extra time:** receiving team = **opposite** of who opened the match.
+  - **Whistle** (no ball movement after timeout): flip to opposite of who
+    **last received** a kickoff.
+- **Sim:** opening random + scored-on + whistle flip wired; **extra time not
+  implemented** yet (note when adding ET clock).
 
 ---
 
@@ -44,7 +87,7 @@ Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic
   wrong results (e.g. Player Distance always the same).
 - **Sim:** GraphBrain + O0 lowerer reject nested `Function` (return/emit Null).
 - **Note:** Stock `AIA.txt` has **0** nested `Function` calls — this quirk
-  breaks *other* graphs that nest helpers, not AIA itself.
+  breaks _other_ graphs that nest helpers, not AIA itself.
 
 ### 2. Kicking striker spawn = `**(0,0)` on the ball\*\*
 
@@ -226,8 +269,12 @@ Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic
 - **HitInfo:** assume **default Unity** `RaycastHit` after `Physics.SphereCast`
   (has hit / distance / `collider.tag`). AIComp only packages those three outs;
   miss distance = **infinity** per tooltip. No custom Soccer hit logic assumed.
-- **Ask:** Exact tag strings if a bot filters HitInfo String (otherwise clear-dir
-  SoccerGets hide that).
+- **Tag strings (LOCKED user 2026-07-22):** `Ball`, `HomePlayer1..4` /
+  `AwayPlayer1..4`, `Boundary`, `HomeGoal` / `AwayGoal`, `HomeGoalPost` /
+  `AwayGoalPost`. (Seen when not dribbling for Ball; player tags while held
+  may differ / self-filter.)
+- **Ask:** Whether clear-dir SoccerGets ignore `Ball` / own posts / own goal;
+  AwayPlayerX vs HomePlayerX exact N spelling if ever not 1–4.
 
 ### 16. Held-ball velocity mirrors carrier (real), not zero
 
@@ -249,7 +296,9 @@ Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic
 ### 18. Tackle: stam `>=` steals; equal → tackler wins + **both dump**; higher → no dump
 
 - **Where:** `ENGINE`/`SIM` · `LOCKED` (user 2026-07-22; supersedes TimePlot 18-27-41 tie rule)
-- **What:**
+- **AIA tip:** subtract stamina **delta**, then tackler wins if they have **more
+  stam after** the contest (see “AIA author tips”).
+- **What (operational):**
   - `attacker.stam > carrier.stam` → steal, **no** mutual dump (TimePlot advantage case).
   - `attacker.stam == carrier.stam` → **tackler wins**; **both** stamina dumped to 0.
   - `attacker.stam < carrier.stam` → carrier keeps; no dump.

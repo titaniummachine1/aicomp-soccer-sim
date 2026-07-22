@@ -530,6 +530,13 @@ impl<'a> EvalCtx<'a> {
                 GraphValue::Bool(matches!(v, None | Some(GraphValue::Null)))
             }
 
+            // Viewer: live keyboard via [`crate::keypress`]. Headless: always false.
+            "Keypress" => GraphValue::Bool(crate::keypress::is_pressed(&node.modifier)),
+
+            // Color constant for DebugDraw / TimePlot inputs (modifier = name).
+            "Color" => GraphValue::String(node.modifier.clone()),
+
+            // Visual-only / side-effect sinks — no readable value.
             "Debug"
             | "DebugDrawDisc"
             | "DebugDrawLine"
@@ -537,7 +544,6 @@ impl<'a> EvalCtx<'a> {
             | "Region"
             | "ConstructSoccerProperties"
             | "Spherecast"
-            | "Color"
             | "Country"
             | "Stat" => GraphValue::Null,
 
@@ -930,12 +936,6 @@ mod tests {
     }
 
     fn empty_api() -> TeamApi {
-        TeamApi {
-            team: crate::brain::TeamId::Home,
-            bools: Default::default(),
-            floats: Default::default(),
-            transforms: Default::default(),
-            vectors: Default::default(),
-        }
+        TeamApi::empty(crate::brain::TeamId::Home)
     }
 }

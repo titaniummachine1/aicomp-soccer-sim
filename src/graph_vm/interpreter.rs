@@ -79,6 +79,13 @@ fn run_inst(inst: &Instruction, ctx: &mut ExecutionContext) {
                 ctx.frame.registers[dst as usize] = ctx.api.load_slot(slot);
             }
         }
+        OpCode::Keypress => {
+            if let Some(&dst) = ops.first() {
+                let kid = ops.get(1).copied().unwrap_or(0);
+                ctx.frame.registers[dst as usize] =
+                    VmValue::Bool(crate::keypress::is_pressed_id(kid));
+            }
+        }
         OpCode::Add => bin_f(ctx, ops, |a, b| a + b),
         OpCode::Sub => bin_f(ctx, ops, |a, b| a - b),
         OpCode::Mul => bin_f(ctx, ops, |a, b| a * b),
@@ -417,13 +424,7 @@ mod tests {
             },
         ];
         let program = ProgramBuilder.pack_lowered(&ir, 0);
-        let api = crate::api::TeamApi {
-            team: TeamId::Home,
-            bools: Default::default(),
-            floats: Default::default(),
-            transforms: Default::default(),
-            vectors: Default::default(),
-        };
+        let api = crate::api::TeamApi::empty(TeamId::Home);
         let mut ctx = ExecutionContext::new(api, 0, program.register_count as usize);
 
         Interpreter.execute_settle(&program, &mut ctx);

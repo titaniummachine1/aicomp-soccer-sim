@@ -143,13 +143,7 @@ mod tests {
     }
 
     fn empty_api() -> TeamApi {
-        TeamApi {
-            team: crate::brain::TeamId::Home,
-            bools: Default::default(),
-            floats: Default::default(),
-            transforms: Default::default(),
-            vectors: Default::default(),
-        }
+        TeamApi::empty(crate::brain::TeamId::Home)
     }
 
     fn power_controller_graph() -> TeamGraph {

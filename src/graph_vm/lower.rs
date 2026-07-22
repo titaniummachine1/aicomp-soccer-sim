@@ -44,6 +44,8 @@ pub enum ApiKind {
 pub struct ApiSlotTable {
     pub labels: Vec<String>,
     pub kinds: Vec<ApiKind>,
+    /// SoccerGet catalog index (`UNKNOWN_ID` if label not in catalog).
+    pub dense_ids: Vec<u16>,
     label_to_slot: HashMap<(ApiKind, String), ApiSlot>,
 }
 
@@ -53,9 +55,18 @@ impl ApiSlotTable {
         if let Some(&slot) = self.label_to_slot.get(&key) {
             return slot;
         }
+        let dense = match kind {
+            ApiKind::Bool => crate::api::bool_index(label).unwrap_or(crate::api::UNKNOWN_ID),
+            ApiKind::Float => crate::api::float_index(label).unwrap_or(crate::api::UNKNOWN_ID),
+            ApiKind::Transform => {
+                crate::api::transform_index(label).unwrap_or(crate::api::UNKNOWN_ID)
+            }
+            ApiKind::Vector3 => crate::api::vector_index(label).unwrap_or(crate::api::UNKNOWN_ID),
+        };
         let idx = self.labels.len();
         self.labels.push(label.to_string());
         self.kinds.push(kind);
+        self.dense_ids.push(dense);
         let slot = ApiSlot::new((idx + 1) as u16).expect("api slot");
         self.label_to_slot.insert(key, slot);
         slot
@@ -67,6 +78,13 @@ impl ApiSlotTable {
 
     pub fn kind(&self, slot: ApiSlot) -> ApiKind {
         self.kinds[slot.get() as usize - 1]
+    }
+
+    pub fn dense_id(&self, slot: ApiSlot) -> u16 {
+        self.dense_ids
+            .get(slot.get() as usize - 1)
+            .copied()
+            .unwrap_or(crate::api::UNKNOWN_ID)
     }
 }
 
@@ -113,6 +131,7 @@ impl Lowerer {
             apis: ApiSlotTable {
                 labels: Vec::new(),
                 kinds: Vec::new(),
+                dense_ids: Vec::new(),
                 label_to_slot: HashMap::new(),
             },
         };
@@ -577,6 +596,35 @@ impl Lowerer {
                 });
                 dst
             }
+            // Runtime Keypress — viewer fills [`crate::keypress`]; headless stays false.
+            "Keypress" => {
+                let kid = crate::keypress::key_id(&node.modifier);
+                let dst = self.fresh_reg(RegisterKind::Bool);
+                self.ir.push(IrInst {
+                    dest: Some(dst),
+                    kind: RegisterKind::Bool,
+                    op: OpCode::Keypress,
+                    args: vec![],
+                    immediates: vec![kid],
+                    source_sid: node_sid.to_string(),
+                    source_port: port_name.to_string(),
+                });
+                dst
+            }
+            // Color is a named constant (White/Cyan/…); keep as non-null so
+            // consumers (TimePlot/DebugDraw) can lower inputs. Stored as float 0
+            // — color name only matters for Unity viz.
+            "Color" => self.emit_const_float(node_sid, port_name, 0.0),
+            // Side-effect / viz / faceoff stubs: evaluate as null outputs.
+            "Debug"
+            | "DebugDrawDisc"
+            | "DebugDrawLine"
+            | "TimePlot"
+            | "Region"
+            | "ConstructSoccerProperties"
+            | "Spherecast"
+            | "Country"
+            | "Stat" => self.emit_const_null(node_sid, port_name),
             _ => self.emit_const_null(node_sid, port_name),
         }
     }
@@ -964,13 +1012,7 @@ mod tests {
         assert!(!compiled.controllers.instructions.is_empty());
         let program = ProgramBuilder.pack(&compiled);
         let mut ctx = ExecutionContext::new(
-            crate::api::TeamApi {
-                team: crate::brain::TeamId::Home,
-                bools: Default::default(),
-                floats: Default::default(),
-                transforms: Default::default(),
-                vectors: Default::default(),
-            },
+            crate::api::TeamApi::empty(crate::brain::TeamId::Home),
             compiled.vars.len(),
             program.register_count as usize,
         );

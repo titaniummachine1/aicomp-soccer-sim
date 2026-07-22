@@ -2,6 +2,10 @@
 //!
 //! AIA Spherecast Floats (LOCKED): radius **0.25**, distance **20**.
 //! HitInfo ≈ Unity RaycastHit (hit / distance / collider.tag); miss → ∞.
+//!
+//! Known Soccer collider **tags** (HitInfo String1):
+//! `Ball`, `HomePlayer1..4`, `AwayPlayer1..4`, `Boundary`,
+//! `HomeGoal`, `AwayGoal`, `HomeGoalPost`, `AwayGoalPost`.
 
 use bevy::prelude::*;
 
@@ -9,6 +13,23 @@ use bevy::prelude::*;
 pub const SPHERECAST_RADIUS: f32 = 0.25;
 /// AIA graph Spherecast max distance.
 pub const SPHERECAST_DISTANCE: f32 = 20.0;
+
+/// HitInfo String tags observed in Unity (sensor Debug).
+pub mod hit_tags {
+    pub const BALL: &str = "Ball";
+    pub const BOUNDARY: &str = "Boundary";
+    pub const HOME_GOAL: &str = "HomeGoal";
+    pub const AWAY_GOAL: &str = "AwayGoal";
+    pub const HOME_GOAL_POST: &str = "HomeGoalPost";
+    pub const AWAY_GOAL_POST: &str = "AwayGoalPost";
+
+    pub fn home_player(n: u8) -> String {
+        format!("HomePlayer{n}")
+    }
+    pub fn away_player(n: u8) -> String {
+        format!("AwayPlayer{n}")
+    }
+}
 
 /// Sensor wedge labels A–H around a player (top-down).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

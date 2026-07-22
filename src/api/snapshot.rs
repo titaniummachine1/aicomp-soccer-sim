@@ -796,13 +796,7 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
         );
     }
 
-    TeamApi {
-        team,
-        bools,
-        floats,
-        transforms,
-        vectors,
-    }
+    TeamApi::from_maps(team, &bools, &floats, &transforms, &vectors)
 }
 
 fn team_goal_center(team: TeamId, params: &SimParams) -> Vec2 {

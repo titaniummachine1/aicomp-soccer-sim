@@ -12,6 +12,7 @@ pub mod batch;
 pub mod brain;
 pub mod graph;
 pub mod graph_vm;
+pub mod keypress;
 pub mod match_state;
 pub mod params;
 pub mod player;
