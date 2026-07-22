@@ -9,6 +9,7 @@ use crate::graph_vm::builder::ProgramBuilder;
 use crate::graph_vm::context::ExecutionContext;
 use crate::graph_vm::interpreter::Interpreter;
 use crate::graph_vm::lower::{ApiSlotTable, Lowerer, VariableTable};
+use crate::graph_vm::passes::PassManager;
 use crate::graph_vm::program::{Backend, RuntimeProgram};
 use crate::graph_vm::trace::ObservableTrace;
 use crate::graph_vm::value::VmValue;
@@ -25,7 +26,11 @@ pub struct RuntimeBrain {
 
 impl RuntimeBrain {
     pub fn compile(graph: TeamGraph) -> Self {
-        let compiled = Lowerer::compile(graph);
+        let mut compiled = Lowerer::compile(graph);
+        // O1: ConstFold only (RelayRemoval / CSE / Fusion land one pass at a time).
+        let pm = PassManager::o1_const_fold_only();
+        pm.run_all(&mut compiled.settle);
+        pm.run_all(&mut compiled.controllers);
         let vars = compiled.vars.clone();
         let apis = compiled.apis.clone();
         let program = Arc::new(ProgramBuilder.pack(&compiled));
