@@ -8,6 +8,7 @@ pub mod relay_removal;
 use crate::graph_vm::ir::LoweredIR;
 
 pub use const_fold::ConstFold;
+pub use relay_removal::RelayRemoval;
 
 pub trait Pass {
     fn name(&self) -> &'static str;
@@ -26,10 +27,17 @@ impl PassManager {
         }
     }
 
-    /// O1 pipeline: ConstFold only for now.
-    pub fn o1_const_fold_only() -> Self {
+    /// O1 pipeline: ConstFold followed by RelayRemoval.
+    ///
+    /// CSE and Fusion land later, in that order.
+    pub fn o1() -> Self {
         Self {
-            passes: vec![Box::new(ConstFold)],
+            passes: vec![Box::new(ConstFold), Box::new(RelayRemoval)],
         }
+    }
+
+    /// Compatibility alias for the renamed O1 pipeline.
+    pub fn o1_const_fold_only() -> Self {
+        Self::o1()
     }
 }

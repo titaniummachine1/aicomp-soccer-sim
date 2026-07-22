@@ -1,4 +1,4 @@
-//! RuntimeBrain — compiled TeamGraph via O0 Graph VM.
+//! RuntimeBrain — compiled TeamGraph via the Graph VM.
 
 use std::sync::Arc;
 
@@ -27,8 +27,8 @@ pub struct RuntimeBrain {
 impl RuntimeBrain {
     pub fn compile(graph: TeamGraph) -> Self {
         let mut compiled = Lowerer::compile(graph);
-        // O1: ConstFold only (RelayRemoval / CSE / Fusion land one pass at a time).
-        let pm = PassManager::o1_const_fold_only();
+        // O1: ConstFold → RelayRemoval. CSE and Fusion land later.
+        let pm = PassManager::o1();
         pm.run_all(&mut compiled.settle);
         pm.run_all(&mut compiled.controllers);
         let vars = compiled.vars.clone();
