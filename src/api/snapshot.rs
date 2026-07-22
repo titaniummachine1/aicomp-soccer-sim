@@ -3,9 +3,7 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 
-use super::clear::{
-    clear_dir_into_goal_mouth, clear_dir_toward_teammate, first_clear_dir,
-};
+use super::clear::{clear_dir_into_goal_mouth, clear_dir_toward_teammate, first_clear_dir};
 use super::TeamApi;
 use crate::ball::Ball;
 use crate::brain::TeamId;
@@ -46,19 +44,14 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
     bools.insert("Is Ball Loose", ball_loose);
     bools.insert("Team Has Ball", team_has_ball);
     bools.insert("Opponent Has Ball", opp_has_ball);
-    bools.insert(
-        "Is Kickoff",
-        world.match_state.phase == MatchPhase::Kickoff,
-    );
+    bools.insert("Is Kickoff", world.match_state.phase == MatchPhase::Kickoff);
     bools.insert(
         "Is Team Kicking off",
-        world.match_state.phase == MatchPhase::Kickoff
-            && world.match_state.kickoff_team == team,
+        world.match_state.phase == MatchPhase::Kickoff && world.match_state.kickoff_team == team,
     );
     bools.insert(
         "Is Opponent Kicking off",
-        world.match_state.phase == MatchPhase::Kickoff
-            && world.match_state.kickoff_team != team,
+        world.match_state.phase == MatchPhase::Kickoff && world.match_state.kickoff_team != team,
     );
     // While the receiving team is circle-locked after kickoff, treat Away's
     // "Ball On Team Side" as false so Defender stays on State0 hold (x≈6+BallX)
@@ -74,6 +67,9 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
             world.ball.pos.x >= 0.0
         },
     );
+
+    // AIA: player is open iff no opposing player is within 2× interact radius.
+    let open_r = params.interact_radius * 2.0;
 
     for id in PlayerId::ALL {
         let label_has = match id.0 {
@@ -93,6 +89,18 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
             2 => "Is Team Player 2 Closest Teammate to Ball",
             3 => "Is Team Player 3 Closest Teammate to Ball",
             _ => "Is Team Player 4 Closest Teammate to Ball",
+        };
+        let label_open = match id.0 {
+            1 => "Is Team Player 1 Open",
+            2 => "Is Team Player 2 Open",
+            3 => "Is Team Player 3 Open",
+            _ => "Is Team Player 4 Open",
+        };
+        let label_opp_open = match id.0 {
+            1 => "Is Opponent Player 1 Open",
+            2 => "Is Opponent Player 2 Open",
+            3 => "Is Opponent Player 3 Open",
+            _ => "Is Opponent Player 4 Open",
         };
         bools.insert(
             label_has,
@@ -118,21 +126,26 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
                 params.interact_radius
             };
             bools.insert(label_near, dist <= near_r);
+            bools.insert(label_open, is_open(p.pos, &opp_players, open_r));
         } else {
             bools.insert(label_near, false);
+            bools.insert(label_open, false);
+        }
+        if let Some(p) = opp_players.iter().find(|p| p.id == id) {
+            bools.insert(label_opp_open, is_open(p.pos, &team_players, open_r));
+        } else {
+            bools.insert(label_opp_open, false);
         }
         let is_closest = closest_teammate_to_ball(&team_players, world.ball) == Some(id);
         // During opening suppress, Away Defender chase also keys off Closest_P3
         // (OR Ball On Team Side). Forcing P3 not-closest keeps State0 hold so O3
         // doesn't walk onto the carrier C-lane (X dropping toward the ball).
-        let is_closest = if !is_home
-            && world.match_state.kickoff_suppress_away_team_side
-            && id.0 == 3
-        {
-            false
-        } else {
-            is_closest
-        };
+        let is_closest =
+            if !is_home && world.match_state.kickoff_suppress_away_team_side && id.0 == 3 {
+                false
+            } else {
+                is_closest
+            };
         bools.insert(label_closest, is_closest);
     }
 
@@ -160,11 +173,7 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
     floats.insert("Arena Semicircle Depth", 2.5);
 
     let (carrier_charge, carrier_stam) = if let Some((ct, cid)) = carrier {
-        if let Some(p) = world
-            .players
-            .iter()
-            .find(|p| p.team == ct && p.id.0 == cid)
-        {
+        if let Some(p) = world.players.iter().find(|p| p.team == ct && p.id.0 == cid) {
             (p.shot_charge, p.stamina)
         } else {
             (0.0, 0.0)
@@ -463,17 +472,55 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
         clear_main.map(|d| -d),
     );
 
-    // Open teammate / opponent helpers (simplified: nearest/furthest by distance to ball)
-    let open_team = open_player_pos(&team_players, world.ball.pos, true);
-    let far_team = open_player_pos(&team_players, world.ball.pos, false);
-    let open_opp = open_player_pos(&opp_players, world.ball.pos, true);
-    let far_opp = open_player_pos(&opp_players, world.ball.pos, false);
-    vectors.insert("Get nearest open teammate", open_team);
-    vectors.insert("Get most open teammate", open_team);
-    vectors.insert("Get furthest open teammate", far_team);
-    vectors.insert("Get nearest open opponent", open_opp);
-    vectors.insert("Get most open opponent", open_opp);
-    vectors.insert("Get furthest open opponent", far_opp);
+    // Open helpers: only players with no opposing body within 2× interact radius.
+    let open_team_near = open_player_pos(
+        &team_players,
+        &opp_players,
+        open_r,
+        world.ball.pos,
+        OpenPick::NearestBall,
+    );
+    let open_team_far = open_player_pos(
+        &team_players,
+        &opp_players,
+        open_r,
+        world.ball.pos,
+        OpenPick::FurthestBall,
+    );
+    let open_team_most = open_player_pos(
+        &team_players,
+        &opp_players,
+        open_r,
+        world.ball.pos,
+        OpenPick::MostClear,
+    );
+    let open_opp_near = open_player_pos(
+        &opp_players,
+        &team_players,
+        open_r,
+        world.ball.pos,
+        OpenPick::NearestBall,
+    );
+    let open_opp_far = open_player_pos(
+        &opp_players,
+        &team_players,
+        open_r,
+        world.ball.pos,
+        OpenPick::FurthestBall,
+    );
+    let open_opp_most = open_player_pos(
+        &opp_players,
+        &team_players,
+        open_r,
+        world.ball.pos,
+        OpenPick::MostClear,
+    );
+    vectors.insert("Get nearest open teammate", open_team_near);
+    vectors.insert("Get most open teammate", open_team_most);
+    vectors.insert("Get furthest open teammate", open_team_far);
+    vectors.insert("Get nearest open opponent", open_opp_near);
+    vectors.insert("Get most open opponent", open_opp_most);
+    vectors.insert("Get furthest open opponent", open_opp_far);
 
     for id in PlayerId::ALL {
         let t_label = match id.0 {
@@ -557,6 +604,11 @@ fn nearest_dist(from: Vec2, others: &[&Player]) -> f32 {
         .fold(f32::MAX, f32::min)
 }
 
+/// AIA lock: open = no opposing player within `open_r` (= 2× interact radius).
+fn is_open(pos: Vec2, opposing: &[&Player], open_r: f32) -> bool {
+    nearest_dist(pos, opposing) > open_r
+}
+
 fn closest_teammate_to_ball(team: &[&Player], ball: &Ball) -> Option<PlayerId> {
     team.iter()
         .min_by(|a, b| {
@@ -581,24 +633,47 @@ fn nearest_teammate_pos(id: PlayerId, team: &[&Player]) -> Option<Vec2> {
         .map(|p| p.pos)
 }
 
-fn open_player_pos(players: &[&Player], ball: Vec2, nearest: bool) -> Option<Vec2> {
-    if players.is_empty() {
+#[derive(Clone, Copy)]
+enum OpenPick {
+    NearestBall,
+    FurthestBall,
+    /// Largest distance to nearest opposing player (among open players).
+    MostClear,
+}
+
+fn open_player_pos(
+    players: &[&Player],
+    opposing: &[&Player],
+    open_r: f32,
+    ball: Vec2,
+    pick: OpenPick,
+) -> Option<Vec2> {
+    let open: Vec<&Player> = players
+        .iter()
+        .copied()
+        .filter(|p| is_open(p.pos, opposing, open_r))
+        .collect();
+    if open.is_empty() {
         return None;
     }
-    let pick = if nearest {
-        players.iter().min_by(|a, b| {
+    let chosen = match pick {
+        OpenPick::NearestBall => open.iter().min_by(|a, b| {
             (a.pos - ball)
                 .length()
                 .partial_cmp(&(b.pos - ball).length())
                 .unwrap_or(std::cmp::Ordering::Equal)
-        })
-    } else {
-        players.iter().max_by(|a, b| {
+        }),
+        OpenPick::FurthestBall => open.iter().max_by(|a, b| {
             (a.pos - ball)
                 .length()
                 .partial_cmp(&(b.pos - ball).length())
                 .unwrap_or(std::cmp::Ordering::Equal)
-        })
+        }),
+        OpenPick::MostClear => open.iter().max_by(|a, b| {
+            nearest_dist(a.pos, opposing)
+                .partial_cmp(&nearest_dist(b.pos, opposing))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
     };
-    pick.map(|p| p.pos)
+    chosen.map(|p| p.pos)
 }
