@@ -71,13 +71,13 @@ impl MatchState {
     }
 
     /// `scored_on` conceded — they receive the next kickoff (AIComp rule).
-    pub fn on_goal(&mut self, scored_on: TeamId) {
+    pub fn on_goal(&mut self, scored_on: TeamId, kickoff_delay_s: f32) {
         match scored_on {
             TeamId::Home => self.score_away += 1,
             TeamId::Away => self.score_home += 1,
         }
         self.phase = MatchPhase::GoalPause;
-        self.phase_timer = 1.0;
+        self.phase_timer = kickoff_delay_s;
         self.kickoff_team = scored_on;
         self.kickoff_circle_lock = true;
         self.kickoff_suppress_away_team_side = true;
@@ -87,13 +87,13 @@ impl MatchState {
 
     /// Stale-ball whistle: no score change; kickoff flips to opposite of who
     /// last received kickoff (Frida: 5s / 2.5m — see `stale_ball_*` params).
-    pub fn on_whistle(&mut self) {
+    pub fn on_whistle(&mut self, kickoff_delay_s: f32) {
         self.kickoff_team = match self.kickoff_team {
             TeamId::Home => TeamId::Away,
             TeamId::Away => TeamId::Home,
         };
         self.phase = MatchPhase::GoalPause;
-        self.phase_timer = 1.0;
+        self.phase_timer = kickoff_delay_s;
         self.kickoff_circle_lock = true;
         self.kickoff_suppress_away_team_side = true;
         self.kickoff_seen_carrier = false;
@@ -132,6 +132,8 @@ pub fn place_kickoff(
     ball.vel_y = 0.0;
     ball.held = false;
     for p in players.iter_mut() {
+        // Positions / facing / charge reset. Stamina intentionally persists
+        // across whistle and goal kickoffs (TimePlot + Discord 2026-07-22).
         p.pos = faceoff_world(p.team, p.id, kickoff_team);
         p.vel = Vec2::ZERO;
         p.facing = kickoff_facing(p.team, p.id, kickoff_team);

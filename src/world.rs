@@ -65,6 +65,7 @@ impl MatchWorld {
                     vel: Vec2::ZERO,
                     facing: kickoff_facing(team, id, opening),
                     stamina: 1.0,
+                    stamina_regen_lock_left: 0.0,
                     shot_charge: 0.0,
                     charge_warmup_left: 0.0,
                 });
@@ -227,6 +228,7 @@ impl MatchWorld {
                 opp_has_ball,
                 self.possession.first_kick_done,
                 face_aim,
+                self.params.angular_speed_deg,
                 dt,
             );
             clamp_player_to_pitch(&mut self.players[i], &self.params);
@@ -235,7 +237,7 @@ impl MatchWorld {
                 &self.match_state,
                 &self.params,
             );
-            tick_stamina(&mut self.players[i], cmd.sprint, dt);
+            tick_stamina(&mut self.players[i], cmd.sprint, dt, &self.params);
             if let Some(drain) = apply_interact(
                 &mut self.players[i],
                 &mut self.ball,
@@ -252,6 +254,12 @@ impl MatchWorld {
                     .find(|p| p.team == drain.team && p.id.0 == drain.id)
                 {
                     c.stamina = (c.stamina - drain.drain).max(0.0);
+                    if drain.drain > 0.0 {
+                        c.stamina_regen_lock_left = self
+                            .params
+                            .stamina_tackle_regen_delay_s
+                            .max(c.stamina_regen_lock_left);
+                    }
                 }
             }
         }
@@ -293,7 +301,7 @@ impl MatchWorld {
         }
         self.match_state.stale_idle_s += dt;
         if self.match_state.stale_idle_s >= self.params.stale_ball_timeout_s {
-            self.match_state.on_whistle();
+            self.match_state.on_whistle(self.params.kickoff_delay_s);
             self.possession.carrier = None;
             self.ball.held = false;
             self.ball.vel = Vec2::ZERO;
@@ -306,7 +314,7 @@ impl MatchWorld {
     fn apply_goal(&mut self, scored: EndReason) {
         match scored {
             EndReason::GoalHome => {
-                self.match_state.on_goal(TeamId::Home);
+                self.match_state.on_goal(TeamId::Home, self.params.kickoff_delay_s);
                 self.possession.carrier = None;
                 self.ball.held = false;
                 self.ball.vel = Vec2::ZERO;
@@ -314,7 +322,7 @@ impl MatchWorld {
                 self.ball.height = self.params.ball_rest_height;
             }
             EndReason::GoalAway => {
-                self.match_state.on_goal(TeamId::Away);
+                self.match_state.on_goal(TeamId::Away, self.params.kickoff_delay_s);
                 self.possession.carrier = None;
                 self.ball.held = false;
                 self.ball.vel = Vec2::ZERO;
@@ -442,16 +450,19 @@ fn clamp_receiving_team_outside_kickoff_circle(
     }
 }
 
-/// Community stamina: ~30s full drain sprint, ~15s full regen idle. Cheap linear.
-/// TODO: map Frida stamina (max=100 consume=0.15 regen=5 regenDelay=1 tackleRegenDelay=1.5)
-/// from `worldcupv0.5/_modding_dumps/soccer_mover_stamina.json` once per-second semantics
-/// on 0..1 sim stamina are confirmed — see `bevy_sim_params_v05.json` stamina_frida.
-fn tick_stamina(player: &mut Player, sprint: bool, dt: f32) {
+/// TimePlot 17-05-04 DB14: ~34.5s full drain while sprinting with ball,
+/// ~20s full regen while walking; Frida regen delays still applied.
+fn tick_stamina(player: &mut Player, sprint: bool, dt: f32, params: &SimParams) {
     if sprint && player.vel.length_squared() > 0.01 {
-        player.stamina = (player.stamina - dt / 30.0).max(0.0);
-    } else {
-        player.stamina = (player.stamina + dt / 15.0).min(1.0);
+        player.stamina = (player.stamina - dt / params.stamina_drain_full_s).max(0.0);
+        player.stamina_regen_lock_left = params.stamina_regen_delay_s;
+        return;
     }
+    player.stamina_regen_lock_left = (player.stamina_regen_lock_left - dt).max(0.0);
+    if player.stamina_regen_lock_left > 0.0 {
+        return;
+    }
+    player.stamina = (player.stamina + dt / params.stamina_regen_full_s).min(1.0);
 }
 
 #[cfg(test)]
@@ -476,10 +487,10 @@ mod tests {
         let mut state = MatchState::with_opening_kickoff(TeamId::Away);
         assert_eq!(state.kickoff_team, TeamId::Away);
         assert_eq!(state.opening_kickoff_team, TeamId::Away);
-        state.on_goal(TeamId::Home);
+        state.on_goal(TeamId::Home, 1.0);
         assert_eq!(state.score_away, 1);
         assert_eq!(state.kickoff_team, TeamId::Home);
-        state.on_goal(TeamId::Away);
+        state.on_goal(TeamId::Away, 1.0);
         assert_eq!(state.score_home, 1);
         assert_eq!(state.kickoff_team, TeamId::Away);
     }
@@ -539,6 +550,7 @@ mod tests {
             vel: Vec2::new(5.0, 5.0),
             facing: Vec2::ONE,
             stamina: 1.0,
+            stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
         };
@@ -559,6 +571,7 @@ mod tests {
             vel: Vec2::X,
             facing: Vec2::X,
             stamina: 1.0,
+            stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
         };

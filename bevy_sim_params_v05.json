@@ -92,7 +92,7 @@
     "lift_base_mps": -0.323,
     "lift_per_charge_mps": 6.6667,
     "gravity_mps2": 9.81,
-    "bounce_e": 0.4,
+    "bounce_e": 0.23,
     "bounce_settle_mps": 0.5,
     "apex_height_m": 1.4,
     "hang_before_first_bounce_s": "varies_with_lift_not_fixed_1s",
@@ -100,7 +100,7 @@
     "ground_slide_accel_mps2_timeplot": 5.95,
     "formula_planar": "horiz = min((10 + 290*charge)/9, 29.42); soft-cap |v| to 29.94",
     "formula_lift": "vy = max(0, -0.323 + 6.6667*charge); soft-cap with horiz",
-    "note": "Ground Coulomb slide ONLY while grounded. Airborne XZ coasts (no slide) — stronger charge hangs longer and carries farther. AIA Discord 'linear to 0.75 then lift only' is WRONG for planar (linear continues ~to 0.90)."
+    "note": "Ground Coulomb slide ONLY while grounded. Airborne XZ coasts (TimePlot planar decay=0). Bounce e≈0.23 from landing vy ratio (material 0.4 too high). Hang scales with lift (~0.28s@0.5 → ~0.61s@1.0)."
   },
     "player_candidates": {
     "status": "frida_live_dump_2026-07-22",
@@ -146,20 +146,27 @@
       "regen_rate": 5.0,
       "regen_delay_s": 1.0,
       "tackle_regen_delay_s": 1.5,
-      "note": "Sim stamina is 0..1 normalized; tick_stamina still uses community 30s drain / 15s regen until per-second mapping is confirmed. See world.rs tick_stamina TODO."
+      "note": "Frida consume/regen raw units still ambiguous. TimePlot 17-05-04 DB14 locks 0..1 drain/regen times below."
     },
-    "stamina_drain_full_s": 30.0,
-    "stamina_regen_full_s": 15.0,
-    "note": "Frida: walkSpeed=7 sprintSpeed=8 mover.acceleration=100 tackleRange=1.75. player_max_speed uses sprint 8. Pickup lockout after shot=0.125s (Ball.pickupDelayAfterShot); after exchange=0.25s (unused in sim). hold_offset 1.557m TimePlot-locked."
+    "stamina_drain_full_s": 34.5,
+    "stamina_regen_full_s": 20.0,
+    "stamina_timeplot": {
+      "source": "timeplot_2026-07-22_17-05-04.json DebugBuild=14",
+      "drain_slope_per_s": -0.02898,
+      "regen_slope_per_s": 0.05,
+      "full_empty_s": 34.5,
+      "full_fill_s": 20.0,
+      "snap_refill_at_zero": false,
+      "note": "Continuous sprint+has segments. Discord instant-refill at 0 NOT seen."
+    },
+    "note": "Frida: walkSpeed=7 sprintSpeed=8 mover.acceleration=100 tackleRange=1.75. player_max_speed uses sprint 8. Pickup lockout after shot=0.125s; after exchange=0.25s on tackle win. hold_offset 1.557m TimePlot-locked."
   },
   "bevy_impl_hints": [
     "Ball: Dynamic RigidBody, LockedAxes::ROTATION_LOCKED, sphere collider radius radius_world, friction/restitution as contacts above OR custom Coulomb slide force -accel*normalize(vel) while grounded",
     "Walls: cuboid colliders on playable AABB sides; restitution 0.2; open goal mouths |z|<=6 at x=\u00b139.5 do not collide",
     "Posts optional: capsules at (\u00b140.2, \u00b16) contact radius ~0.706; can omit for v1",
     "No linear damping on rigidbody \u2014 deceleration is material/custom friction only",
-    "Players: kinematic simple movers (accel+clamp), not PhysX friction; stamina drain/regen candidates 30s/15s",
-    "Kicks: TimePlot charge→horiz/lift (see kick_airborne_candidates); ground slide only when grounded; Y hang drives carry distance",
-    "Players: kinematic simple movers (accel+clamp), not PhysX friction; stamina drain/regen candidates 30s/15s",
-    "Facing turn: Frida angularSpeed=2500 deg/s not yet wired (sim still uses ad-hoc blend rates)"
+    "Players: kinematic simple movers; stamina 0..1 drain 34.5s / regen 20s (TimePlot DB14); angularSpeed 2500 wired",
+    "Kicks: TimePlot charge->horiz/lift (see kick_airborne_candidates); ground slide only when grounded; Y hang drives carry distance"
   ]
 }

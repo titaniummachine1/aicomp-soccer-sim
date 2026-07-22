@@ -24,6 +24,7 @@ mod tests {
                     vel: Vec2::ZERO,
                     facing: default_facing(team),
                     stamina: 1.0,
+                    stamina_regen_lock_left: 0.0,
                     shot_charge: 0.0,
                     charge_warmup_left: 0.0,
                 });

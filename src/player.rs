@@ -21,6 +21,8 @@ pub struct Player {
     /// Unit facing on the pitch (look / hold / shoot axis).
     pub facing: Vec2,
     pub stamina: f32,
+    /// Seconds until idle regen may start (sprint/tackle lockout).
+    pub stamina_regen_lock_left: f32,
     pub shot_charge: f32,
     /// After pickup/steal, engine holds charge at 0 for ~0.30s while Interact
     /// can already be true (baseline TimePlot: both Home T1 and Away O2).
@@ -38,6 +40,8 @@ impl Player {
 pub struct SimpleMover {
     pub max_speed: f32,
     pub accel: f32,
+    /// Frida mover.stoppingDistance — arrive epsilon before braking to stop.
+    pub stopping_distance: f32,
 }
 
 impl SimpleMover {
@@ -45,6 +49,7 @@ impl SimpleMover {
         Self {
             max_speed: params.player_max_speed,
             accel: params.player_accel,
+            stopping_distance: params.minimum_move_delta_m.max(0.05),
         }
     }
 }
@@ -60,6 +65,7 @@ pub fn step_mover(
     // When carrying, prefer Clear.Carrier over MoveTo for facing (baseline:
     // hold stays on C while MoveTo already tracks H).
     face_aim: Option<Vec2>,
+    angular_speed_deg: f32,
     dt: f32,
 ) {
     let max_speed = if sprint {
@@ -85,7 +91,7 @@ pub fn step_mover(
 
     let to = move_to - player.pos;
     let dist = to.length();
-    if dist < 0.05 {
+    if dist < mover.stopping_distance.max(0.05) {
         let speed = player.vel.length();
         if speed <= mover.accel * dt {
             player.vel = Vec2::ZERO;
@@ -98,38 +104,27 @@ pub fn step_mover(
 
     // Facing: carriers track Clear when provided (not MoveTo). During charge
     // warmup, facing is sticky — reject ~90° flips so C→H Clear does not yank
-    // Ball.Z down early. When warmup ends, snap onto current Clear (real
-    // held-ball Z crash ~t=0.35 with charge still 0).
+    // Ball.Z down early. Cap turn rate by Frida angularSpeed (deg/s).
     let want_move = to.normalize();
     let want_face = face_aim
         .filter(|d| d.length_squared() > 1e-8)
         .map(|d| d.normalize())
         .unwrap_or(want_move);
     let sticky = is_carrier && player.charge_warmup_left > 0.0;
-    let rate = if player.shot_charge > 0.85 {
-        18.0
-    } else if sticky {
-        if want_face.dot(player.facing) < 0.25 {
-            0.0
-        } else {
-            8.0
+    let allow_turn = !(sticky && want_face.dot(player.facing) < 0.25);
+    if allow_turn {
+        let max_rad = angular_speed_deg.to_radians() * dt;
+        let cur = player.facing;
+        let cross = cur.x * want_face.y - cur.y * want_face.x;
+        let dot = cur.dot(want_face).clamp(-1.0, 1.0);
+        let ang = cross.atan2(dot);
+        let step = ang.clamp(-max_rad, max_rad);
+        if step.abs() > 1e-6 {
+            let (s, c) = step.sin_cos();
+            player.facing = Vec2::new(cur.x * c - cur.y * s, cur.x * s + cur.y * c).normalize();
+        } else if dot < 0.999 {
+            player.facing = want_face;
         }
-    } else if is_carrier && player.shot_charge < 0.15 {
-        // Just left warmup: snap toward Clear H like real ~0.35.
-        14.0
-    } else if player.shot_charge > 0.5 {
-        10.0
-    } else {
-        8.0
-    };
-    if rate > 0.0 {
-        let blend = (rate * dt).min(1.0);
-        let mixed = player.facing + (want_face - player.facing) * blend;
-        player.facing = if mixed.length_squared() > 1e-8 {
-            mixed.normalize()
-        } else {
-            want_face
-        };
     }
 
     let desired = want_move * max_speed;

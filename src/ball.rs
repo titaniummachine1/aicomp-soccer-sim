@@ -193,33 +193,34 @@ fn resolve_posts(ball: &mut Ball, params: &SimParams) {
 }
 
 fn resolve_walls(ball: &mut Ball, params: &SimParams) {
-    let r = params.ball_radius;
+    // `x_min`/`z_*` are already the playable *ball-center* AABB — do not
+    // inset by radius again.
     let e = params.wall_e;
     let mu = params.wall_mu;
 
-    if ball.pos.y - r < params.z_min {
-        ball.pos.y = params.z_min + r;
+    if ball.pos.y < params.z_min {
+        ball.pos.y = params.z_min;
         if ball.vel.y < 0.0 {
             bounce_axis(&mut ball.vel, 1, e, mu);
         }
-    } else if ball.pos.y + r > params.z_max {
-        ball.pos.y = params.z_max - r;
+    } else if ball.pos.y > params.z_max {
+        ball.pos.y = params.z_max;
         if ball.vel.y > 0.0 {
             bounce_axis(&mut ball.vel, 1, e, mu);
         }
     }
 
-    // Open goal mouths at ±goal_line_x — no wall when |z| <= goal_half_width.
-    if ball.pos.x - r < params.x_min {
+    // Open goal mouths — no wall when |z| <= goal_half_width.
+    if ball.pos.x < params.x_min {
         if !in_goal_mouth(ball.pos.y, params.goal_half_width) {
-            ball.pos.x = params.x_min + r;
+            ball.pos.x = params.x_min;
             if ball.vel.x < 0.0 {
                 bounce_axis(&mut ball.vel, 0, e, mu);
             }
         }
-    } else if ball.pos.x + r > params.x_max {
+    } else if ball.pos.x > params.x_max {
         if !in_goal_mouth(ball.pos.y, params.goal_half_width) {
-            ball.pos.x = params.x_max - r;
+            ball.pos.x = params.x_max;
             if ball.vel.x > 0.0 {
                 bounce_axis(&mut ball.vel, 0, e, mu);
             }

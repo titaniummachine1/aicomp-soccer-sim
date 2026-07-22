@@ -33,7 +33,7 @@ Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic
   `Normalize(OppGoalCenter − player)` (AIA already has `StrikerDirToOppGoal`)
   as Direction 1 instead of the SoccerGet.
 
-### 2. Kicking striker spawn = **`(0,0)` on the ball**
+### 2. Kicking striker spawn = `**(0,0)` on the ball\*\*
 
 - **Where:** `BOT` + `ENGINE` · `CONFIRMED`
 - **What:** AIA sets `StrikerKickoffPos = Vector3Zero` when `Is Team Kicking off`.
@@ -78,17 +78,19 @@ Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic
 - **Player Interact(ready, nearby, hasBall):**
   If Ready → Interact **false** (Bool `"1"` = false).
   Else → `(hasBall AND charge<1) OR (nearby AND NOT TeamHasBall)`.
-- **Engine kick (AIA):** once you have the ball (Interact while nearby), the
-  **same Interact** charges the shot; when Interact goes **false**, the ball
-  is kicked in the direction of the **move input that frame** (controller
-  MoveTo), not facing/hold axis.
+- **Engine kick (AIA + TimePlot 17-11-17):** once you have the ball (Interact
+  while nearby), the **same Interact** charges the shot; when Interact goes
+  **false**, the ball is kicked along that frame's **MoveTo** (not facing/hold).
+  Confirmed **instant 90° flick**: walk/hold +X, MoveTo +Z → kick vel pure +Z
+  (~29.4) with hold turn ≈0°/s that frame.
 - **Striker quirk:** both dirs are OppGoal (usually **null**) → Ready stays 0
   even at charge≥0.5. Charge runs to **1.0**, then `hasBall AND charge<1`
   fails → Interact drops → full-power kick. Real Home kickoff: charge 0.4→1.0
   by ~t=0.76 with Striker Ready=0 the whole time.
 - **Playmaker:** ClearMate often present → Ready flips true at thresh → earlier
   release (or charge-to-thresh then kick).
-- **Sim:** release impulse uses `(move_to - pos)`; facing only as fallback.
+- **Sim:** release impulse uses `(move_to - pos)`; facing only as fallback —
+  matches the flick TimePlot.
 - **Ask:** Comment the invert; consider wiring striker dir2 to ClearMate so Ready
   can fire mid-charge instead of always dumping at 1.0.
 
@@ -181,7 +183,7 @@ Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic
 
 - **Where:** `ENGINE`/`SIM`
 - **Pickup delay:** Was documented 0.3s **global**. Baseline `05-01-57`: Home
-  releases ~t=0.78, Away O2 has ball by ~t=0.84 (**~0.06s**). Sim uses **0.06s**.
+  releases ~~t=0.78, Away O2 has ball by ~t=0.84 (\*\*~~0.06s**). Sim uses **0.06s\*\*.
 - **Body bounce:** Loose ball vs `body_r+ball_r` (wall e/mu). Main midfield
   stop in real is **fast re-pickup**, not a fat phantom collider.
 - **Forward hold disc:** Unconfirmed hallucination — `BallHoldLocation` is the
@@ -245,9 +247,9 @@ Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic
 
 - **Where:** `ENGINE` · `CONFIRMED` (baseline opening hold)
 - **What:** Kicking striker's first hold is pure ±Z (Ball≈(0,±1.67) at T1(0,0)),
-  **not** attack ±X. Facing then rotates onto Clear C by ~t=0.15 and **stays on
+  **not** attack ±X. Facing then rotates onto Clear C by ~~t=0.15 and **stays on
   C through Clear→H** during warmup (MoveTo already tracks H; holdFace stays C).
-  When warmup ends (~t=0.35) facing snaps toward Clear H (held-ball Z crash)
+  When warmup ends (~~t=0.35) facing snaps toward Clear H (held-ball Z crash)
   while charge is still 0; full kick ~t=0.75.
 - **Sim:** `kickoff_facing` +Y/−Y for kicking T1; carrier facing aims Clear with
   sticky reject of ~90° flips while `charge_warmup_left > 0`.
@@ -275,20 +277,39 @@ Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic
 | ClearMate       | LOS + short corridor + other mates block; MIN_DOT 0.93; mate_r body×2.8; max 36     |
 | Kicking striker | Spawns at (0,0) when kicking off; kickoff face ±Z (#24)                             |
 | Speeds          | ~7.5 m/s, accel ~45; Clear-sticky facing; snap after warmup (#24)                   |
-| Clear blockers  | body\*1.5 + continuous closest-approach ray                                         |
+| Clear blockers  | body1.5 + continuous closest-approach ray                                           |
 | Charge          | 0.30s warmup + 0.38s to full (#19)                                                  |
 | Hold offset     | 1.60 m (#21)                                                                        |
 | Kickoff / Away  | Kickoff-phase circle clamp; suppress Away team-side + P3-closest                    |
 | Tackle          | Full mutual drain on success; equal→attacker if carrier ch≥0.5; lockout 0.40s (#22) |
 | Pickup / loose  | Hot window 0.25s; no hang body-claim; settle `<2 m/s` (#23)                         |
 | Held-ball vel   | Carrier vel (#16)                                                                   |
-| Early Ball      | **t<=2 X~0.77 Z~1.22**; Zt2[-5.2,2.1] vs[-4.5,1.9]; t<=3 ~0.9/2.0                   |
+| Early Ball      | **t<=2 X~~0.77 Z~~1.22**; Zt2[-5.2,2.1] vs[-4.5,1.9]; t<=3 ~0.9/2.0                 |
 | Loose / OppHas  | early/mid match good; full-match averages shift after late goals                    |
 | Chase           | Home 0.45× / Away 0.95× (#25); Away full kick → F (#26)                             |
-| Mid Ball        | t<=5 X~5.7 Z~8.3; t=5 Ball≈(−17,−20) vs (−22,−22) — close                           |
+| Mid Ball        | t<=5 X~~5.7 Z~~8.3; t=5 Ball≈(−17,−20) vs (−22,−22) — close                         |
 | ClearMate mix   | T2≈0.62 matches; T1 0.23 vs 0.28; T3 0.68 vs 0.93; T4 0.43 vs 0.38                  |
-| Kick launch     | `horiz=min((10+290c)/9,29.42)`; lift `max(0,-0.323+6.667c)`; |v| soft-cap 29.94   |
-| Ground slide    | Coulomb 5.95 **only while grounded**; airborne XZ coasts (Y hang ⇒ carry)         |
+| Kick launch     | `horiz=min((10+290c)/9,29.42)`; lift `max(0,-0.323+6.667c)`;                        |
+| Ground slide    | Coulomb 5.95 **only while grounded**; airborne XZ coasts (Y hang ⇒ carry)           |
+| Whistle reset   | Positions/ball/charge snap to kickoff; **stamina persists** (no free refill)        |
+| Stamina rates   | Drain **~34.5s** empty; regen **~20s** full (TimePlot 17-05-04 DB14); no snap@0     |
+| Kick flick      | Interact↓ aims **MoveTo**, not hold/facing — instant 90° OK (17-11-17 DB11)         |
+
+### Whistle / kickoff: positions only (`CONFIRMED`)
+
+- **Where:** `ENGINE` · `CONFIRMED` (observation + TimePlot 16-56-03)
+- **What:** Stale whistle forces players + ball back to kickoff spots and
+  restarts the round. **Stamina does not reset** and does not get a free regen
+  bump — depleted stamina carries into the next kickoff. Charge/warmup clear
+  with the reposition.
+- **Sim:** `place_kickoff` already keeps `stamina` / `stamina_regen_lock_left`.
+
+### Discord: stamina snap-refill at 0 (`NOT SEEN`)
+
+Unlucky claimed instant refill at 0. TimePlot **17-05-04 DB14** hit ~0.05 and
+regenerated smoothly at **0.05/s** (~20s full) — no snap. Drain while carrying
+
+- sprinting: **−0.029/s** (~**34.5s** empty).
 
 ---
 
@@ -322,26 +343,24 @@ Update this file whenever a new confirmed quirk shows up.
 
 ## Coverage gaps (need more TimePlots / Frida)
 
-What is still **not locked** for full engine parity — capture help:
+What is still soft / optional:
 
-1. **Stamina mapping** — Frida `consume_rate=0.15` / `regen_rate=5` / delays vs
-   community 30s drain / 15s regen. Need a sprint-to-empty + idle-regen TimePlot
-   (one player sprinting in place / loops, log stamina every tick).
-2. **`pickupDelayAfterExchange` 0.25s** — unused in sim; confirm when it fires
-   (tackle exchange vs pass claim) with Interact edges.
-3. **Facing / flick / angularSpeed** — Frida `angularSpeed=2500`,
-   `stoppingDistance=0.5`. Need: (a) turn-in-place with ball, (b) turn without,
-   (c) Interact↓ + MoveTo flick (kick aims MoveTo, not facing). Dedicated
-   TurnSweep / FlickKick probes.
-4. **Air drag** — is airborne XZ truly frictionless, or slight drag? Coast a
-   high-lift kick and compare planar |v| before first bounce vs launch.
-5. **Bounce restitution** — material `bounciness=0.4` candidate; measure
-   post-landing `vy` and 2nd bounce settle vs charge.
-6. **Hang vs charge** — not fixed 1s; plot time-to-first-ground vs charge grid
-   (already have launch; need landing timestamps).
-7. **Kickoff delay / spawn margin** — Frida delay 1.0s + margin 0.5; polish vs
-   real first-touch timing.
-8. **Tackle regen delay 1.5s** — confirm stamina freeze after tackle.
+1. **Frida regen-delay exactness** — delays wired (1s / 1.5s tackle); probe
+   transitions looked ~0.2s. Fine for AI; polish later.
+2. **Kickoff first-touch polish** — delay 1.0s wired into GoalPause; spawn margin
+   0.5 reserved.
+3. **No-ball turn rate** — flick confirmed without turning; free turn-in-place
+   while not charging still lightly tested.
+
+### Locked (no new capture needed)
+
+- Air planar drag = **0** while airborne
+- Vertical bounce **e≈0.23**
+- Hang vs charge (~0.28s@0.5 → ~0.61s@full)
+- Stamina drain **~34.5s** / regen **~20s**; no snap@0; sprint works to empty
+- Kick flick: Interact↓ = **MoveTo** dir (TimePlot 17-11-17); sim already matches
+- Exchange pickup lockout **0.25s** on tackle win
+- Pickup airborne uses real grounded Y
 
 ---
 
@@ -358,7 +377,7 @@ outputs.
 
 Only worth it **after** JIT + inlining: interpreted per-node tasks lose to
 sync overhead; JITed/inlined pure _chains_ (or whole sub-DAGs) are the right
-grain. Candidate pool: [`micropool`](https://crates.io/crates/micropool).
+grain. Candidate pool: `[micropool](https://crates.io/crates/micropool)`.
 
-Gotchas to remember: trivial-task overhead; snapshot volatile SoccerGet\*
+Gotchas to remember: trivial-task overhead; snapshot volatile SoccerGet
 inputs before workers run; do not let pure workers touch live transforms.

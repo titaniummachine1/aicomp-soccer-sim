@@ -185,8 +185,14 @@ pub fn apply_interact(
                         poss.carrier = Some((player.team, player.id.0));
                         player.shot_charge = 0.0;
                         player.charge_warmup_left = params.shot_charge_warmup_s;
+                        player.stamina_regen_lock_left = params
+                            .stamina_tackle_regen_delay_s
+                            .max(player.stamina_regen_lock_left);
+                        poss.pickup_lockout = params.pickup_delay_after_exchange_s;
+                    } else {
+                        // Failed / contested probe still briefly locks re-tackle spam.
+                        poss.pickup_lockout = 0.40;
                     }
-                    poss.pickup_lockout = 0.40;
                     return Some(CarrierStaminaDrain {
                         team: ct,
                         id: cid,
@@ -220,7 +226,8 @@ pub fn apply_interact(
             999.0
         };
         let hot_opp_window = !excluded && since_kick < 0.25;
-        let airborne = since_kick < 1.0;
+        // Prefer real hang (hidden Y) over the old fixed 1s since_kick stand-in.
+        let airborne = !ball.grounded(params);
         let body_hit = dist < params.body_radius + params.ball_radius + 0.20;
         let can_claim = if player.id.0 == 4 {
             dist <= params.interact_radius
@@ -301,6 +308,7 @@ mod tests {
             vel: Vec2::ZERO,
             facing: -Vec2::X,
             stamina: 1.0,
+            stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
         };
@@ -351,6 +359,7 @@ mod tests {
             vel: Vec2::ZERO,
             facing: -Vec2::X,
             stamina: 1.0,
+            stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
         };

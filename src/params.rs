@@ -41,11 +41,19 @@ pub struct SimParams {
     pub gravity: f32,
     /// Resting ball center height while grounded / held (TimePlot ~0.33).
     pub ball_rest_height: f32,
-    /// Vertical bounce restitution (candidate; settle below [`ball_bounce_settle`]).
+    /// Vertical bounce restitution (TimePlot landings ≈0.23; material 0.4 high).
     pub ball_bounce_e: f32,
     pub ball_bounce_settle: f32,
-    /// Mover angularSpeed (deg/s Frida 2500) — facing turn rate.
+    /// Mover angularSpeed (deg/s Frida 2500) — facing turn rate cap.
     pub angular_speed_deg: f32,
+    /// Idle seconds after sprint before regen starts (Frida staminaRegenDelay).
+    pub stamina_regen_delay_s: f32,
+    /// Extra regen lockout after a tackle (Frida tackleStaminaRegenDelay).
+    pub stamina_tackle_regen_delay_s: f32,
+    /// Seconds of continuous sprint to empty 0..1 stamina (community until TimePlot).
+    pub stamina_drain_full_s: f32,
+    /// Seconds of idle regen to refill 0..1 (community until TimePlot).
+    pub stamina_regen_full_s: f32,
     pub pickup_delay_s: f32,
     /// Seconds of Interact-with-ball before shot_charge starts rising.
     /// Baseline: ~0.30s after pickup (Home T1 and Away O2).
@@ -64,7 +72,7 @@ pub struct SimParams {
     pub hold_marker_radius: f32,
     /// Frida walkSpeed (cruise); sim uses [`player_max_speed`] for sprint cap.
     pub player_walk_speed: f32,
-    /// Ball.pickupDelayAfterExchange — reserved (not wired in possession yet).
+    /// Ball.pickupDelayAfterExchange — wired on successful tackle exchange.
     pub pickup_delay_after_exchange_s: f32,
     /// Whistle idle timeout (staleBallTimeoutSeconds). Wired in `tick_stale_ball`.
     pub stale_ball_timeout_s: f32,
@@ -116,9 +124,15 @@ impl SimParams {
             kick_lift_per_charge: 6.6667,
             gravity: 9.81,
             ball_rest_height: 0.33,
-            ball_bounce_e: 0.35,
+            // TimePlot landings median e≈0.23 (material 0.4 is too high).
+            ball_bounce_e: 0.23,
             ball_bounce_settle: 0.5,
             angular_speed_deg: 2500.0,
+            stamina_regen_delay_s: 1.0,
+            stamina_tackle_regen_delay_s: 1.5,
+            // TimePlot 17-05-04 DebugBuild=14 continuous sprint/has segments.
+            stamina_drain_full_s: 34.5,
+            stamina_regen_full_s: 20.0,
             pickup_delay_s: 0.125,
             shot_charge_warmup_s: 0.30,
             shot_charge_time_s: 0.38,
@@ -289,6 +303,20 @@ impl SimParams {
                     p.shot_charge_warmup_s = t;
                 }
             }
+            if let Some(s) = pl.stamina_frida {
+                if let Some(t) = s.regen_delay_s {
+                    p.stamina_regen_delay_s = t;
+                }
+                if let Some(t) = s.tackle_regen_delay_s {
+                    p.stamina_tackle_regen_delay_s = t;
+                }
+            }
+            if let Some(t) = pl.stamina_drain_full_s {
+                p.stamina_drain_full_s = t;
+            }
+            if let Some(t) = pl.stamina_regen_full_s {
+                p.stamina_regen_full_s = t;
+            }
         }
         if !hold_from_file {
             p.hold_offset = p.body_radius + p.ball_radius;
@@ -400,8 +428,9 @@ struct RawPlayers {
     shot_frida: Option<RawShotFrida>,
     kickoff_frida: Option<RawKickoffFrida>,
     stale_ball_frida: Option<RawStaleBallFrida>,
-    #[allow(dead_code)]
     stamina_frida: Option<RawStaminaFrida>,
+    stamina_drain_full_s: Option<f32>,
+    stamina_regen_full_s: Option<f32>,
     body_radius_m: Option<f32>,
     nav_agent_radius_m: Option<f32>,
     hold_offset_m: Option<f32>,
@@ -429,15 +458,10 @@ struct RawStaleBallFrida {
 
 #[derive(Deserialize)]
 struct RawStaminaFrida {
-    #[allow(dead_code)]
     max: Option<f32>,
-    #[allow(dead_code)]
     consume_rate: Option<f32>,
-    #[allow(dead_code)]
     regen_rate: Option<f32>,
-    #[allow(dead_code)]
     regen_delay_s: Option<f32>,
-    #[allow(dead_code)]
     tackle_regen_delay_s: Option<f32>,
 }
 
