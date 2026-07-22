@@ -19,9 +19,7 @@
 use std::path::{Path, PathBuf};
 
 use aicomp_soccer_sim::batch::BrainInput;
-use aicomp_soccer_sim::brain::{
-    BrainOutput, ChaseBallBrain, IdleBrain, TeamBrain, TeamId,
-};
+use aicomp_soccer_sim::brain::{BrainOutput, ChaseBallBrain, IdleBrain, TeamBrain, TeamId};
 use aicomp_soccer_sim::graph::load_team_graph;
 use aicomp_soccer_sim::graph_vm::RuntimeBrain;
 use aicomp_soccer_sim::keypress;
@@ -602,6 +600,12 @@ struct PlayerStaminaArc {
 #[derive(Component)]
 struct BallDisc;
 
+/// World-space score digit(s) parked behind each goal (Home=left, Away=right).
+#[derive(Component)]
+struct GoalScoreText {
+    side: TeamId,
+}
+
 #[derive(Resource)]
 struct BallMat(Handle<ColorMaterial>);
 
@@ -751,6 +755,30 @@ fn setup_board(
                     .with_scale(Vec3::splat(post_r_px)),
             ));
         }
+
+        // Score sits just outside the back net (left goal = left team, right = right).
+        let score_x = sign * (p.goal_line_x.abs() * PPM + net_depth + 22.0);
+        let (side, color, initial) = if sign < 0.0 {
+            (
+                TeamId::Home,
+                Color::srgb(0.75, 0.85, 1.0),
+                viewer.world.match_state.score_home,
+            )
+        } else {
+            (
+                TeamId::Away,
+                Color::srgb(1.0, 0.72, 0.68),
+                viewer.world.match_state.score_away,
+            )
+        };
+        commands.spawn((
+            GoalScoreText { side },
+            Text2d::new(format!("{initial}")),
+            TextFont::from_font_size(48.0),
+            TextColor(color),
+            TextLayout::new(Justify::Center, LineBreak::NoWrap),
+            Transform::from_xyz(score_x, 0.0, 4.0),
+        ));
     }
 
     let disc_mesh = meshes.add(Circle::new(1.0));
@@ -1012,7 +1040,7 @@ fn setup_ui(
     fast: Res<SimFast>,
     timescale: Res<SimTimeScale>,
 ) {
-    // Top bar: team pickers + transport + score.
+    // Top bar: team pickers + transport (score lives behind the goals).
     commands
         .spawn((
             Node {
@@ -1030,7 +1058,7 @@ fn setup_ui(
             team_slot_btn(
                 parent,
                 TeamId::Home,
-                "Home",
+                "Left",
                 &file_stem(&scripts.home_path),
                 UiAction::LoadHome,
                 Color::srgb(0.18, 0.32, 0.55),
@@ -1038,7 +1066,7 @@ fn setup_ui(
             team_slot_btn(
                 parent,
                 TeamId::Away,
-                "Away",
+                "Right",
                 &file_stem(&scripts.away_path),
                 UiAction::LoadAway,
                 Color::srgb(0.55, 0.22, 0.18),
@@ -1100,12 +1128,7 @@ fn setup_ui(
 
             parent.spawn((
                 StatusText,
-                Text::new(format!(
-                    "[{}]  {} — {}",
-                    run_label(false, fast.0),
-                    0,
-                    0
-                )),
+                Text::new(format!("[{}]", run_label(false, fast.0))),
                 TextFont::from_font_size(18.0),
                 TextColor(Color::srgb(0.95, 0.95, 0.95)),
                 Node {
@@ -1184,7 +1207,7 @@ fn setup_ui(
                 ));
             });
             p.spawn((
-                Text::new("1 tick/s  ←  drag  →  0.01ms  ·  no idle"),
+                Text::new("1 tick/s  ←  drag  →  0.01ms  ·  no wait"),
                 TextFont::from_font_size(11.0),
                 TextColor(Color::srgb(0.6, 0.65, 0.7)),
             ));
@@ -1216,18 +1239,16 @@ fn setup_ui(
 
 fn speed_label(t: f32, fast: bool) -> String {
     if fast || fill_to_idle_budget(t) <= 0.0 {
-        "Speed  no idle".into()
+        "Speed  no wait".into()
     } else {
         let idle = fill_to_idle_budget(t);
         let idle_ms = idle * 1000.0;
         if idle >= 0.95 {
             "Speed  1 tick/s".into()
         } else if (idle - FIXED_DT).abs() < FIXED_DT * 0.15 {
-            format!("Speed  realtime (~{:.0}ms)", FIXED_DT * 1000.0)
-        } else if idle_ms < 1.0 {
-            format!("Speed  idle {:.2}ms", idle_ms)
+            format!("Speed  realtime (~{:.2}ms)", FIXED_DT * 1000.0)
         } else {
-            format!("Speed  idle {:.0}ms", idle_ms)
+            format!("Speed  {:.2}ms sim tick", idle_ms)
         }
     }
 }
@@ -1402,17 +1423,14 @@ fn sim_tick_barrier(
     // Still tick-locked; never faster than brains+physics can compute.
     clock.accumulator += time.delta_secs();
     let mut last_ms = clock.tick_ms;
-    while clock.accumulator >= idle_budget
-        && clock.ticks_this_frame < MAX_TICKS_PER_FRAME_PACED
-    {
+    while clock.accumulator >= idle_budget && clock.ticks_this_frame < MAX_TICKS_PER_FRAME_PACED {
         last_ms = step_locked_tick(&mut viewer, &mut clock, &mut interp);
         clock.ticks_this_frame += 1;
         clock.accumulator -= idle_budget;
     }
     clock.tick_ms = last_ms;
 
-    if clock.ticks_this_frame >= MAX_TICKS_PER_FRAME_PACED && clock.accumulator >= idle_budget
-    {
+    if clock.ticks_this_frame >= MAX_TICKS_PER_FRAME_PACED && clock.accumulator >= idle_budget {
         clock.backlog_ticks = clock.accumulator / idle_budget;
         clock.accumulator = 0.0;
     } else {
@@ -1452,11 +1470,14 @@ fn toggle_fast(fast: &mut SimFast, clock: &mut TickClock) {
     fast.0 = !fast.0;
     clock.accumulator = 0.0;
     clock.alpha = 1.0;
-    info!(fast = fast.0, "fast mode toggled (idle-wait skip; tick lock unchanged)");
+    info!(
+        fast = fast.0,
+        "fast mode toggled (idle-wait skip; tick lock unchanged)"
+    );
 }
 
-fn format_status(paused: bool, fast: bool, home: u32, away: u32) -> String {
-    format!("[{}]  {} — {}", run_label(paused, fast), home, away)
+fn format_status(paused: bool, fast: bool) -> String {
+    format!("[{}]", run_label(paused, fast))
 }
 
 fn refresh_pause_ui(
@@ -1472,7 +1493,6 @@ fn refresh_pause_ui(
             Without<FastButtonText>,
         ),
     >,
-    viewer: Res<ViewerWorld>,
 ) {
     if !paused.is_changed() && !fast.is_changed() {
         return;
@@ -1496,12 +1516,7 @@ fn refresh_pause_ui(
         }
     }
     if let Ok(mut text) = status_q.single_mut() {
-        *text = Text::new(format_status(
-            paused.0,
-            fast.0,
-            viewer.world.match_state.score_home,
-            viewer.world.match_state.score_away,
-        ));
+        *text = Text::new(format_status(paused.0, fast.0));
     }
 }
 
@@ -1559,29 +1574,22 @@ fn handle_ui_buttons(
                     UiAction::TogglePause => toggle_pause(&mut paused),
                     UiAction::ToggleFast => toggle_fast(&mut fast, &mut clock),
                     UiAction::LoadHome => {
-                        if let Some(path) = pick_team_script("Load Home team") {
+                        if let Some(path) = pick_team_script("Load Left team") {
                             viewer.home = load_graph_brain(&path);
                             scripts.home_path = path;
-                            scripts.status =
-                                format!("Home {}", file_stem(&scripts.home_path));
+                            scripts.status = format!("Left {}", file_stem(&scripts.home_path));
                         }
                     }
                     UiAction::LoadAway => {
-                        if let Some(path) = pick_team_script("Load Away team") {
+                        if let Some(path) = pick_team_script("Load Right team") {
                             viewer.away = load_graph_brain(&path);
                             scripts.away_path = path;
-                            scripts.status =
-                                format!("Away {}", file_stem(&scripts.away_path));
+                            scripts.status = format!("Right {}", file_stem(&scripts.away_path));
                         }
                     }
                 }
                 if let Ok(mut text) = status_q.single_mut() {
-                    *text = Text::new(format_status(
-                        paused.0,
-                        fast.0,
-                        viewer.world.match_state.score_home,
-                        viewer.world.match_state.score_away,
-                    ));
+                    *text = Text::new(format_status(paused.0, fast.0));
                 }
             }
         }
@@ -1645,10 +1653,7 @@ fn refresh_timescale_ui(
     }
 }
 
-fn sync_team_buttons(
-    scripts: Res<TeamScripts>,
-    mut names: Query<(&TeamNameText, &mut Text)>,
-) {
+fn sync_team_buttons(scripts: Res<TeamScripts>, mut names: Query<(&TeamNameText, &mut Text)>) {
     if !scripts.is_changed() {
         return;
     }
@@ -1693,16 +1698,13 @@ fn sync_visuals(
     mut q_disc: Query<(&PlayerDisc, &mut Transform), Without<BallDisc>>,
     mut q_num: Query<(&PlayerNum, &mut Transform), (Without<BallDisc>, Without<PlayerDisc>)>,
     mut q_ball: Query<&mut Transform, (With<BallDisc>, Without<PlayerDisc>)>,
+    mut q_score: Query<(&GoalScoreText, &mut Text2d)>,
     paused: Res<SimPaused>,
     fast: Res<SimFast>,
     mut status_q: Query<&mut Text, With<StatusText>>,
 ) {
     let w = &viewer.world;
-    let alpha = if paused.0 || fast.0 {
-        1.0
-    } else {
-        clock.alpha
-    };
+    let alpha = if paused.0 || fast.0 { 1.0 } else { clock.alpha };
     for (disc, mut tf) in &mut q_disc {
         let pos = interp.player(disc.team, disc.id, alpha).or_else(|| {
             w.players
@@ -1749,12 +1751,14 @@ fn sync_visuals(
     // Status strip only at 10 Hz.
     if pulse.fire {
         if let Ok(mut text) = status_q.single_mut() {
-            *text = Text::new(format_status(
-                paused.0,
-                fast.0,
-                w.match_state.score_home,
-                w.match_state.score_away,
-            ));
+            *text = Text::new(format_status(paused.0, fast.0));
+        }
+        for (marker, mut text) in &mut q_score {
+            let n = match marker.side {
+                TeamId::Home => w.match_state.score_home,
+                TeamId::Away => w.match_state.score_away,
+            };
+            *text = Text2d::new(format!("{n}"));
         }
     }
 }
@@ -1777,18 +1781,16 @@ fn refresh_tick_hud(
     } else {
         fill_to_idle_budget(timescale.0)
     };
-    let home_ms = clock.last.home_ms();
-    let away_ms = clock.last.away_ms();
+    let left_ms = clock.last.home_ms();
+    let right_ms = clock.last.away_ms();
     let pace = if idle <= 0.0 {
-        "no idle".to_string()
-    } else if idle * 1000.0 < 1.0 {
-        format!("{:.2}ms idle", idle * 1000.0)
+        "no wait".to_string()
     } else {
-        format!("{:.0}ms idle", idle * 1000.0)
+        format!("{:.2}ms sim tick", idle * 1000.0)
     };
     *text = Text::new(format!(
-        "{:.1}ms   H {:.1} · A {:.1}\n{pace}",
-        clock.tick_ms, home_ms, away_ms
+        "{:.2}ms   L {:.2} · R {:.2}\n{pace}",
+        clock.tick_ms, left_ms, right_ms
     ));
     *color = TextColor(if idle <= 0.0 {
         Color::srgb(1.0, 0.85, 0.35)
