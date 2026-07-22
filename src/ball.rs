@@ -130,6 +130,9 @@ pub fn step_free_ball(ball: &mut Ball, params: &SimParams, dt: f32) -> EndReason
 }
 
 /// Loose-ball circle vs player bodies. Hot / airborne balls pass through.
+///
+/// Always re-runs wall/post containment afterward — body push used to teleport
+/// the ball past sidelines / endlines (and into the mouth for free goals).
 pub fn resolve_player_bodies(ball: &mut Ball, players: &[crate::player::Player], params: &SimParams) {
     if ball.held {
         return;
@@ -165,6 +168,10 @@ pub fn resolve_player_bodies(ball: &mut Ball, players: &[crate::player::Player],
         }
         ball.vel = tangent + reflected_n + push;
     }
+    // Body separation can place the center outside the playable AABB. Walls
+    // must win — same as Unity colliders (ball cannot leave the stadium).
+    resolve_walls(ball, params);
+    resolve_posts(ball, params);
 }
 
 fn resolve_posts(ball: &mut Ball, params: &SimParams) {
@@ -188,25 +195,30 @@ fn resolve_posts(ball: &mut Ball, params: &SimParams) {
         }
         let n = delta / dist;
         ball.pos = c + n * contact_r;
-        bounce_circle(&mut ball.vel, n, e, mu);
+        wall_hit_circle(&mut ball.vel, n, e, mu);
     }
 }
 
 fn resolve_walls(ball: &mut Ball, params: &SimParams) {
     // `x_min`/`z_*` are already the playable *ball-center* AABB — do not
     // inset by radius again.
+    //
+    // AIA observation (2026-07-22): when the ball is shoved/kicked into a solid
+    // wall (endline outside the mouth, sidelines), Unity depenetrates back onto
+    // the surface and the ball **stops** — not an explosive bounce. Fast free
+    // kicks still use e≈0.2 (TimePlot); low into-speed settles to rest.
     let e = params.wall_e;
     let mu = params.wall_mu;
 
     if ball.pos.y < params.z_min {
         ball.pos.y = params.z_min;
         if ball.vel.y < 0.0 {
-            bounce_axis(&mut ball.vel, 1, e, mu);
+            wall_hit_axis(&mut ball.vel, 1, e, mu);
         }
     } else if ball.pos.y > params.z_max {
         ball.pos.y = params.z_max;
         if ball.vel.y > 0.0 {
-            bounce_axis(&mut ball.vel, 1, e, mu);
+            wall_hit_axis(&mut ball.vel, 1, e, mu);
         }
     }
 
@@ -215,17 +227,47 @@ fn resolve_walls(ball: &mut Ball, params: &SimParams) {
         if !in_goal_mouth(ball.pos.y, params.goal_half_width) {
             ball.pos.x = params.x_min;
             if ball.vel.x < 0.0 {
-                bounce_axis(&mut ball.vel, 0, e, mu);
+                wall_hit_axis(&mut ball.vel, 0, e, mu);
             }
         }
     } else if ball.pos.x > params.x_max {
         if !in_goal_mouth(ball.pos.y, params.goal_half_width) {
             ball.pos.x = params.x_max;
             if ball.vel.x > 0.0 {
-                bounce_axis(&mut ball.vel, 0, e, mu);
+                wall_hit_axis(&mut ball.vel, 0, e, mu);
             }
         }
     }
+}
+
+/// Soft shove / body-push into a wall: snap + full stop. Fast free kicks bounce.
+const WALL_SETTLE_INTO_SPEED: f32 = 5.0;
+
+fn wall_hit_axis(vel: &mut Vec2, normal_axis: usize, e: f32, mu: f32) {
+    let into = if normal_axis == 0 {
+        vel.x.abs()
+    } else {
+        vel.y.abs()
+    };
+    if into <= WALL_SETTLE_INTO_SPEED {
+        // Depenetration already placed the center on the wall; kill all motion
+        // (AIA: no explosion, ball rests on the face it was shoved into).
+        *vel = Vec2::ZERO;
+        return;
+    }
+    bounce_axis(vel, normal_axis, e, mu);
+}
+
+fn wall_hit_circle(vel: &mut Vec2, n: Vec2, e: f32, mu: f32) {
+    let vn = vel.dot(n);
+    if vn >= 0.0 {
+        return;
+    }
+    if (-vn) <= WALL_SETTLE_INTO_SPEED {
+        *vel = Vec2::ZERO;
+        return;
+    }
+    bounce_circle(vel, n, e, mu);
 }
 
 fn bounce_circle(vel: &mut Vec2, n: Vec2, e: f32, mu: f32) {
@@ -279,6 +321,17 @@ pub fn goal_at(pos: Vec2, params: &SimParams) -> EndReason {
         return EndReason::GoalHome;
     }
     EndReason::None
+}
+
+/// Held-ball goal: ball past the line is not enough — the **carrier body** must
+/// also be on/over the goal line. Otherwise `hold_offset` (~1.67m) scores while
+/// the player is still on the pitch (phantom walk-in goals / 50–0 spam).
+pub fn held_goal_at(ball_pos: Vec2, carrier_pos: Vec2, params: &SimParams) -> EndReason {
+    match goal_at(ball_pos, params) {
+        EndReason::GoalAway if carrier_pos.x >= params.goal_line_x => EndReason::GoalAway,
+        EndReason::GoalHome if carrier_pos.x <= -params.goal_line_x => EndReason::GoalHome,
+        _ => EndReason::None,
+    }
 }
 
 #[cfg(test)]
@@ -383,7 +436,66 @@ mod tests {
             held: true,
         };
         assert_eq!(goal_at(ball.pos, &params), EndReason::GoalAway);
+        // Carrier still on the pitch side of the line — hold alone must not score.
+        assert_eq!(
+            held_goal_at(ball.pos, Vec2::new(params.goal_line_x - 1.0, 0.0), &params),
+            EndReason::None
+        );
+        // Carrier on/over the line — walk-in counts.
+        assert_eq!(
+            held_goal_at(ball.pos, Vec2::new(params.goal_line_x, 0.0), &params),
+            EndReason::GoalAway
+        );
         let mut ball = ball;
         assert_eq!(step_free_ball(&mut ball, &params, 0.019), EndReason::GoalAway);
+    }
+
+    #[test]
+    fn body_push_cannot_shove_ball_out_of_stadium() {
+        let params = SimParams::default();
+        let mut ball = Ball {
+            pos: Vec2::new(0.0, params.z_max - 0.1),
+            vel: Vec2::ZERO,
+            height: params.ball_rest_height,
+            vel_y: 0.0,
+            held: false,
+        };
+        let pusher = crate::player::Player {
+            team: crate::brain::TeamId::Home,
+            id: crate::player::PlayerId(1),
+            pos: Vec2::new(0.0, params.z_max + 0.5),
+            vel: Vec2::new(0.0, 5.0),
+            facing: Vec2::Y,
+            stamina: 1.0,
+            stamina_regen_lock_left: 0.0,
+            shot_charge: 0.0,
+            charge_warmup_left: 0.0,
+        };
+        resolve_player_bodies(&mut ball, &[pusher], &params);
+        assert!(
+            ball.pos.y <= params.z_max + 1e-4,
+            "body push left ball OOB: {:?}",
+            ball.pos
+        );
+        assert!(
+            ball.pos.x >= params.x_min - 1e-4 && ball.pos.x <= params.x_max + 1e-4,
+            "body push left ball past endline: {:?}",
+            ball.pos
+        );
+    }
+
+    #[test]
+    fn soft_wall_shove_stops_dead_not_explode() {
+        let params = SimParams::default();
+        let mut ball = Ball {
+            pos: Vec2::new(0.0, params.z_max + 0.5),
+            vel: Vec2::new(1.0, 3.0), // into sideline, below settle threshold
+            height: params.ball_rest_height,
+            vel_y: 0.0,
+            held: false,
+        };
+        resolve_walls(&mut ball, &params);
+        assert!((ball.pos.y - params.z_max).abs() < 1e-4);
+        assert_eq!(ball.vel, Vec2::ZERO);
     }
 }

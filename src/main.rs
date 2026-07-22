@@ -10,7 +10,8 @@
 use std::path::{Path, PathBuf};
 
 use aicomp_soccer_sim::brain::{BrainOutput, ChaseBallBrain, TeamBrain, TeamId};
-use aicomp_soccer_sim::graph::{load_team_graph, GraphBrain};
+use aicomp_soccer_sim::graph::load_team_graph;
+use aicomp_soccer_sim::graph_vm::RuntimeBrain;
 use aicomp_soccer_sim::params::{default_params_path, SimParams};
 use aicomp_soccer_sim::player::PlayerId;
 use aicomp_soccer_sim::team_threads::{think_barrier, ThinkTimings};
@@ -153,16 +154,16 @@ struct ViewerWorld {
     last_away: BrainOutput,
 }
 
-/// Graph if loadable, else chase fallback.
+/// Compiled Graph VM (O1) if loadable, else chase fallback.
 enum ActiveBrain {
-    Graph(GraphBrain),
+    Runtime(RuntimeBrain),
     Chase(ChaseBallBrain),
 }
 
 impl ActiveBrain {
     fn label(&self) -> &'static str {
         match self {
-            ActiveBrain::Graph(_) => "graph",
+            ActiveBrain::Runtime(_) => "runtime",
             ActiveBrain::Chase(_) => "chase-fallback",
         }
     }
@@ -171,7 +172,7 @@ impl ActiveBrain {
 impl TeamBrain for ActiveBrain {
     fn think(&mut self, api: &aicomp_soccer_sim::api::TeamApi) -> BrainOutput {
         match self {
-            ActiveBrain::Graph(g) => g.think(api),
+            ActiveBrain::Runtime(g) => g.think(api),
             ActiveBrain::Chase(c) => c.think(api),
         }
     }
@@ -181,11 +182,11 @@ fn load_brain(path: &Path) -> ActiveBrain {
     match load_team_graph(path) {
         Ok(g) => {
             info!(
-                "loaded team graph {} ({} nodes)",
+                "loaded team graph {} ({} nodes) → RuntimeBrain O1",
                 path.display(),
                 g.nodes.len()
             );
-            ActiveBrain::Graph(GraphBrain::new(g))
+            ActiveBrain::Runtime(RuntimeBrain::compile(g))
         }
         Err(e) => {
             warn!("graph load failed ({path:?}): {e} — using ChaseBallBrain");
@@ -896,6 +897,31 @@ fn sim_tick_barrier(
             clock.accumulator = 0.0;
         } else {
             clock.backlog_ticks = 0.0;
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            let budget_ms = FIXED_DT * 1000.0;
+            let ball = world.ball.pos;
+            let near_wall = ball.x.abs() > world.params.x_max - 2.0
+                || ball.y.abs() > world.params.z_max - 2.0;
+            let overdue = clock.tick_ms > budget_ms * 1.05;
+            if overdue || (near_wall && clock.tick_ms > budget_ms * 0.5) {
+                eprintln!(
+                    "[spike] t={:.2}s tick={:.2}ms home={:.2}ms away={:.2}ms phys={:.2}ms \
+                     ball=({:.1},{:.1}) vel={:.1} held={} phase={:?} near_wall={near_wall}",
+                    world.match_state.clock_s,
+                    clock.tick_ms,
+                    clock.last.home_ms(),
+                    clock.last.away_ms(),
+                    clock.physics_ms,
+                    ball.x,
+                    ball.y,
+                    world.ball.vel.length(),
+                    world.ball.held,
+                    world.match_state.phase,
+                );
+            }
         }
     }
 

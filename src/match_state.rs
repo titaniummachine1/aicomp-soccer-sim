@@ -21,6 +21,16 @@ pub struct MatchState {
     pub duration_s: f32,
     pub score_home: u32,
     pub score_away: u32,
+    /// Team that scored the most recent goal (`None` until first goal).
+    pub last_scorer: Option<TeamId>,
+    pub shots_home: u32,
+    pub shots_away: u32,
+    /// Seconds each side held the ball (Play phase).
+    pub possession_s_home: f32,
+    pub possession_s_away: f32,
+    /// Seconds the ball spent on each side's attacking half (Play phase).
+    pub attacking_s_home: f32,
+    pub attacking_s_away: f32,
     pub kickoff_team: TeamId,
     pub opening_kickoff_team: TeamId,
     pub phase_timer: f32,
@@ -59,6 +69,13 @@ impl MatchState {
             duration_s: 180.0,
             score_home: 0,
             score_away: 0,
+            last_scorer: None,
+            shots_home: 0,
+            shots_away: 0,
+            possession_s_home: 0.0,
+            possession_s_away: 0.0,
+            attacking_s_home: 0.0,
+            attacking_s_away: 0.0,
             kickoff_team: opening,
             opening_kickoff_team: opening,
             phase_timer: 0.0,
@@ -72,10 +89,12 @@ impl MatchState {
 
     /// `scored_on` conceded — they receive the next kickoff (AIComp rule).
     pub fn on_goal(&mut self, scored_on: TeamId, kickoff_delay_s: f32) {
+        let scorer = scored_on.other();
         match scored_on {
             TeamId::Home => self.score_away += 1,
             TeamId::Away => self.score_home += 1,
         }
+        self.last_scorer = Some(scorer);
         self.phase = MatchPhase::GoalPause;
         self.phase_timer = kickoff_delay_s;
         self.kickoff_team = scored_on;
@@ -83,6 +102,36 @@ impl MatchState {
         self.kickoff_suppress_away_team_side = true;
         self.kickoff_seen_carrier = false;
         self.reset_stale_tracker(Vec2::ZERO);
+    }
+
+    pub fn record_shot(&mut self, team: TeamId) {
+        match team {
+            TeamId::Home => self.shots_home += 1,
+            TeamId::Away => self.shots_away += 1,
+        }
+    }
+
+    /// Accumulate possession / attacking clocks during Play.
+    pub fn tick_match_stats(
+        &mut self,
+        dt: f32,
+        carrier: Option<(TeamId, u8)>,
+        ball_x: f32,
+    ) {
+        if self.phase != MatchPhase::Play {
+            return;
+        }
+        match carrier.map(|(t, _)| t) {
+            Some(TeamId::Home) => self.possession_s_home += dt,
+            Some(TeamId::Away) => self.possession_s_away += dt,
+            None => {}
+        }
+        // Home attacks +X; Away attacks −X.
+        if ball_x > 0.0 {
+            self.attacking_s_home += dt;
+        } else if ball_x < 0.0 {
+            self.attacking_s_away += dt;
+        }
     }
 
     /// Stale-ball whistle: no score change; kickoff flips to opposite of who

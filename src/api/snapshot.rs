@@ -67,6 +67,44 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
             world.ball.pos.x >= 0.0
         },
     );
+    bools.insert(
+        "Ball On Opponent Side",
+        if is_home {
+            world.ball.pos.x > 0.0
+        } else if world.match_state.kickoff_suppress_away_team_side {
+            // Mirror of suppressed team-side: treat as on opponent half.
+            true
+        } else {
+            world.ball.pos.x < 0.0
+        },
+    );
+
+    let team_score = match team {
+        TeamId::Home => world.match_state.score_home,
+        TeamId::Away => world.match_state.score_away,
+    };
+    let opp_score = match team {
+        TeamId::Home => world.match_state.score_away,
+        TeamId::Away => world.match_state.score_home,
+    };
+    bools.insert("Team Is Winning", team_score > opp_score);
+    bools.insert("Opponent Is Winning", opp_score > team_score);
+    bools.insert(
+        "Team Scored Last Point",
+        world.match_state.last_scorer == Some(team),
+    );
+    bools.insert(
+        "Opponent Scored Last Point",
+        world.match_state.last_scorer == Some(opp),
+    );
+    bools.insert(
+        "Is Ball Headed Towards Team Goal",
+        ball_headed_toward(world.ball, team_goal),
+    );
+    bools.insert(
+        "Is Ball Headed Towards Opponent Goal",
+        ball_headed_toward(world.ball, opp_goal),
+    );
 
     // AIA: player is open iff no opposing player is within 2× interact radius.
     let open_r = params.interact_radius * 2.0;
@@ -102,9 +140,31 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
             3 => "Is Opponent Player 3 Open",
             _ => "Is Opponent Player 4 Open",
         };
+        let label_opp_has = match id.0 {
+            1 => "Opponent Player 1 Has Ball",
+            2 => "Opponent Player 2 Has Ball",
+            3 => "Opponent Player 3 Has Ball",
+            _ => "Opponent Player 4 Has Ball",
+        };
+        let label_opp_near = match id.0 {
+            1 => "Is Ball Nearby Opponent Player 1",
+            2 => "Is Ball Nearby Opponent Player 2",
+            3 => "Is Ball Nearby Opponent Player 3",
+            _ => "Is Ball Nearby Opponent Player 4",
+        };
+        let label_opp_closest = match id.0 {
+            1 => "Is Opponent Player 1 Closest Opponent to Ball",
+            2 => "Is Opponent Player 2 Closest Opponent to Ball",
+            3 => "Is Opponent Player 3 Closest Opponent to Ball",
+            _ => "Is Opponent Player 4 Closest Opponent to Ball",
+        };
         bools.insert(
             label_has,
             matches!(carrier, Some((t, pid)) if t == team && pid == id.0),
+        );
+        bools.insert(
+            label_opp_has,
+            matches!(carrier, Some((t, pid)) if t == opp && pid == id.0),
         );
         if let Some(p) = team_players.iter().find(|p| p.id == id) {
             let hold = p.hold_pos(params.hold_offset);
@@ -133,9 +193,31 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
         }
         if let Some(p) = opp_players.iter().find(|p| p.id == id) {
             bools.insert(label_opp_open, is_open(p.pos, &team_players, open_r));
+            let hold = p.hold_pos(params.hold_offset);
+            let dist = (hold - world.ball.pos)
+                .length()
+                .min((p.pos - world.ball.pos).length());
+            let since_kick = if world.possession.kick_exclude_left > 0.0 {
+                (2.5 - world.possession.kick_exclude_left).clamp(0.0, 2.5)
+            } else {
+                999.0
+            };
+            let hot_near = !matches!(world.possession.kick_exclude_team, Some(t) if t == opp)
+                && since_kick < 0.25;
+            let near_r = if hot_near {
+                params.interact_radius + 1.0
+            } else {
+                params.interact_radius
+            };
+            bools.insert(label_opp_near, dist <= near_r);
         } else {
             bools.insert(label_opp_open, false);
+            bools.insert(label_opp_near, false);
         }
+        bools.insert(
+            label_opp_closest,
+            closest_teammate_to_ball(&opp_players, world.ball) == Some(id),
+        );
         let is_closest = closest_teammate_to_ball(&team_players, world.ball) == Some(id);
         // During opening suppress, Away Defender chase also keys off Closest_P3
         // (OR Ball On Team Side). Forcing P3 not-closest keeps State0 hold so O3
@@ -168,9 +250,94 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
     floats.insert("Field Width", 50.0);
     floats.insert("Field Depth", 80.0);
     floats.insert("Kickoff Circle Radius", params.kickoff_circle_r);
+    floats.insert("Goal Width", params.goal_half_width * 2.0);
+    // Visual/API height; pitch physics is 2D XZ. FIFA-ish default until TimePlot.
+    floats.insert("Goal Height", 2.44);
     floats.insert("ground_line", 5.0);
     floats.insert("Area Depth", 12.5);
     floats.insert("Arena Semicircle Depth", 2.5);
+
+    let (team_shots, opp_shots) = match team {
+        TeamId::Home => (
+            world.match_state.shots_home,
+            world.match_state.shots_away,
+        ),
+        TeamId::Away => (
+            world.match_state.shots_away,
+            world.match_state.shots_home,
+        ),
+    };
+    floats.insert("Team Shots", team_shots as f32);
+    floats.insert("Opponent Shots", opp_shots as f32);
+
+    let (poss_team, poss_opp) = match team {
+        TeamId::Home => (
+            world.match_state.possession_s_home,
+            world.match_state.possession_s_away,
+        ),
+        TeamId::Away => (
+            world.match_state.possession_s_away,
+            world.match_state.possession_s_home,
+        ),
+    };
+    let poss_tot = poss_team + poss_opp;
+    floats.insert(
+        "Team Possession %",
+        if poss_tot > 1e-6 {
+            100.0 * poss_team / poss_tot
+        } else {
+            50.0
+        },
+    );
+    floats.insert(
+        "Opponent Possession %",
+        if poss_tot > 1e-6 {
+            100.0 * poss_opp / poss_tot
+        } else {
+            50.0
+        },
+    );
+
+    let (atk_team, atk_opp) = match team {
+        TeamId::Home => (
+            world.match_state.attacking_s_home,
+            world.match_state.attacking_s_away,
+        ),
+        TeamId::Away => (
+            world.match_state.attacking_s_away,
+            world.match_state.attacking_s_home,
+        ),
+    };
+    let atk_tot = atk_team + atk_opp;
+    floats.insert(
+        "Team Attacking %",
+        if atk_tot > 1e-6 {
+            100.0 * atk_team / atk_tot
+        } else {
+            50.0
+        },
+    );
+    floats.insert(
+        "Opponent Attacking %",
+        if atk_tot > 1e-6 {
+            100.0 * atk_opp / atk_tot
+        } else {
+            50.0
+        },
+    );
+
+    floats.insert("Ball Speed", world.ball.vel.length());
+    floats.insert(
+        "Current Simulation Time",
+        world.match_state.clock_s,
+    );
+    floats.insert("Max Simulation Time", world.match_state.duration_s);
+    floats.insert(
+        "Simulation Time Remaining",
+        (world.match_state.duration_s - world.match_state.clock_s).max(0.0),
+    );
+    floats.insert("Delta Time", crate::world::FIXED_DT);
+    floats.insert("Fixed Delta Time", crate::world::FIXED_DT);
 
     let (carrier_charge, carrier_stam) = if let Some((ct, cid)) = carrier {
         if let Some(p) = world.players.iter().find(|p| p.team == ct && p.id.0 == cid) {
@@ -182,6 +349,8 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
         (0.0, 0.0)
     };
     floats.insert("Ball Carrier Shot Charge", carrier_charge);
+    // Unity label says "%"; value is still 0..1 (same as Ball Carrier Shot Charge).
+    floats.insert("Player With Ball Shot Charge %", carrier_charge);
     floats.insert("Ball Carrier Stamina", carrier_stam);
     floats.insert(
         "Stamina of last defending opponent",
@@ -216,6 +385,12 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
             3 => "Distance from Team Player 3 to nearest Opponent",
             _ => "Distance from Team Player 4 to nearest Opponent",
         };
+        let near_opp_stam_label = match id.0 {
+            1 => "Opponent Nearest Teammate Player 1 Stamina",
+            2 => "Opponent Nearest Teammate Player 2 Stamina",
+            3 => "Opponent Nearest Teammate Player 3 Stamina",
+            _ => "Opponent Nearest Teammate Player 4 Stamina",
+        };
         let stam = team_players
             .iter()
             .find(|p| p.id == id)
@@ -240,6 +415,13 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
             .map(|p| nearest_dist(p.pos, &opp_players))
             .unwrap_or(0.0);
         floats.insert(dist_label, dist);
+        let near_opp_stam = team_players
+            .iter()
+            .find(|p| p.id == id)
+            .and_then(|p| nearest_player(p.pos, &opp_players))
+            .map(|p| p.stamina)
+            .unwrap_or(0.0);
+        floats.insert(near_opp_stam_label, near_opp_stam);
     }
 
     let mut transforms = HashMap::new();
@@ -248,6 +430,29 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
     transforms.insert("Opponent Goal Center", opp_goal);
     transforms.insert("Team Goal Left Post", left_post);
     transforms.insert("Team Goal Right Post", right_post);
+    let (opp_left_post, opp_right_post) = team_goal_posts(opp, params);
+    transforms.insert("Opponent Goal Left Post", opp_left_post);
+    transforms.insert("Opponent Goal Right Post", opp_right_post);
+    if let Some(p) = player_nearest_to(team_goal, &opp_players) {
+        transforms.insert("Opponent Nearest Team Goal", p.pos);
+    } else {
+        transforms.insert("Opponent Nearest Team Goal", opp_goal);
+    }
+    if let Some(p) = player_nearest_to(opp_goal, &opp_players) {
+        transforms.insert("Opponent Nearest Opponent Goal", p.pos);
+    } else {
+        transforms.insert("Opponent Nearest Opponent Goal", opp_goal);
+    }
+    if let Some(p) = player_nearest_to(team_goal, &team_players) {
+        transforms.insert("Teammate Nearest Team Goal", p.pos);
+    } else {
+        transforms.insert("Teammate Nearest Team Goal", team_goal);
+    }
+    if let Some(p) = player_nearest_to(opp_goal, &team_players) {
+        transforms.insert("Teammate Nearest Opponent Goal", p.pos);
+    } else {
+        transforms.insert("Teammate Nearest Opponent Goal", opp_goal);
+    }
     for id in PlayerId::ALL {
         let key = match id.0 {
             1 => "Team Player 1",
@@ -283,6 +488,17 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
         };
         let nearest = nearest_teammate_pos(id, &team_players).unwrap_or(pos);
         transforms.insert(near_key, nearest);
+
+        let near_opp_key = match id.0 {
+            1 => "Opponent Nearest Team Player 1",
+            2 => "Opponent Nearest Team Player 2",
+            3 => "Opponent Nearest Team Player 3",
+            _ => "Opponent Nearest Team Player 4",
+        };
+        let nearest_opp = nearest_player(pos, &opp_players)
+            .map(|p| p.pos)
+            .unwrap_or(opp_pos);
+        transforms.insert(near_opp_key, nearest_opp);
     }
 
     let mut vectors: HashMap<&'static str, Option<Vec2>> = HashMap::new();
@@ -399,6 +615,18 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
             vectors.insert(from_opp_goal, None);
             vectors.insert(from_team_goal, None);
             vectors.insert(from_teammate, None);
+        }
+
+        let from_ball_opp = match id.0 {
+            1 => "Direction of ball from Opponent 1",
+            2 => "Direction of ball from Opponent 2",
+            3 => "Direction of ball from Opponent 3",
+            _ => "Direction of ball from Opponent 4",
+        };
+        if let Some(p) = opp_players.iter().find(|p| p.id == id) {
+            vectors.insert(from_ball_opp, Some(dir(p.pos, world.ball.pos)));
+        } else {
+            vectors.insert(from_ball_opp, None);
         }
     }
 
@@ -602,6 +830,31 @@ fn nearest_dist(from: Vec2, others: &[&Player]) -> f32 {
         .iter()
         .map(|p| (p.pos - from).length())
         .fold(f32::MAX, f32::min)
+}
+
+fn nearest_player<'a>(from: Vec2, others: &[&'a Player]) -> Option<&'a Player> {
+    others.iter().copied().min_by(|a, b| {
+        (a.pos - from)
+            .length()
+            .partial_cmp(&(b.pos - from).length())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    })
+}
+
+fn player_nearest_to<'a>(target: Vec2, players: &[&'a Player]) -> Option<&'a Player> {
+    nearest_player(target, players)
+}
+
+fn ball_headed_toward(ball: &Ball, goal: Vec2) -> bool {
+    let speed = ball.vel.length();
+    if speed < 0.5 {
+        return false;
+    }
+    let to_goal = goal - ball.pos;
+    if to_goal.length_squared() < 1e-4 {
+        return false;
+    }
+    ball.vel.normalize().dot(to_goal.normalize()) > 0.5
 }
 
 /// AIA lock: open = no opposing player within `open_r` (= 2× interact radius).

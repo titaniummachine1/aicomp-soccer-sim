@@ -15,7 +15,9 @@
 use bevy::prelude::Vec2;
 
 use crate::api::{build_team_api, first_clear_dir, TeamApi, WorldSensors};
-use crate::ball::{goal_at, resolve_player_bodies, step_free_ball, Ball, EndReason};
+use crate::ball::{
+    goal_at, held_goal_at, resolve_player_bodies, step_free_ball, Ball, EndReason,
+};
 use crate::brain::{BrainCommand, BrainOutput, TeamBrain, TeamId};
 use crate::match_state::{
     kickoff_control_allowed, place_kickoff, receiving_team_circle_locked, MatchPhase, MatchState,
@@ -138,6 +140,11 @@ impl MatchWorld {
             }
         } else {
             self.match_state.clock_s += dt;
+            self.match_state.tick_match_stats(
+                dt,
+                self.possession.carrier,
+                self.ball.pos.x,
+            );
         }
 
         // Unlock circle + Away team-side chase after first release or ball leaves ring.
@@ -237,7 +244,7 @@ impl MatchWorld {
                 &self.params,
             );
             tick_stamina(&mut self.players[i], cmd.sprint, dt, &self.params);
-            if let Some(drain) = apply_interact(
+            let outcome = apply_interact(
                 &mut self.players[i],
                 &mut self.ball,
                 &mut self.possession,
@@ -246,7 +253,11 @@ impl MatchWorld {
                 dt,
                 carrier_stam,
                 carrier_charge,
-            ) {
+            );
+            if outcome.shot {
+                self.match_state.record_shot(team);
+            }
+            if let Some(drain) = outcome.drain {
                 if let Some(c) = self
                     .players
                     .iter_mut()
@@ -271,10 +282,19 @@ impl MatchWorld {
             self.params.ball_rest_height,
         );
 
-        // Always verify goal volume after hold sync — a carrier walking the
-        // ball past the line (hold offset past x_max) must score too.
+        // Always verify goal volume after hold sync.
+        // Held: require carrier body on/over the goal line (hold_offset alone
+        // must not score — players are clamped to the goal line AABB).
         let scored = if self.ball.held {
-            goal_at(self.ball.pos, &self.params)
+            let carrier_pos = self.possession.carrier.and_then(|(t, id)| {
+                self.players
+                    .iter()
+                    .find(|p| p.team == t && p.id.0 == id)
+                    .map(|p| p.pos)
+            });
+            carrier_pos
+                .map(|cp| held_goal_at(self.ball.pos, cp, &self.params))
+                .unwrap_or(EndReason::None)
         } else {
             let scored = step_free_ball(&mut self.ball, &self.params, dt);
             resolve_player_bodies(&mut self.ball, &self.players, &self.params);
@@ -651,5 +671,100 @@ mod tests {
             world.match_state.phase
         );
         assert_eq!(world.match_state.phase, MatchPhase::GoalPause);
+    }
+
+    /// Corner / wall-slam should not blow the FIXED_DT budget (viewer "OVER").
+    /// Maia nested-Function Null is unrelated — AIA itself has zero nested calls.
+    #[test]
+    fn corner_slam_tick_cost_stays_under_budget() {
+        use crate::graph::load_team_graph;
+        use crate::graph_vm::RuntimeBrain;
+        use std::path::PathBuf;
+        use std::time::Instant;
+
+        let aia = PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default())
+            .join("AppData/LocalLow/Unicorn One/AIComp/Saves/Soccer/AIA.txt");
+        if !aia.exists() {
+            eprintln!("skip: no AIA.txt at {aia:?}");
+            return;
+        }
+        let graph = load_team_graph(&aia).expect("load AIA");
+        let cached = RuntimeBrain::compile_cached(graph);
+        let mut home = RuntimeBrain::from_cached(cached.clone());
+        let mut away = RuntimeBrain::from_cached(cached);
+
+        let params = SimParams::default();
+        let mut world = MatchWorld::new_kickoff_opening(params, TeamId::Home);
+        // Leave kickoff quickly.
+        for _ in 0..30 {
+            world.step_brains(&mut home, &mut away, FIXED_DT);
+        }
+
+        let mut time_mid = Vec::new();
+        let mut time_corner = Vec::new();
+        let mut time_api = Vec::new();
+
+        for i in 0..120 {
+            // Alternate: free midfield ball vs hard corner slam (can't leave stadium —
+            // walls clamp; this is the "kick out" break attempt).
+            if i % 2 == 0 {
+                world.possession.carrier = None;
+                world.ball.held = false;
+                world.ball.pos = Vec2::ZERO;
+                world.ball.vel = Vec2::new(8.0, 3.0);
+                world.ball.height = world.params.ball_rest_height;
+                world.ball.vel_y = 0.0;
+            } else {
+                world.possession.carrier = None;
+                world.ball.held = false;
+                world.ball.pos = Vec2::new(world.params.x_max - 0.2, world.params.z_max - 0.2);
+                world.ball.vel = Vec2::new(30.0, 30.0);
+                world.ball.height = world.params.ball_rest_height + 2.0;
+                world.ball.vel_y = 5.0;
+            }
+
+            let a0 = Instant::now();
+            let (home_api, away_api) = world.build_apis();
+            let api_ms = a0.elapsed().as_secs_f32() * 1000.0;
+            time_api.push(api_ms);
+
+            let t0 = Instant::now();
+            let home_out = home.think(&home_api);
+            let away_out = away.think(&away_api);
+            world.step_with_commands(&home_out, &away_out, FIXED_DT);
+            let tick_ms = t0.elapsed().as_secs_f32() * 1000.0;
+            if i % 2 == 0 {
+                time_mid.push(tick_ms);
+            } else {
+                time_corner.push(tick_ms);
+            }
+        }
+
+        let pct = |xs: &mut [f32], p: f32| {
+            xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let i = ((xs.len() as f32 - 1.0) * p).round() as usize;
+            xs[i]
+        };
+        let mid_p50 = pct(&mut time_mid, 0.5);
+        let mid_p95 = pct(&mut time_mid, 0.95);
+        let cor_p50 = pct(&mut time_corner, 0.5);
+        let cor_p95 = pct(&mut time_corner, 0.95);
+        let api_p95 = pct(&mut time_api, 0.95);
+        eprintln!(
+            "corner_slam mid p50={mid_p50:.2} p95={mid_p95:.2} | \
+             corner p50={cor_p50:.2} p95={cor_p95:.2} | api p95={api_p95:.2} ms \
+             (budget {:.1})",
+            FIXED_DT * 1000.0
+        );
+
+        // Corner slam must not be dramatically worse than midfield (same brain work).
+        assert!(
+            cor_p95 < FIXED_DT * 1000.0 * 0.9,
+            "corner p95 {cor_p95:.2}ms exceeds 90% of FIXED_DT budget"
+        );
+        assert!(
+            cor_p95 < mid_p95 * 3.0 + 1.0,
+            "corner p95 {cor_p95:.2} much worse than mid p95 {mid_p95:.2}"
+        );
     }
 }

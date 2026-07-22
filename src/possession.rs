@@ -49,6 +49,12 @@ pub struct CarrierStaminaDrain {
     pub attacker_wins: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct InteractOutcome {
+    pub drain: Option<CarrierStaminaDrain>,
+    pub shot: bool,
+}
+
 /// Interact uses the hold/aim point (BallHoldLocation), not body center alone.
 /// `carrier_stamina` is required for contested tackles (read before mut borrow).
 pub fn apply_interact(
@@ -60,7 +66,7 @@ pub fn apply_interact(
     dt: f32,
     carrier_stamina: Option<f32>,
     _carrier_shot_charge: Option<f32>,
-) -> Option<CarrierStaminaDrain> {
+) -> InteractOutcome {
     let hold = player.hold_pos(params.hold_offset);
     let is_carrier = matches!(
         poss.carrier,
@@ -83,7 +89,7 @@ pub fn apply_interact(
                 let t = params.shot_charge_time_s.max(1e-4);
                 player.shot_charge = (player.shot_charge + dt / t).min(1.0);
             }
-            return None;
+            return InteractOutcome::default();
         }
 
         if player.shot_charge > 0.05 {
@@ -125,15 +131,18 @@ pub fn apply_interact(
             poss.kick_exclude_team = Some(player.team);
             poss.kick_exclude_left = 2.5;
             poss.first_kick_done = true;
-            return None;
+            return InteractOutcome {
+                drain: None,
+                shot: true,
+            };
         }
         player.shot_charge = 0.0;
         player.charge_warmup_left = 0.0;
-        return None;
+        return InteractOutcome::default();
     }
 
     if !cmd.interact {
-        return None;
+        return InteractOutcome::default();
     }
 
     // Shared lockout after kick/steal — blocks tackle + loose pickup, except
@@ -147,7 +156,7 @@ pub fn apply_interact(
         };
         let hot_opp = !excluded && since_kick < 0.25;
         if !hot_opp {
-            return None;
+            return InteractOutcome::default();
         }
     }
 
@@ -186,16 +195,19 @@ pub fn apply_interact(
                         // Failed / contested probe still briefly locks re-tackle spam.
                         poss.pickup_lockout = 0.40;
                     }
-                    return Some(CarrierStaminaDrain {
-                        team: ct,
-                        id: cid,
-                        drain,
-                        attacker_wins,
-                    });
+                    return InteractOutcome {
+                        drain: Some(CarrierStaminaDrain {
+                            team: ct,
+                            id: cid,
+                            drain,
+                            attacker_wins,
+                        }),
+                        shot: false,
+                    };
                 }
             }
         }
-        return None;
+        return InteractOutcome::default();
     }
 
     // Pickup: hold spot (or body) within interact radius of free ball.
@@ -251,7 +263,7 @@ pub fn apply_interact(
             }
         }
     }
-    None
+    InteractOutcome::default()
 }
 
 pub fn sync_held_ball(
@@ -319,8 +331,9 @@ mod tests {
             0.019,
             Some(1.0),
             Some(0.0),
-        );
-        let drain = drain.expect("equal-stam tackle returns drain");
+        )
+        .drain
+        .expect("equal-stam tackle returns drain");
         assert!(drain.attacker_wins);
         assert!((drain.drain - 1.0).abs() < 1e-5, "carrier drain={}", drain.drain);
         assert_eq!(poss.carrier, Some((TeamId::Away, 1)));
@@ -370,8 +383,10 @@ mod tests {
             0.019,
             Some(0.5),
             Some(0.0),
-        );
-        assert!(drain.unwrap().attacker_wins);
+        )
+        .drain
+        .expect("higher-stam tackle returns drain");
+        assert!(drain.attacker_wins);
         assert_eq!(poss.carrier, Some((TeamId::Away, 1)));
         assert!(
             (attacker.stamina - 1.0).abs() < 1e-5,

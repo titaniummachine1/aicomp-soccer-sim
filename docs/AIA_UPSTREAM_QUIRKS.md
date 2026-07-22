@@ -35,12 +35,16 @@ Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic
 
 ### 1b. Custom functions **cannot nest** (engine limit)
 
-- **Where:** `ENGINE` · `CONFIRMED` (AIA Discord bot, 2026-07-22)
+- **Where:** `ENGINE` · `CONFIRMED` (AIA Discord bot, 2026-07-22; Maia /
+  PunkSkeleton report: nested `Player Distance To The Ball` →
+  `Relative Direction` made every player distance identical)
 - **What:** “you can't currently nest functions inside of other functions. if
   you want to use them you'll need to pass a value from one function into
   another as a parameter.” Nested `Function` calls yield Null / identical
   wrong results (e.g. Player Distance always the same).
 - **Sim:** GraphBrain + O0 lowerer reject nested `Function` (return/emit Null).
+- **Note:** Stock `AIA.txt` has **0** nested `Function` calls — this quirk
+  breaks *other* graphs that nest helpers, not AIA itself.
 
 ### 2. Kicking striker spawn = `**(0,0)` on the ball\*\*
 
@@ -102,6 +106,20 @@ Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic
   matches the flick TimePlot.
 - **Ask:** Comment the invert; consider wiring striker dir2 to ClearMate so Ready
   can fire mid-charge instead of always dumping at 1.0.
+
+### 5b. Body-push / hold-offset must not leave the stadium or phantom-score
+
+- **Where:** `SIM` · fixed 2026-07-22
+- **What:** `resolve_player_bodies` could teleport the loose ball past sidelines /
+  endlines (no wall pass after separation) — looked like “ball bugs out of
+  bounds.” Separately, held `hold_offset` past the goal line scored while the
+  carrier was still on the pitch → easy goal spam (e.g. 50–0).
+- **Sim:** Re-run wall/post containment after body resolve. Held goals require
+  **carrier body** on/over the goal line, not only the hold point.
+- **Wall settle (AIA 2026-07-22):** soft shove into solid wall (endline outside
+  mouth / sideline / post) depenetrates onto the face and **stops dead**
+  (into-speed ≤5 m/s). Fast free kicks still bounce with e≈0.2 — not an
+  explosion on shove.
 
 ### 6. Bool constant modifiers are inverted (dropdown index)
 
