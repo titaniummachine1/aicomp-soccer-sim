@@ -21,6 +21,7 @@ pub mod probe_brains;
 pub mod team_threads;
 pub mod timeplot;
 pub mod world;
+pub mod train;
 
 pub use ball::{goal_at, resolve_player_bodies, step_free_ball, Ball, EndReason};
 pub use brain::{BrainCommand, BrainOutput, ChaseBallBrain, IdleBrain, TeamBrain, TeamId};

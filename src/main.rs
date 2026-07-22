@@ -28,6 +28,7 @@ use aicomp_soccer_sim::player::PlayerId;
 use aicomp_soccer_sim::probe_brains::{PerfectControllerBrain, Test1Brain, Test2Brain};
 use aicomp_soccer_sim::team_threads::{think_barrier, ThinkTimings};
 use aicomp_soccer_sim::world::{MatchWorld, FIXED_DT};
+use aicomp_soccer_sim::train::TrainedBrain;
 use bevy::picking::prelude::*;
 use bevy::prelude::*;
 use bevy::ui::{FocusPolicy, RelativeCursorPosition};
@@ -320,6 +321,7 @@ enum ActiveBrain {
     Test1(Test1Brain),
     Test2(Test2Brain),
     Perfect(PerfectControllerBrain),
+    Trained(TrainedBrain),
 }
 
 impl ActiveBrain {
@@ -331,6 +333,7 @@ impl ActiveBrain {
             ActiveBrain::Test1(_) => "test1",
             ActiveBrain::Test2(_) => "test2",
             ActiveBrain::Perfect(_) => "perfect",
+            ActiveBrain::Trained(_) => "trained",
         }
     }
 }
@@ -344,6 +347,7 @@ impl TeamBrain for ActiveBrain {
             ActiveBrain::Test1(b) => b.think(api),
             ActiveBrain::Test2(b) => b.think(api),
             ActiveBrain::Perfect(b) => b.think(api),
+            ActiveBrain::Trained(b) => b.think(api),
         }
     }
 }
@@ -370,6 +374,10 @@ fn resolve_brain(input: &BrainInput) -> (ActiveBrain, PathBuf) {
             (load_graph_brain(&path), path)
         }
         BrainInput::Graph(path) => (load_graph_brain(path), path.clone()),
+        BrainInput::Trained => (
+            ActiveBrain::Trained(TrainedBrain::default()),
+            PathBuf::from("trained")
+        )
     }
 }
 
