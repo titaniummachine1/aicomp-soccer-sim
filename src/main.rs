@@ -31,18 +31,20 @@ use aicomp_soccer_sim::team_threads::{think_barrier, ThinkTimings};
 use aicomp_soccer_sim::world::{MatchWorld, FIXED_DT};
 use bevy::picking::prelude::*;
 use bevy::prelude::*;
-use bevy::ui::RelativeCursorPosition;
+use bevy::ui::{FocusPolicy, RelativeCursorPosition};
 use bevy::window::PresentMode;
 
 const PPM: f32 = 10.0;
-/// Render target. Sim ticks stay on FIXED_DT (≈52.6 Hz / 19 ms) unless Fast.
-const RENDER_HZ: f64 = 60.0;
-/// Fast mode: burst this many FIXED_DT ticks per render frame (no idle wait).
+/// Fast / zero-idle: burst this many FIXED_DT ticks per render frame.
 const MAX_TICKS_PER_FRAME_FAST: u32 = 64;
+/// Paced catch-up when idle budget < one render frame (needed for >realtime).
+const MAX_TICKS_PER_FRAME_PACED: u32 = 64;
 /// Status / tick HUD text refresh rate (keep readable).
 const UI_HZ: f32 = 10.0;
-const TIMESCALE_MIN: f32 = 0.25;
-const TIMESCALE_MAX: f32 = 8.0;
+/// Left end of speed scrubber: 1 sim tick per wall-second.
+const IDLE_BUDGET_MAX_S: f32 = 1.0;
+/// Log floor just before far-right snap: 0.01 ms idle (matches fast tick cost).
+const IDLE_BUDGET_LOG_FLOOR_S: f32 = 0.01 / 1000.0;
 
 /// Draw order when players overlap (higher Z draws on top).
 /// Left(Home) P1 → Right(Away) P1 → Left P2 → … → Right P4.
@@ -83,7 +85,8 @@ fn portable_asset_root() -> PathBuf {
 
 struct ViewerArgs {
     fast: bool,
-    timescale: f32,
+    /// Scrubber t∈[0,1]: 0 = 1 tick/s, 1 = zero idle (as-fast-as-processed).
+    speed_t: f32,
     home: BrainInput,
     away: BrainInput,
 }
@@ -100,29 +103,21 @@ OPTIONS:
   --home <brain>        Home / Team A brain (default: aia)
   --away <brain>        Away / Team B brain (default: aia)
   --both <brain>        Set home and away to the same brain
-  --fast, -f            Skip idle wait after tick lock (brains still barrier)
-  --timescale <f32>     Idle budget = FIXED_DT / scale (default 1.0; ignored
-                        while Fast; cannot outrun tick processing)
+  --fast, -f            Zero idle (same as scrubber all the way right)
+  --speed <0..1>        Scrubber: 0=1 tick/s … 1=no idle (default ≈ realtime)
   -h, --help            Show this help
 
 BRAINS:
   chase | idle | test1 | test2 | aia | graph:<path>
-  (graph/aia always compile to RuntimeBrain O1)
 
 TIMING:
-  Tick lock always waits for both brains before a step.
-  Timescale only shortens/lengthens the idle wait *after* that.
-  Fast skips the idle wait entirely (still tick-locked).
+  Tick lock always waits for both brains.
+  Speed scrubber sets idle budget after that (log): left slow, right no wait.
 
 HOTKEYS:
   Space  pause / resume
-  F      toggle Fast mode
+  F      toggle Fast (zero idle)
   R      restart match
-
-EXAMPLES:
-  cargo run --release -- --home chase --away idle
-  cargo run --release -- --both aia --fast
-  cargo run --release -- --timescale 2 --home aia --away chase
 "
     );
 }
@@ -130,25 +125,25 @@ EXAMPLES:
 fn parse_viewer_args() -> ViewerArgs {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut fast = false;
-    let mut timescale = 1.0f32;
+    let mut speed_t = idle_budget_to_fill(FIXED_DT);
     let mut home = BrainInput::Aia;
     let mut away = BrainInput::Aia;
     let mut i = 0usize;
     while i < argv.len() {
         match argv[i].as_str() {
             "--fast" | "-f" => fast = true,
-            "--timescale" => {
+            "--speed" | "--timescale" => {
                 i += 1;
                 let v = argv.get(i).map(|s| s.as_str()).unwrap_or_else(|| {
-                    eprintln!("error: --timescale needs a value");
+                    eprintln!("error: --speed needs a value 0..1");
                     print_viewer_help();
                     std::process::exit(1);
                 });
-                timescale = v.parse().unwrap_or_else(|_| {
-                    eprintln!("error: --timescale must be a number");
+                speed_t = v.parse::<f32>().unwrap_or_else(|_| {
+                    eprintln!("error: --speed must be a number");
                     std::process::exit(1);
                 });
-                timescale = timescale.clamp(TIMESCALE_MIN, TIMESCALE_MAX);
+                speed_t = speed_t.clamp(0.0, 1.0);
             }
             "--home" => {
                 i += 1;
@@ -202,7 +197,7 @@ fn parse_viewer_args() -> ViewerArgs {
     }
     ViewerArgs {
         fast,
-        timescale,
+        speed_t,
         home,
         away,
     }
@@ -219,16 +214,15 @@ fn main() {
 
     let asset_root = portable_asset_root();
     eprintln!(
-        "viewer home={} away={} fast={} timescale={:.2}",
+        "viewer home={} away={} fast={} speed_t={:.3} idle≈{:.3}s",
         args.home.label(),
         args.away.label(),
         args.fast,
-        args.timescale
+        args.speed_t,
+        fill_to_idle_budget(args.speed_t)
     );
-    if args.fast {
-        eprintln!(
-            "viewer Fast ON — skip idle wait after tick lock (≤{MAX_TICKS_PER_FRAME_FAST} ticks/frame)"
-        );
+    if args.fast || fill_to_idle_budget(args.speed_t) <= 0.0 {
+        eprintln!("viewer zero-idle ON — tick advances as soon as both brains finish");
     }
     App::new()
         .add_plugins(
@@ -263,7 +257,8 @@ fn main() {
         .insert_resource(DebugSelection::default())
         .insert_resource(SimPaused(false))
         .insert_resource(SimFast(args.fast))
-        .insert_resource(SimTimeScale(args.timescale))
+        .insert_resource(SimTimeScale(args.speed_t))
+        .insert_resource(TimeScaleDragging(false))
         .insert_resource(TickClock::default())
         .insert_resource(InterpState::default())
         .insert_resource(UiPulse::default())
@@ -405,15 +400,42 @@ struct SimPaused(bool);
 #[derive(Resource, Default)]
 struct SimFast(bool);
 
-/// Paced idle budget multiplier: wall idle target = FIXED_DT / timescale.
-/// Does **not** make ticks finish faster than brains+physics; ignored while Fast.
+/// Scrubber t∈[0,1]: left=1 tick/s idle, right=zero idle (process ASAP).
+/// Fast button forces zero idle regardless of scrubber.
 #[derive(Resource)]
 struct SimTimeScale(f32);
 
 impl Default for SimTimeScale {
     fn default() -> Self {
-        Self(1.0)
+        Self(idle_budget_to_fill(FIXED_DT))
     }
+}
+
+/// Log map: t=0 → 1s idle (1 tick/s), t→1 → 0.01ms, only the tip → 0 idle.
+fn fill_to_idle_budget(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    // Tiny tip at the far right = true no-idle (same as Fast).
+    if t >= 0.997 {
+        return 0.0;
+    }
+    // t∈[0,0.997] → 1s … 0.01ms on a log curve.
+    let u = t / 0.997;
+    IDLE_BUDGET_MAX_S * (IDLE_BUDGET_LOG_FLOOR_S / IDLE_BUDGET_MAX_S).powf(u)
+}
+
+fn idle_budget_to_fill(budget: f32) -> f32 {
+    if budget <= 0.0 {
+        return 1.0;
+    }
+    if budget <= IDLE_BUDGET_LOG_FLOOR_S {
+        return 0.997;
+    }
+    if budget >= IDLE_BUDGET_MAX_S {
+        return 0.0;
+    }
+    let u = (budget.ln() - IDLE_BUDGET_MAX_S.ln())
+        / (IDLE_BUDGET_LOG_FLOOR_S.ln() - IDLE_BUDGET_MAX_S.ln());
+    (u * 0.997).clamp(0.0, 0.997)
 }
 
 fn run_label(paused: bool, fast: bool) -> &'static str {
@@ -612,7 +634,14 @@ struct TimeScaleTrack;
 struct TimeScaleFill;
 
 #[derive(Component)]
+struct TimeScaleThumb;
+
+#[derive(Component)]
 struct TimeScaleLabel;
+
+/// True while LMB drag started on the timescale track.
+#[derive(Resource, Default)]
+struct TimeScaleDragging(bool);
 
 fn setup_board(
     mut commands: Commands,
@@ -1085,60 +1114,82 @@ fn setup_ui(
             ));
         });
 
-    // Bottom-left: timescale slider (paced mode only).
+    // Bottom-left: timescale scrubber (click / drag).
     commands
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
                 left: Val::Px(12.0),
                 bottom: Val::Px(12.0),
-                width: Val::Px(260.0),
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(8.0)),
+                width: Val::Px(280.0),
+                padding: UiRect::axes(Val::Px(12.0), Val::Px(10.0)),
                 flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(6.0),
+                row_gap: Val::Px(8.0),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.02, 0.02, 0.04, 0.82)),
+            BackgroundColor(Color::srgba(0.02, 0.02, 0.04, 0.88)),
         ))
         .with_children(|p| {
             p.spawn((
                 TimeScaleLabel,
-                Text::new(format!("Timescale  {:.2}×  (paced)", timescale.0)),
-                TextFont::from_font_size(13.0),
-                TextColor(Color::srgb(0.85, 0.9, 0.95)),
+                Text::new(speed_label(timescale.0, false)),
+                TextFont::from_font_size(14.0),
+                TextColor(Color::srgb(0.9, 0.93, 0.98)),
             ));
+            // Tall hit target — click anywhere / hold-drag to scrub.
             p.spawn((
+                Button,
                 TimeScaleTrack,
                 RelativeCursorPosition::default(),
                 Node {
                     width: Val::Percent(100.0),
-                    height: Val::Px(14.0),
-                    border_radius: BorderRadius::all(Val::Px(4.0)),
+                    height: Val::Px(28.0),
+                    justify_content: JustifyContent::FlexStart,
+                    align_items: AlignItems::Center,
+                    border_radius: BorderRadius::all(Val::Px(8.0)),
                     ..default()
                 },
-                BackgroundColor(Color::srgb(0.15, 0.15, 0.2)),
+                BackgroundColor(Color::srgb(0.12, 0.13, 0.18)),
             ))
             .with_children(|track| {
-                let fill_pct = timescale_to_fill(timescale.0) * 100.0;
+                let fill = timescale.0.clamp(0.0, 1.0);
                 track.spawn((
                     TimeScaleFill,
                     Node {
-                        width: Val::Percent(fill_pct),
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(0.0),
+                        top: Val::Px(0.0),
+                        width: Val::Percent(fill * 100.0),
                         height: Val::Percent(100.0),
-                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        border_radius: BorderRadius::all(Val::Px(8.0)),
                         ..default()
                     },
-                    BackgroundColor(Color::srgb(0.35, 0.7, 0.95)),
+                    BackgroundColor(Color::srgb(0.30, 0.65, 0.95)),
+                    FocusPolicy::Pass,
+                ));
+                track.spawn((
+                    TimeScaleThumb,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Percent((fill * 100.0).clamp(0.0, 100.0)),
+                        margin: UiRect::left(Val::Px(-8.0)),
+                        width: Val::Px(16.0),
+                        height: Val::Px(16.0),
+                        border_radius: BorderRadius::all(Val::Px(8.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.95, 0.97, 1.0)),
+                    FocusPolicy::Pass,
                 ));
             });
             p.spawn((
-                Text::new("Drag · Fast ignores this idle wait"),
+                Text::new("1 tick/s  ←  drag  →  0.01ms  ·  no idle"),
                 TextFont::from_font_size(11.0),
-                TextColor(Color::srgb(0.65, 0.7, 0.75)),
+                TextColor(Color::srgb(0.6, 0.65, 0.7)),
             ));
         });
 
-    // Top-right tick / brain timing HUD.
+    // Top-right brain timing (no render/UI spam).
     commands
         .spawn((
             Node {
@@ -1162,15 +1213,31 @@ fn setup_ui(
         });
 }
 
+fn speed_label(t: f32, fast: bool) -> String {
+    if fast || fill_to_idle_budget(t) <= 0.0 {
+        "Speed  no idle".into()
+    } else {
+        let idle = fill_to_idle_budget(t);
+        let idle_ms = idle * 1000.0;
+        if idle >= 0.95 {
+            "Speed  1 tick/s".into()
+        } else if (idle - FIXED_DT).abs() < FIXED_DT * 0.15 {
+            format!("Speed  realtime (~{:.0}ms)", FIXED_DT * 1000.0)
+        } else if idle_ms < 1.0 {
+            format!("Speed  idle {:.2}ms", idle_ms)
+        } else {
+            format!("Speed  idle {:.0}ms", idle_ms)
+        }
+    }
+}
+
 fn timescale_to_fill(ts: f32) -> f32 {
-    let t = ((ts.ln() - TIMESCALE_MIN.ln()) / (TIMESCALE_MAX.ln() - TIMESCALE_MIN.ln()))
-        .clamp(0.0, 1.0);
-    t
+    // SimTimeScale now stores scrubber t directly.
+    ts.clamp(0.0, 1.0)
 }
 
 fn fill_to_timescale(fill: f32) -> f32 {
-    let t = fill.clamp(0.0, 1.0);
-    (TIMESCALE_MIN.ln() + t * (TIMESCALE_MAX.ln() - TIMESCALE_MIN.ln())).exp()
+    fill.clamp(0.0, 1.0)
 }
 
 fn team_slot_btn(
@@ -1297,8 +1364,14 @@ fn sim_tick_barrier(
 
     clock.ticks_this_frame = 0;
 
-    if fast.0 {
-        // Fast: skip idle budget entirely. Still tick-locked; cannot outrun processing.
+    let idle_budget = if fast.0 {
+        0.0
+    } else {
+        fill_to_idle_budget(timescale.0)
+    };
+
+    // Zero idle (Fast button or scrubber tip): fire ASAP after tick lock.
+    if idle_budget <= 0.0 {
         let mut last_ms = 0.0f32;
         for _ in 0..MAX_TICKS_PER_FRAME_FAST {
             last_ms = step_locked_tick(&mut viewer, &mut clock, &mut interp);
@@ -1311,20 +1384,25 @@ fn sim_tick_barrier(
         return;
     }
 
-    // Paced: timescale only shrinks the *idle budget* between ticks
-    // (budget = FIXED_DT / timescale). One tick when budget elapses.
-    // Tick lock + real think/phys time still gate progress — never faster than processed.
-    let scale = timescale.0.clamp(TIMESCALE_MIN, TIMESCALE_MAX);
-    let idle_budget = FIXED_DT / scale;
+    // Paced: each tick costs `idle_budget` wall seconds from the accumulator.
+    // If budget < one render frame, run several ticks this frame (proportional speed).
+    // Still tick-locked; never faster than brains+physics can compute.
     clock.accumulator += time.delta_secs();
+    let mut last_ms = clock.tick_ms;
+    while clock.accumulator >= idle_budget
+        && clock.ticks_this_frame < MAX_TICKS_PER_FRAME_PACED
+    {
+        last_ms = step_locked_tick(&mut viewer, &mut clock, &mut interp);
+        clock.ticks_this_frame += 1;
+        clock.accumulator -= idle_budget;
+    }
+    clock.tick_ms = last_ms;
 
-    if clock.accumulator >= idle_budget {
-        let last_ms = step_locked_tick(&mut viewer, &mut clock, &mut interp);
-        clock.tick_ms = last_ms;
-        clock.ticks_this_frame = 1;
-        // Consume one budget slot. Extra wall time from a slow tick is idle already used —
-        // drop leftover so we don't queue catch-up ticks (can't outrun processing).
+    if clock.ticks_this_frame >= MAX_TICKS_PER_FRAME_PACED && clock.accumulator >= idle_budget
+    {
+        clock.backlog_ticks = clock.accumulator / idle_budget;
         clock.accumulator = 0.0;
+    } else {
         clock.backlog_ticks = 0.0;
     }
 
@@ -1425,6 +1503,15 @@ fn restart_match(viewer: &mut ViewerWorld, interp: &mut InterpState, clock: &mut
     info!("match restarted");
 }
 
+fn lighten(c: Color, amount: f32) -> Color {
+    let s = c.to_srgba();
+    Color::srgb(
+        (s.red + amount).min(1.0),
+        (s.green + amount).min(1.0),
+        (s.blue + amount).min(1.0),
+    )
+}
+
 fn handle_ui_buttons(
     mut interactions: Query<
         (&Interaction, &UiAction, &mut BackgroundColor),
@@ -1447,12 +1534,10 @@ fn handle_ui_buttons(
             _ => Color::srgb(0.22, 0.22, 0.30),
         };
         match *interaction {
-            Interaction::Hovered => {
-                *bg = BackgroundColor(Color::srgb(0.35, 0.38, 0.48));
-            }
+            Interaction::Hovered => *bg = BackgroundColor(lighten(base, 0.12)),
             Interaction::None => *bg = BackgroundColor(base),
             Interaction::Pressed => {
-                *bg = BackgroundColor(Color::srgb(0.15, 0.45, 0.25));
+                *bg = BackgroundColor(lighten(base, 0.20));
                 match action {
                     UiAction::Restart => {
                         restart_match(&mut viewer, &mut interp, &mut clock);
@@ -1492,27 +1577,59 @@ fn handle_ui_buttons(
 
 fn handle_timescale_slider(
     mouse: Res<ButtonInput<MouseButton>>,
-    track_q: Query<&RelativeCursorPosition, With<TimeScaleTrack>>,
+    track_q: Query<(&RelativeCursorPosition, &Interaction), With<TimeScaleTrack>>,
+    mut dragging: ResMut<TimeScaleDragging>,
     mut timescale: ResMut<SimTimeScale>,
 ) {
-    if !mouse.pressed(MouseButton::Left) {
-        return;
-    }
-    let Ok(rel) = track_q.single() else {
+    let Ok((rel, interaction)) = track_q.single() else {
         return;
     };
+
+    // Start scrub when pressing on the track (Button Interaction::Pressed).
+    if mouse.just_pressed(MouseButton::Left)
+        && (*interaction == Interaction::Pressed || rel.cursor_over())
+    {
+        dragging.0 = true;
+    }
+    if mouse.just_released(MouseButton::Left) {
+        dragging.0 = false;
+    }
+    if !dragging.0 {
+        return;
+    }
+
+    // Bevy UI normalized: (-0.5,-0.5)=top-left … (+0.5,+0.5)=bottom-right.
+    // Keep updating while held even if the cursor leaves the track vertically.
     let Some(pos) = rel.normalized else {
         return;
     };
-    if !(0.0..=1.0).contains(&pos.x) || !(0.0..=1.0).contains(&pos.y) {
-        // Still allow drag if cursor was pressed on track and slid; RelativeCursorPosition
-        // may leave normalized while over — only accept when over or recently dragging.
-        if !rel.cursor_over() {
-            return;
-        }
+    let fill = (pos.x + 0.5).clamp(0.0, 1.0);
+    let next = fill_to_timescale(fill);
+    if (next - timescale.0).abs() > 1e-4 {
+        timescale.0 = next;
     }
-    let x = pos.x.clamp(0.0, 1.0);
-    timescale.0 = fill_to_timescale(x).clamp(TIMESCALE_MIN, TIMESCALE_MAX);
+}
+
+fn refresh_timescale_ui(
+    timescale: Res<SimTimeScale>,
+    fast: Res<SimFast>,
+    mut label: Query<&mut Text, With<TimeScaleLabel>>,
+    mut fill: Query<&mut Node, With<TimeScaleFill>>,
+    mut thumb: Query<&mut Node, (With<TimeScaleThumb>, Without<TimeScaleFill>)>,
+) {
+    if !timescale.is_changed() && !fast.is_changed() {
+        return;
+    }
+    let t = timescale_to_fill(timescale.0);
+    if let Ok(mut text) = label.single_mut() {
+        *text = Text::new(speed_label(timescale.0, fast.0));
+    }
+    if let Ok(mut node) = fill.single_mut() {
+        node.width = Val::Percent(t * 100.0);
+    }
+    if let Ok(mut node) = thumb.single_mut() {
+        node.left = Val::Percent((t * 100.0).clamp(0.0, 100.0));
+    }
 }
 
 fn sync_team_buttons(
@@ -1528,27 +1645,6 @@ fn sync_team_buttons(
             TeamId::Away => file_stem(&scripts.away_path),
         };
         *text = Text::new(name);
-    }
-}
-
-fn refresh_timescale_ui(
-    timescale: Res<SimTimeScale>,
-    fast: Res<SimFast>,
-    mut label: Query<&mut Text, With<TimeScaleLabel>>,
-    mut fill: Query<&mut Node, With<TimeScaleFill>>,
-) {
-    if !timescale.is_changed() && !fast.is_changed() {
-        return;
-    }
-    if let Ok(mut text) = label.single_mut() {
-        *text = Text::new(if fast.0 {
-            format!("Timescale  {:.2}×  (ignored while Fast)", timescale.0)
-        } else {
-            format!("Timescale  {:.2}×  (paced idle)", timescale.0)
-        });
-    }
-    if let Ok(mut node) = fill.single_mut() {
-        node.width = Val::Percent(timescale_to_fill(timescale.0) * 100.0);
     }
 }
 
@@ -1663,38 +1759,28 @@ fn refresh_tick_hud(
     let Ok((mut text, mut color)) = hud.single_mut() else {
         return;
     };
-    let budget = FIXED_DT * 1000.0;
-    let idle_target = budget / timescale.0.clamp(TIMESCALE_MIN, TIMESCALE_MAX);
-    let overdue = !fast.0 && clock.tick_ms > idle_target * 1.05;
-    let slow = clock.last.slowest_label();
+    let idle = if fast.0 {
+        0.0
+    } else {
+        fill_to_idle_budget(timescale.0)
+    };
     let home_ms = clock.last.home_ms();
     let away_ms = clock.last.away_ms();
-    let flag = if overdue { " OVER" } else { "" };
-    let pace = if fast.0 {
-        format!("FAST — skip idle after tick lock (≤{MAX_TICKS_PER_FRAME_FAST}/f)")
+    let pace = if idle <= 0.0 {
+        "no idle".to_string()
+    } else if idle * 1000.0 < 1.0 {
+        format!("{:.2}ms idle", idle * 1000.0)
     } else {
-        format!(
-            "paced idle ~{idle_target:.1}ms (×{:.2}) | F=fast",
-            timescale.0
-        )
+        format!("{:.0}ms idle", idle * 1000.0)
     };
     *text = Text::new(format!(
-        "render ~{:.0}fps | UI {}Hz | sim dt {:.1}ms\n\
-         tick {:.2}ms{flag} | {pace}\n\
-         Home think {home_ms:.2}ms | Away {away_ms:.2}ms | lock=both\n\
-         slowest: {slow} | phys {:.2}ms | dropped {:.1}t | did {}",
-        RENDER_HZ,
-        UI_HZ,
-        budget,
-        clock.tick_ms,
-        clock.physics_ms,
-        clock.backlog_ticks,
-        clock.ticks_this_frame,
+        "{:.1}ms   H {:.1} · A {:.1}\n{pace}",
+        clock.tick_ms, home_ms, away_ms
     ));
-    *color = TextColor(if overdue {
-        Color::srgb(1.0, 0.35, 0.3)
-    } else if fast.0 {
+    *color = TextColor(if idle <= 0.0 {
         Color::srgb(1.0, 0.85, 0.35)
+    } else if clock.tick_ms > idle * 1000.0 * 1.05 {
+        Color::srgb(1.0, 0.4, 0.35)
     } else {
         Color::srgb(0.75, 0.95, 0.75)
     });
