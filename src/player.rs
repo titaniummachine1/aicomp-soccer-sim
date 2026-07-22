@@ -1,4 +1,4 @@
-//! Simple movers — controller-driven 2D discs (nav-agent footprint).
+//! Simple movers — controller-driven, pitch AABB clamped (no navmesh).
 
 use bevy::prelude::*;
 
@@ -90,26 +90,41 @@ pub fn step_mover(
     player.pos += player.vel * dt;
 }
 
-pub fn faceoff_local(slot: PlayerId) -> Vec2 {
+/// AIA kickoff bases before `TeamMultiplier` (world XZ → our xy).
+/// Home uses tm=-1, Away tm=+1. Striker sits on center only when that team kicks off.
+fn aia_kickoff_base(slot: PlayerId, kicking_off: bool) -> Vec2 {
     match slot.0 {
-        1 => Vec2::new(10.0, 4.0),
-        2 => Vec2::new(10.0, -4.0),
-        3 => Vec2::new(-4.0, 0.0),
-        4 => Vec2::new(-14.0, 0.0),
+        // Striker
+        1 => {
+            if kicking_off {
+                Vec2::ZERO
+            } else {
+                Vec2::new(1.0, -7.0)
+            }
+        }
+        // Playmaker
+        2 => Vec2::new(11.0, 0.0),
+        // Defender
+        3 => Vec2::new(5.0, 7.0),
+        // Goalie (near own goal line ~±36; posts at ±40.2)
+        4 => Vec2::new(36.0, 0.0),
         _ => Vec2::ZERO,
     }
 }
 
-pub fn faceoff_world(team: TeamId, slot: PlayerId) -> Vec2 {
-    let local = faceoff_local(slot);
-    match team {
-        TeamId::Home => local,
-        TeamId::Away => Vec2::new(-local.x, -local.y),
-    }
+/// World kickoff spot. Unity: Home defends −X, Away defends +X.
+pub fn faceoff_world(team: TeamId, slot: PlayerId, kickoff_team: TeamId) -> Vec2 {
+    let tm = match team {
+        TeamId::Home => -1.0,
+        TeamId::Away => 1.0,
+    };
+    let base = aia_kickoff_base(slot, team == kickoff_team);
+    Vec2::new(base.x * tm, base.y * tm)
 }
 
 pub fn default_facing(team: TeamId) -> Vec2 {
     match team {
+        // Home attacks +X (Away goal), Away attacks −X (Home goal).
         TeamId::Home => Vec2::X,
         TeamId::Away => -Vec2::X,
     }

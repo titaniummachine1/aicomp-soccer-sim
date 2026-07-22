@@ -98,12 +98,12 @@
     "stamina_drain_full_s": 30.0,
     "stamina_regen_full_s": 15.0,
     "intercept_defaults_mps": { "max_speed": 4.5, "acceleration": 2.5 },
-    "nav_agent_radius_m": 0.5,
+    "body_radius_m": 0.5,
     "hold_offset_m": 0.90637236,
-    "interact_radius_m": 1.5,
+    "interact_radius_m": 1.75,
     "free_ball_pickup": "interact/tackle required",
     "global_pickup_delay_after_shot_s": 0.3,
-    "note": "2D body disc uses nav_agent_radius (footprint), not mesh hitbox. BallHoldLocation = facing * hold_offset (≈ agent_r + ball_r). Interact radius UNKNOWN until SoccerGetFloat measured. Speeds CANDIDATE."
+    "note": "No navmesh — empty pitch, AABB walk clamp, no player goal-entry for now. Interact radius CONFIRMED 1.75. body_radius only for clear-dir blockers / future post-sweep. Speeds still CANDIDATE."
   },
   "bevy_impl_hints": [
     "Ball: Dynamic RigidBody, LockedAxes::ROTATION_LOCKED, sphere collider radius radius_world, friction/restitution as contacts above OR custom Coulomb slide force -accel*normalize(vel) while grounded",

@@ -56,7 +56,42 @@ pub fn step_free_ball(ball: &mut Ball, params: &SimParams, dt: f32) -> EndReason
     }
 
     resolve_walls(ball, params);
+    resolve_posts(ball, params);
     check_goal(ball.pos, params)
+}
+
+fn resolve_posts(ball: &mut Ball, params: &SimParams) {
+    let contact_r = params.post_contact_radius;
+    let e = params.wall_e;
+    let mu = params.wall_mu;
+    for sx in [-1.0_f32, 1.0] {
+        for sz in [-1.0_f32, 1.0] {
+            let post = Vec2::new(sx * params.posts_x, sz * params.goal_half_width);
+            let delta = ball.pos - post;
+            let dist = delta.length();
+            if dist >= contact_r || dist < 1e-8 {
+                continue;
+            }
+            let n = delta / dist;
+            // Push ball center out to contact surface
+            ball.pos = post + n * contact_r;
+            let vn = ball.vel.dot(n);
+            if vn >= 0.0 {
+                continue; // separating
+            }
+            // Reflect normal * e, Coulomb tangent friction
+            let mut v = ball.vel - n * vn; // tangent part
+            let into = -vn;
+            let reflected_n = n * (into * e);
+            let t_speed = v.length();
+            let friction_budget = mu * (1.0 + e) * into;
+            if t_speed > 0.0 {
+                let kill = friction_budget.min(t_speed);
+                v *= (t_speed - kill) / t_speed;
+            }
+            ball.vel = v + reflected_n;
+        }
+    }
 }
 
 fn check_goal(pos: Vec2, params: &SimParams) -> EndReason {

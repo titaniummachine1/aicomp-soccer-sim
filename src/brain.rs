@@ -1,9 +1,9 @@
-//! Brain hook — mirrors `SoccerController(player, moveTo, sprint, interact)`.
+//! Brain hook — reads `TeamApi` (SoccerGet*), writes SoccerController×4.
 
 use bevy::prelude::*;
 
-use crate::ball::Ball;
-use crate::player::{Player, PlayerId};
+use crate::api::TeamApi;
+use crate::player::PlayerId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TeamId {
@@ -57,44 +57,58 @@ impl BrainOutput {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct WorldView<'a> {
-    pub ball: &'a Ball,
-    pub players: &'a [Player],
-    pub dt: f32,
-}
-
 pub trait TeamBrain: Send + Sync {
-    fn think(&mut self, team: TeamId, view: &WorldView<'_>) -> BrainOutput;
+    fn think(&mut self, api: &TeamApi) -> BrainOutput;
 }
 
+/// Chase ball via SoccerGet* labels — proves API I/O path.
 #[derive(Debug, Default)]
 pub struct ChaseBallBrain;
 
 impl TeamBrain for ChaseBallBrain {
-    fn think(&mut self, team: TeamId, view: &WorldView<'_>) -> BrainOutput {
+    fn think(&mut self, api: &TeamApi) -> BrainOutput {
         let mut out = BrainOutput::default();
-        let attack_goal = match team {
-            TeamId::Home => Vec2::new(39.5, 0.0),
-            TeamId::Away => Vec2::new(-39.5, 0.0),
-        };
+        let ball = api.get_transform("Ball").unwrap_or(Vec2::ZERO);
+        let opp_goal = api
+            .get_transform("Opponent Goal Center")
+            .unwrap_or(Vec2::new(39.5, 0.0));
+        let team_has = api.get_bool("Team Has Ball").unwrap_or(false);
+        let interact_r = api.get_float("Player Interact Radius").unwrap_or(1.5);
 
         for (i, slot) in PlayerId::ALL.iter().enumerate() {
-            let Some(me) = view
-                .players
-                .iter()
-                .find(|p| p.team == team && p.id == *slot)
-            else {
-                continue;
+            let has_label = match slot.0 {
+                1 => "Team Player 1 Has Ball",
+                2 => "Team Player 2 Has Ball",
+                3 => "Team Player 3 Has Ball",
+                _ => "Team Player 4 Has Ball",
+            };
+            let near_label = match slot.0 {
+                1 => "Is Ball Nearby Team Player 1",
+                2 => "Is Ball Nearby Team Player 2",
+                3 => "Is Ball Nearby Team Player 3",
+                _ => "Is Ball Nearby Team Player 4",
+            };
+            let me_label = match slot.0 {
+                1 => "Team Player 1",
+                2 => "Team Player 2",
+                3 => "Team Player 3",
+                _ => "Team Player 4",
             };
 
-            let holding = view.ball.held && (me.pos - view.ball.pos).length() < 1.0;
-            let (move_to, sprint, interact) = if holding {
-                let charge_ready = me.shot_charge > 0.55;
-                (attack_goal, true, !charge_ready)
+            let has_ball = api.get_bool(has_label).unwrap_or(false);
+            let near = api.get_bool(near_label).unwrap_or(false);
+            let me = api.get_transform(me_label).unwrap_or(Vec2::ZERO);
+            let charge = api.get_float("Ball Carrier Shot Charge").unwrap_or(0.0);
+
+            let (move_to, sprint, interact) = if has_ball {
+                let charged = charge > 0.55;
+                (opp_goal, true, !charged)
+            } else if team_has {
+                // Support: stay near ball
+                (ball, true, false)
             } else {
-                let near = (me.pos - view.ball.pos).length() < 1.5;
-                (view.ball.pos, true, near)
+                let dist = (me - ball).length();
+                (ball, true, near || dist <= interact_r)
             };
 
             out.commands[i] = BrainCommand {

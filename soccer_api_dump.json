@@ -1,0 +1,821 @@
+{
+  "meta": {
+    "purpose": "Connection-free Soccer AIComp API dump for replenishing AIGamePyLibrary / bot AIs",
+    "game": "Aialanders / World Cup (AIComp Soccer)",
+    "save_folder": "C:\\Users\\Terminatort8000\\AppData\\LocalLow\\Unicorn One\\AIComp\\Saves\\Soccer",
+    "notes": [
+      "Soccer getters store EXACT label strings in modifier (not Volleyball-style dropdown indices).",
+      "If a label mentions Teammate/Team Player/Opponent N, assume variants 1-4 exist.",
+      "Play is effectively 2D on XZ; physics uses 3D Rigidbody + SphereCollider."
+    ]
+  },
+  "save_path_helper": {
+    "python": "GetSoccerSavePath('BotName')",
+    "folder": "C:\\Users\\Terminatort8000\\AppData\\LocalLow\\Unicorn One\\AIComp\\Saves\\Soccer"
+  },
+  "node_catalog": [
+    {
+      "id": "ConstructSoccerProperties",
+      "ports": [],
+      "modifier": null,
+      "inputs": {
+        "String1": "team_name",
+        "Country1": "country",
+        "Vector31": "kickoff_player_1",
+        "Vector32": "kickoff_player_2",
+        "Vector33": "kickoff_player_3",
+        "Vector34": "kickoff_player_4"
+      },
+      "sample_from_save": {
+        "id": "ConstructSoccerProperties",
+        "modifier_example": "",
+        "ports": [
+          {
+            "id": "String1",
+            "polarity": 0,
+            "type": null
+          },
+          {
+            "id": "Vector34",
+            "polarity": 0,
+            "type": null
+          },
+          {
+            "id": "Country1",
+            "polarity": 0,
+            "type": null
+          },
+          {
+            "id": "Vector32",
+            "polarity": 0,
+            "type": null
+          },
+          {
+            "id": "Vector33",
+            "polarity": 0,
+            "type": null
+          },
+          {
+            "id": "Vector31",
+            "polarity": 0,
+            "type": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "SoccerController1",
+      "ports": [],
+      "modifier": null,
+      "inputs": {
+        "Bool1": "sprint",
+        "Vector31": "move_target",
+        "Bool2": "interact"
+      },
+      "sample_from_save": {
+        "id": "SoccerController1",
+        "modifier_example": "",
+        "ports": [
+          {
+            "id": "Bool1",
+            "polarity": 0,
+            "type": null
+          },
+          {
+            "id": "Vector31",
+            "polarity": 0,
+            "type": null
+          },
+          {
+            "id": "Bool2",
+            "polarity": 0,
+            "type": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "SoccerController2",
+      "ports": [],
+      "modifier": null,
+      "inputs": {
+        "Bool1": "sprint",
+        "Vector31": "move_target",
+        "Bool2": "interact"
+      },
+      "sample_from_save": {
+        "id": "SoccerController2",
+        "modifier_example": "",
+        "ports": [
+          {
+            "id": "Bool1",
+            "polarity": 0,
+            "type": null
+          },
+          {
+            "id": "Vector31",
+            "polarity": 0,
+            "type": null
+          },
+          {
+            "id": "Bool2",
+            "polarity": 0,
+            "type": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "SoccerController3",
+      "ports": [],
+      "modifier": null,
+      "inputs": {
+        "Bool1": "sprint",
+        "Vector31": "move_target",
+        "Bool2": "interact"
+      },
+      "sample_from_save": {
+        "id": "SoccerController3",
+        "modifier_example": "",
+        "ports": [
+          {
+            "id": "Bool1",
+            "polarity": 0,
+            "type": null
+          },
+          {
+            "id": "Vector31",
+            "polarity": 0,
+            "type": null
+          },
+          {
+            "id": "Bool2",
+            "polarity": 0,
+            "type": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "SoccerController4",
+      "ports": [],
+      "modifier": null,
+      "inputs": {
+        "Bool1": "sprint",
+        "Vector31": "move_target",
+        "Bool2": "interact"
+      },
+      "sample_from_save": {
+        "id": "SoccerController4",
+        "modifier_example": "",
+        "ports": [
+          {
+            "id": "Bool1",
+            "polarity": 0,
+            "type": null
+          },
+          {
+            "id": "Vector31",
+            "polarity": 0,
+            "type": null
+          },
+          {
+            "id": "Bool2",
+            "polarity": 0,
+            "type": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "SoccerPlayerSensors1",
+      "ports": [],
+      "modifier": {
+        "kind": "enable_flag",
+        "typical": "False",
+        "notes": "Often False/empty in AIA saves"
+      },
+      "sample_from_save": {
+        "id": "SoccerPlayerSensors1",
+        "modifier_example": "False",
+        "ports": [
+          {
+            "id": "Spherecast1",
+            "polarity": 0,
+            "type": null
+          },
+          {
+            "id": "RaycastHit2",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit3",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit1",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit6",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit7",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit8",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit5",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit4",
+            "polarity": 1,
+            "type": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "SoccerPlayerSensors2",
+      "ports": [],
+      "modifier": {
+        "kind": "enable_flag",
+        "typical": "False",
+        "notes": "Often False/empty in AIA saves"
+      },
+      "sample_from_save": {
+        "id": "SoccerPlayerSensors2",
+        "modifier_example": "False",
+        "ports": [
+          {
+            "id": "Spherecast1",
+            "polarity": 0,
+            "type": null
+          },
+          {
+            "id": "RaycastHit2",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit3",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit1",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit6",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit7",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit8",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit5",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit4",
+            "polarity": 1,
+            "type": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "SoccerPlayerSensors3",
+      "ports": [],
+      "modifier": {
+        "kind": "enable_flag",
+        "typical": "False",
+        "notes": "Often False/empty in AIA saves"
+      },
+      "sample_from_save": {
+        "id": "SoccerPlayerSensors3",
+        "modifier_example": "",
+        "ports": [
+          {
+            "id": "Spherecast1",
+            "polarity": 0,
+            "type": null
+          },
+          {
+            "id": "RaycastHit2",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit3",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit1",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit6",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit7",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit8",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit5",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit4",
+            "polarity": 1,
+            "type": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "SoccerPlayerSensors4",
+      "ports": [],
+      "modifier": {
+        "kind": "enable_flag",
+        "typical": "False",
+        "notes": "Often False/empty in AIA saves"
+      },
+      "sample_from_save": {
+        "id": "SoccerPlayerSensors4",
+        "modifier_example": "False",
+        "ports": [
+          {
+            "id": "Spherecast1",
+            "polarity": 0,
+            "type": null
+          },
+          {
+            "id": "RaycastHit2",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit3",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit1",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit6",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit7",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit8",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit5",
+            "polarity": 1,
+            "type": null
+          },
+          {
+            "id": "RaycastHit4",
+            "polarity": 1,
+            "type": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "SoccerGetBool",
+      "ports": [],
+      "modifier": {
+        "kind": "exact_label_string",
+        "not_dropdown_index": true,
+        "labels": [
+          "Ball On Team Side",
+          "Is Active Graph",
+          "Is Ball Loose",
+          "Is Ball Nearby Team Player 1",
+          "Is Ball Nearby Team Player 2",
+          "Is Ball Nearby Team Player 3",
+          "Is Ball Nearby Team Player 4",
+          "Is Home Team",
+          "Is Team Kicking off",
+          "Is Team Player 1 Closest Teammate to Ball",
+          "Is Team Player 2 Closest Teammate to Ball",
+          "Is Team Player 3 Closest Teammate to Ball",
+          "Is Team Player 4 Closest Teammate to Ball",
+          "Opponent Has Ball",
+          "Team Has Ball",
+          "Team Player 1 Has Ball",
+          "Team Player 2 Has Ball",
+          "Team Player 3 Has Ball",
+          "Team Player 4 Has Ball"
+        ]
+      },
+      "sample_from_save": {
+        "id": "SoccerGetBool",
+        "modifier_example": "Is Home Team",
+        "ports": [
+          {
+            "id": "Bool1",
+            "polarity": 1,
+            "type": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "SoccerGetFloat",
+      "ports": [],
+      "modifier": {
+        "kind": "exact_label_string",
+        "not_dropdown_index": true,
+        "labels": [
+          "Ball Carrier Shot Charge",
+          "Ball Carrier Stamina",
+          "Distance from Team Player 1 to nearest Opponent",
+          "Distance from Team Player 2 to nearest Opponent",
+          "Distance from Team Player 3 to nearest Opponent",
+          "Distance from Team Player 4 to nearest Opponent",
+          "Opponent Score",
+          "Player Interact Radius",
+          "Stamina of last defending opponent",
+          "Team Player 1 Stamina",
+          "Team Player 2 Stamina",
+          "Team Player 3 Stamina",
+          "Team Player 4 Stamina",
+          "Team Score"
+        ]
+      },
+      "sample_from_save": {
+        "id": "SoccerGetFloat",
+        "modifier_example": "Ball Carrier Shot Charge",
+        "ports": [
+          {
+            "id": "Float1",
+            "polarity": 1,
+            "type": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "SoccerGetTransform",
+      "ports": [],
+      "modifier": {
+        "kind": "exact_label_string",
+        "not_dropdown_index": true,
+        "labels": [
+          "Ball",
+          "Opponent Goal Center",
+          "Team Goal Center",
+          "Team Goal Left Post",
+          "Team Goal Right Post",
+          "Team Player 1",
+          "Team Player 2",
+          "Team Player 3",
+          "Team Player 4",
+          "Teammate Nearest Team Player 1",
+          "Teammate Nearest Team Player 2",
+          "Teammate Nearest Team Player 3",
+          "Teammate Nearest Team Player 4"
+        ]
+      },
+      "sample_from_save": {
+        "id": "SoccerGetTransform",
+        "modifier_example": "Ball",
+        "ports": [
+          {
+            "id": "Transform1",
+            "polarity": 1,
+            "type": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "SoccerGetVector3",
+      "ports": [],
+      "modifier": {
+        "kind": "exact_label_string",
+        "not_dropdown_index": true,
+        "labels": [
+          "Backwards clear direction from team carrier",
+          "Ball Velocity",
+          "Center Field",
+          "Clear direction from Teammate 1",
+          "Clear direction from Teammate 2",
+          "Clear direction from Teammate 3",
+          "Clear direction from Teammate 4",
+          "Clear direction from team carrier",
+          "Clear direction from team carrier (avoid all walls)",
+          "Clear direction from team carrier (avoid goal lines)",
+          "Clear direction from team carrier (avoid sidelines)",
+          "Direction of ball from Teammate 1",
+          "Direction of ball from Teammate 2",
+          "Direction of ball from Teammate 3",
+          "Direction of ball from Teammate 4",
+          "Direction of clear teammate from Opponent 1",
+          "Direction of clear teammate from Opponent 2",
+          "Direction of clear teammate from Opponent 3",
+          "Direction of clear teammate from Opponent 4",
+          "Direction of clear teammate from Teammate 1",
+          "Direction of clear teammate from Teammate 2",
+          "Direction of clear teammate from Teammate 3",
+          "Direction of clear teammate from Teammate 4",
+          "Direction of opponent goal from Teammate 1",
+          "Direction of opponent goal from Teammate 2",
+          "Direction of opponent goal from Teammate 3",
+          "Direction of opponent goal from Teammate 4",
+          "Direction of team goal from Teammate 1",
+          "Direction of team goal from Teammate 2",
+          "Direction of team goal from Teammate 3",
+          "Direction of team goal from Teammate 4",
+          "Direction of teammate from Team Player 1",
+          "Direction of teammate from Team Player 2",
+          "Direction of teammate from Team Player 3",
+          "Direction of teammate from Team Player 4",
+          "Get furthest open opponent",
+          "Get furthest open teammate",
+          "Get most open opponent",
+          "Get most open teammate",
+          "Get nearest open opponent",
+          "Get nearest open teammate",
+          "Lower Corner Away Side",
+          "Lower Corner Home Side",
+          "Lower Corner Opposing Side",
+          "Lower Corner Team Side",
+          "Lower Midfield",
+          "Upper Corner Away Side",
+          "Upper Corner Home Side",
+          "Upper Corner Opposing Side",
+          "Upper Corner Team Side",
+          "Upper Midfield"
+        ]
+      },
+      "sample_from_save": {
+        "id": "SoccerGetVector3",
+        "modifier_example": "Direction of clear teammate from Teammate 3",
+        "ports": [
+          {
+            "id": "Vector31",
+            "polarity": 1,
+            "type": null
+          }
+        ]
+      }
+    }
+  ],
+  "getter_labels": {
+    "SoccerGetBool": [
+      "Ball On Team Side",
+      "Is Active Graph",
+      "Is Ball Loose",
+      "Is Ball Nearby Team Player 1",
+      "Is Ball Nearby Team Player 2",
+      "Is Ball Nearby Team Player 3",
+      "Is Ball Nearby Team Player 4",
+      "Is Home Team",
+      "Is Team Kicking off",
+      "Is Team Player 1 Closest Teammate to Ball",
+      "Is Team Player 2 Closest Teammate to Ball",
+      "Is Team Player 3 Closest Teammate to Ball",
+      "Is Team Player 4 Closest Teammate to Ball",
+      "Opponent Has Ball",
+      "Team Has Ball",
+      "Team Player 1 Has Ball",
+      "Team Player 2 Has Ball",
+      "Team Player 3 Has Ball",
+      "Team Player 4 Has Ball"
+    ],
+    "SoccerGetFloat": [
+      "Ball Carrier Shot Charge",
+      "Ball Carrier Stamina",
+      "Distance from Team Player 1 to nearest Opponent",
+      "Distance from Team Player 2 to nearest Opponent",
+      "Distance from Team Player 3 to nearest Opponent",
+      "Distance from Team Player 4 to nearest Opponent",
+      "Opponent Score",
+      "Player Interact Radius",
+      "Stamina of last defending opponent",
+      "Team Player 1 Stamina",
+      "Team Player 2 Stamina",
+      "Team Player 3 Stamina",
+      "Team Player 4 Stamina",
+      "Team Score"
+    ],
+    "SoccerGetTransform": [
+      "Ball",
+      "Opponent Goal Center",
+      "Team Goal Center",
+      "Team Goal Left Post",
+      "Team Goal Right Post",
+      "Team Player 1",
+      "Team Player 2",
+      "Team Player 3",
+      "Team Player 4",
+      "Teammate Nearest Team Player 1",
+      "Teammate Nearest Team Player 2",
+      "Teammate Nearest Team Player 3",
+      "Teammate Nearest Team Player 4"
+    ],
+    "SoccerGetVector3": [
+      "Backwards clear direction from team carrier",
+      "Ball Velocity",
+      "Center Field",
+      "Clear direction from Teammate 1",
+      "Clear direction from Teammate 2",
+      "Clear direction from Teammate 3",
+      "Clear direction from Teammate 4",
+      "Clear direction from team carrier",
+      "Clear direction from team carrier (avoid all walls)",
+      "Clear direction from team carrier (avoid goal lines)",
+      "Clear direction from team carrier (avoid sidelines)",
+      "Direction of ball from Teammate 1",
+      "Direction of ball from Teammate 2",
+      "Direction of ball from Teammate 3",
+      "Direction of ball from Teammate 4",
+      "Direction of clear teammate from Opponent 1",
+      "Direction of clear teammate from Opponent 2",
+      "Direction of clear teammate from Opponent 3",
+      "Direction of clear teammate from Opponent 4",
+      "Direction of clear teammate from Teammate 1",
+      "Direction of clear teammate from Teammate 2",
+      "Direction of clear teammate from Teammate 3",
+      "Direction of clear teammate from Teammate 4",
+      "Direction of opponent goal from Teammate 1",
+      "Direction of opponent goal from Teammate 2",
+      "Direction of opponent goal from Teammate 3",
+      "Direction of opponent goal from Teammate 4",
+      "Direction of team goal from Teammate 1",
+      "Direction of team goal from Teammate 2",
+      "Direction of team goal from Teammate 3",
+      "Direction of team goal from Teammate 4",
+      "Direction of teammate from Team Player 1",
+      "Direction of teammate from Team Player 2",
+      "Direction of teammate from Team Player 3",
+      "Direction of teammate from Team Player 4",
+      "Get furthest open opponent",
+      "Get furthest open teammate",
+      "Get most open opponent",
+      "Get most open teammate",
+      "Get nearest open opponent",
+      "Get nearest open teammate",
+      "Lower Corner Away Side",
+      "Lower Corner Home Side",
+      "Lower Corner Opposing Side",
+      "Lower Corner Team Side",
+      "Lower Midfield",
+      "Upper Corner Away Side",
+      "Upper Corner Home Side",
+      "Upper Corner Opposing Side",
+      "Upper Corner Team Side",
+      "Upper Midfield"
+    ]
+  },
+  "field_bounds_helpers": {
+    "preferred_vector3": [
+      "Center Field",
+      "Upper Corner Home Side",
+      "Lower Corner Home Side",
+      "Upper Corner Away Side",
+      "Lower Corner Away Side",
+      "Upper Corner Team Side",
+      "Lower Corner Team Side",
+      "Upper Corner Opposing Side",
+      "Lower Corner Opposing Side",
+      "Upper Midfield",
+      "Lower Midfield"
+    ],
+    "scraped_aabb_approx": {
+      "x_min": -39.5,
+      "x_max": 39.5,
+      "z_min": -24.7,
+      "z_max": 24.7,
+      "source": "Boundary BoxColliders in level0, inset ~ball radius"
+    }
+  },
+  "physics": {
+    "ball": {
+      "object": "SoccerBall",
+      "dimension": "3D Rigidbody + SphereCollider (play mostly XZ; FreezeRotation)",
+      "scale": 0.9,
+      "sphere_collider_radius_local": 0.45,
+      "approx_world_radius": 0.405,
+      "mass": 0.45,
+      "use_gravity": true,
+      "linear_damping": 0,
+      "constraints": "FreezeRotation (112)",
+      "physic_material": {
+        "name": "Soccer",
+        "bounciness": 0.4,
+        "dynamic_friction": 0.1,
+        "notes": "Unity restitution-style bounce for wall folds; not perfect mirror (e!=1)"
+      },
+      "runtime_api": {
+        "position": "RelativePosition(SoccerGetTransform('Ball'), 'Self')",
+        "velocity": "SoccerGetVector3('Ball Velocity')"
+      }
+    },
+    "boundaries": {
+      "object": "Boundary (+ child walls)",
+      "approx_playable_box": {
+        "x": "[-40,40]",
+        "z": "[-25,25]"
+      },
+      "goal_ends": "Openings in end walls (not solid full-width)"
+    },
+    "players": {
+      "count": 4,
+      "roles_typical": {
+        "1": "striker",
+        "2": "playmaker",
+        "3": "defender",
+        "4": "goalie"
+      },
+      "interact_radius_api": "SoccerGetFloat('Player Interact Radius')",
+      "stamina_api": "SoccerGetFloat('Team Player N Stamina') / Ball Carrier Stamina",
+      "sensors": "SoccerPlayerSensors1..4 take Spherecast -> 8 RaycastHit outs"
+    },
+    "prediction_recipe": {
+      "simple": "pos + vel * t",
+      "xz_bounce": "flatten vel Y=0; raw=pos+vel*t; if past wall fold axis with e=0.4",
+      "default_lead_seconds": 0.45
+    }
+  },
+  "sim_rules": {
+    "tackles": "Subtract stamina delta; tackling player wins ball if they have more stamina AFTER tackle",
+    "clear_direction_vector3": {
+      "meaning": "Checks 8 Player Sensor raycasts; returns first valid clear direction or null",
+      "home_order": ["E", "C", "H", "B", "G", "A", "F", "D"],
+      "away_order": ["D", "F", "A", "G", "B", "H", "C", "E"],
+      "note": "Orders match Player Sensor graphic; prioritize attacking direction"
+    },
+    "kickoff": {
+      "match_start": "Receiving team random",
+      "after_goal": "Team that was scored on receives kickoff",
+      "extra_time": "Opposite of who kicked off at start",
+      "whistle_no_ball_movement": "Flips to opposite of who last received kickoff"
+    },
+    "possession": {
+      "free_ball_pickup": "Must interact/tackle — not automatic proximity",
+      "shot_charge": "Hold interact to charge; false releases kick",
+      "global_pickup_delay_after_shot_s": 0.3,
+      "pickup_delay_note": "AIA confirmed 0.3f global delay after shot (Jul 18); may have been changed in later builds",
+      "relative_position_self": "Local frame of input transform, not calling player — prefer World diffs"
+    }
+  },
+  "library_helpers": [
+    "GetSoccerSavePath",
+    "InitializeSoccer",
+    "ConstructSoccerProperties",
+    "SoccerController1..4",
+    "SoccerGetBool/Float/Transform/Vector3",
+    "SoccerPlayerSensors1..4"
+  ],
+  "still_missing_from_library": ["CreateFunction", "Function"],
+  "clean_bots_in_saves_folder": ["AIA", "Titanium", "Poponeta"]
+}

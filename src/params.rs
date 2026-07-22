@@ -19,17 +19,25 @@ pub struct SimParams {
     pub z_max: f32,
     pub goal_half_width: f32,
     pub goal_line_x: f32,
+    /// Upright post centers at (±posts_x, ±goal_half_width).
+    pub posts_x: f32,
+    /// Solid post world radius (visual + geometry).
+    pub post_radius: f32,
+    /// Ball-center contact radius = post_radius + ball_radius.
+    pub post_contact_radius: f32,
     pub kickoff_circle_r: f32,
     pub player_max_speed: f32,
     pub player_accel: f32,
     pub kick_max_speed: f32,
     pub pickup_delay_s: f32,
+    /// Pickup/tackle reach. **CONFIRMED** 1.75 (ApiProbe timeplot).
     pub interact_radius: f32,
-    /// Disc radius for the player body (nav-agent width / 2). **CANDIDATE**.
-    pub player_radius: f32,
-    /// Distance from player center to BallHoldLocation along facing. **CANDIDATE**.
+    /// Soft radius for clear-dir blockers / future post-sweep (**CANDIDATE**).
+    /// Not a NavMeshAgent — field has no obstacles for normal play.
+    pub body_radius: f32,
+    /// Hold/aim offset from player center (**CANDIDATE**).
     pub hold_offset: f32,
-    /// Small ring drawn at the hold/aim point.
+    /// Small ring at BallHoldLocation.
     pub hold_marker_radius: f32,
     pub source_path: PathBuf,
 }
@@ -42,11 +50,7 @@ impl Default for SimParams {
 
 impl SimParams {
     pub fn fallback(source_path: PathBuf) -> Self {
-        // player_radius: Unity NavMeshAgent-style body width matters more for
-        // footprint than mesh hitbox in this game. 0.5 m radius (= 1.0 m wide)
-        // is a CANDIDATE until we scrape a confirmed agent radius.
-        // hold_offset: BallHoldLocation sits in front — approx body_r + ball_r.
-        let player_radius = 0.5;
+        let body_radius = 0.5;
         let ball_radius = 0.40637236;
         Self {
             ball_radius,
@@ -60,14 +64,17 @@ impl SimParams {
             z_max: 24.7,
             goal_half_width: 6.0,
             goal_line_x: 39.5,
+            posts_x: 40.2,
+            post_radius: 0.3,
+            post_contact_radius: 0.3 + 0.40637236,
             kickoff_circle_r: 7.25,
             player_max_speed: 4.5,
             player_accel: 2.5,
             kick_max_speed: 30.0,
             pickup_delay_s: 0.3,
-            interact_radius: 1.5,
-            player_radius,
-            hold_offset: player_radius + ball_radius,
+            interact_radius: 1.75,
+            body_radius,
+            hold_offset: body_radius + ball_radius,
             hold_marker_radius: ball_radius * 0.55,
             source_path,
         }
@@ -117,6 +124,17 @@ impl SimParams {
             if let Some(g) = pitch.goal {
                 p.goal_half_width = g.half_width.unwrap_or(p.goal_half_width);
                 p.goal_line_x = g.line_x.unwrap_or(p.goal_line_x);
+                if let Some(px) = g.posts_x {
+                    p.posts_x = px;
+                }
+                if let Some(pr) = g.post_radius_world {
+                    p.post_radius = pr;
+                }
+                if let Some(cr) = g.post_contact_radius {
+                    p.post_contact_radius = cr;
+                } else {
+                    p.post_contact_radius = p.post_radius + p.ball_radius;
+                }
             }
         }
         if let Some(m) = raw.pitch_marks_soccer_get_float {
@@ -129,6 +147,7 @@ impl SimParams {
                 p.kick_max_speed = v;
             }
         }
+        let mut hold_from_file = false;
         if let Some(pl) = raw.player_candidates {
             if let Some(d) = pl.intercept_defaults_mps {
                 p.player_max_speed = d.max_speed.unwrap_or(p.player_max_speed);
@@ -137,24 +156,19 @@ impl SimParams {
             if let Some(t) = pl.global_pickup_delay_after_shot_s {
                 p.pickup_delay_s = t;
             }
-            if let Some(r) = pl.nav_agent_radius_m {
-                p.player_radius = r;
+            if let Some(r) = pl.body_radius_m.or(pl.nav_agent_radius_m) {
+                p.body_radius = r;
             }
             if let Some(h) = pl.hold_offset_m {
                 p.hold_offset = h;
+                hold_from_file = true;
             }
             if let Some(ir) = pl.interact_radius_m {
                 p.interact_radius = ir;
             }
         }
-        // Keep hold offset consistent if only radius changed
-        if raw
-            .player_candidates
-            .as_ref()
-            .and_then(|c| c.hold_offset_m)
-            .is_none()
-        {
-            p.hold_offset = p.player_radius + p.ball_radius;
+        if !hold_from_file {
+            p.hold_offset = p.body_radius + p.ball_radius;
         }
         p.hold_marker_radius = p.ball_radius * 0.55;
         p
@@ -212,6 +226,9 @@ struct RawAabb {
 struct RawGoal {
     half_width: Option<f32>,
     line_x: Option<f32>,
+    posts_x: Option<f32>,
+    post_radius_world: Option<f32>,
+    post_contact_radius: Option<f32>,
 }
 
 #[derive(Deserialize)]
@@ -229,6 +246,7 @@ struct RawKick {
 struct RawPlayers {
     intercept_defaults_mps: Option<RawIntercept>,
     global_pickup_delay_after_shot_s: Option<f32>,
+    body_radius_m: Option<f32>,
     nav_agent_radius_m: Option<f32>,
     hold_offset_m: Option<f32>,
     interact_radius_m: Option<f32>,

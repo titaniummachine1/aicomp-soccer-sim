@@ -1,30 +1,26 @@
 # AIComp Soccer Sim (Rust / Bevy 2D)
 
-Fully **2D** top-down close copy of AIComp Soccer physics + controls.
-Unity’s 3D meshes are visual-only — this repo does not simulate Y.
+Cheap **2D** close copy of AIComp Soccer for offline testing and mass batch sims.
 
-## Run
+## Rules of the cheap model
+
+- **No navmesh / agents** — pitch is empty; walk limits are the ball AABB.
+- **Ball** is the only sliding physics body (Coulomb a=5.95, wall e≈0.2, open mouths score).
+- **Players** do not collide with the ball; pickup/tackle uses **interact radius 1.75**.
+- **No goal entry for players** (for now). Later: if `moveTo` is inside a goal, sweep a collision circle vs posts+walls — go straight if clear, else pathfind. Deferred to keep batch sims cheap.
+- Fixed dt **0.019** (from ApiProbe; independent of render FPS).
+
+## Run viewer
 
 ```bat
 cargo run
 ```
 
-Fast rebuild loop (optional):
+## Headless batch (lib)
 
-```bat
-cargo install cargo-watch
-cargo watch -x run
+```rust
+use aicomp_soccer_sim::{ChaseBallBrain /* via brain */, MatchWorld, SimParams, FIXED_DT};
+// MatchWorld::new_kickoff(params).step_brains(&mut home, &mut away, FIXED_DT);
 ```
 
-Hot-reload params from `bevy_sim_params_v05.json`: press **R**.
-
-## Layout
-
-| Path | Role |
-|------|------|
-| `src/` | Sim + top-down view |
-| `bevy_sim_params_v05.json` | Numbers pack |
-| `SOCCER_GAME_MODEL.md` | Human rules / confidence tags |
-| `soccer_ball_sim_params.json` | Full ball-sim pack (reference) |
-
-Python mining / graphs stay in `../worldcupteams` — not mixed in here.
+Parallelize **across matches**, not with 2 threads per match.
