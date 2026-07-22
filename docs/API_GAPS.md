@@ -21,7 +21,7 @@ them as Null today (except controllers, which are **write-only** sinks).
 | **ConstructSoccerProperties** | yes (faceoff) | Faceoff Vector31–34 + Country. Match setup, not per-tick brain I/O. |
 | **Stat** | no (other sims) | Survival/Parking uniform token — not in Soccer Legia. Ignore / Null. |
 | **Country** | yes (w/ Construct) | Outputs selected country (dropdown). Faceoff-only with ConstructSoccerProperties. |
-| **Keypress** | some graphs | **Wired** → always `false` in sim (no keyboard in headless/AI). |
+| **Keypress** | some graphs | **Wired** — live keyboard in Bevy viewer; headless always `false`. |
 
 **SoccerController1..4** — not blank for gameplay: graph **writes** moveTo/sprint/interact.
 Reading them as values yields Null (correct).

@@ -10,7 +10,7 @@ SAVES = (
     / "AppData/LocalLow/Unicorn One/AIComp/Saves/Soccer/AIA.txt"
 )
 
-# Eval → Null today (or visual-only).
+# Eval → Null today (or visual/faceoff-only). Keypress/Color are wired.
 BLANK = {
     "Spherecast",
     "HitInfo",
@@ -20,9 +20,7 @@ BLANK = {
     "SoccerPlayerSensors4",
     "ConstructSoccerProperties",
     "Country",
-    "Color",
     "Stat",
-    "Keypress",
     "Debug",
     "DebugDrawDisc",
     "DebugDrawLine",
