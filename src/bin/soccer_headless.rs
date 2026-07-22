@@ -33,7 +33,6 @@ struct Args {
     json_out: Option<PathBuf>,
     until_goal: bool,
     quiet: bool,
-    engine: GraphEngine,
     /// When `Some`, run N matches and emit JSONL (even if N == 1).
     batch: Option<usize>,
     jobs: Option<usize>,
@@ -56,7 +55,6 @@ OPTIONS:
                             With --batch: base seed; match i uses seed+i
   --params <path>           Params JSON (default: bevy_sim_params_v05.json)
   --json <path>             Also write result JSON to this file (single match)
-  --engine reference|runtime  Graph backend for aia/graph: (default: runtime)
   --until-goal              Stop at first goal (still capped by --secs)
   --batch <N>               Run N matches in parallel; stdout is JSONL
   --jobs <N>                Thread pool size (default: logical CPUs − 1, min 1)
@@ -67,9 +65,10 @@ BRAINS:
   chase | idle | test1 | test2 | aia | graph:<path>
 
 NOTE:
-  Headless always runs max-speed (no wall-clock wait). Prefer --engine runtime
-  for throughput. --batch uses a micropool that reserves one logical CPU for
-  the system/UI (override with --jobs).
+  Headless always runs max-speed (no wall-clock wait). Graph teams always use
+  the compiled RuntimeBrain (O1) — the slow reference GraphBrain is not
+  available from this CLI. --batch uses a micropool that reserves one logical
+  CPU for the system/UI (override with --jobs).
 
 EXIT:
   0  finished
@@ -98,7 +97,6 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut json_out = None;
     let mut until_goal = false;
     let mut quiet = false;
-    let mut engine = GraphEngine::Runtime;
     let mut batch = None;
     let mut jobs = None;
 
@@ -157,18 +155,24 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             }
             "--engine" => {
                 i += 1;
-                engine = match argv
+                let v = argv
                     .get(i)
-                    .ok_or("--engine needs reference|runtime")?
-                    .to_ascii_lowercase()
-                    .as_str()
-                {
-                    "reference" | "ref" | "graphbrain" => GraphEngine::Reference,
-                    "runtime" | "vm" | "o0" => GraphEngine::Runtime,
-                    other => {
-                        return Err(format!("--engine: expected reference|runtime, got {other}"))
+                    .ok_or("--engine is removed; RuntimeBrain is always used")?
+                    .to_ascii_lowercase();
+                match v.as_str() {
+                    "runtime" | "vm" | "o0" | "o1" => {}
+                    "reference" | "ref" | "graphbrain" => {
+                        return Err(
+                            "--engine reference is disabled; soccer_headless always uses RuntimeBrain (O1)"
+                                .into(),
+                        );
                     }
-                };
+                    other => {
+                        return Err(format!(
+                            "--engine is removed (always RuntimeBrain); got '{other}'"
+                        ))
+                    }
+                }
             }
             "--batch" => {
                 i += 1;
@@ -221,7 +225,6 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         json_out,
         until_goal,
         quiet,
-        engine,
         batch,
         jobs,
     })
@@ -255,7 +258,7 @@ fn run_single(args: &Args, params: SimParams) -> Result<BatchMatchResult, String
         opening: args.opening,
         seed: args.seed,
         until_goal: args.until_goal,
-        engine: args.engine,
+        engine: GraphEngine::Runtime,
         params,
         job_index: None,
     };
@@ -280,7 +283,7 @@ fn run_batch(args: &Args, params: SimParams) -> Vec<Result<BatchMatchResult, Str
                 },
                 seed: Some(seed),
                 until_goal: args.until_goal,
-                engine: args.engine,
+                engine: GraphEngine::Runtime,
                 params: params.clone(),
                 job_index: Some(i),
             }

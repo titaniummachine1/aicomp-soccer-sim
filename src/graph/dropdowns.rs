@@ -1,6 +1,10 @@
 //! Auto-generated SoccerGet* dropdown labels (index -> label).
 //! Source: AIGamePyLibrary.data.DROPDOWN_OPTIONS
 //! Regenerate: python scripts/gen_graph_dropdowns.py
+//!
+//! RelativePosition table below is hand-maintained (not in SoccerGet* regen).
+
+use bevy::prelude::Vec2;
 
 pub const SOCCER_GET_BOOL: &[&str] = &[
     "Team Has Ball",
@@ -196,6 +200,7 @@ pub fn resolve<'a>(node_id: &str, modifier: &'a str) -> &'a str {
         "SoccerGetFloat" => SOCCER_GET_FLOAT,
         "SoccerGetTransform" => SOCCER_GET_TRANSFORM,
         "SoccerGetVector3" => SOCCER_GET_VECTOR3,
+        "RelativePosition" => RELATIVE_POSITION,
         _ => return modifier,
     };
     if let Ok(i) = modifier.parse::<usize>() {
@@ -204,4 +209,80 @@ pub fn resolve<'a>(node_id: &str, modifier: &'a str) -> &'a str {
         }
     }
     modifier
+}
+
+/// AIGamePyLibrary RelativePosition dropdown (+ World as used in Soccer UI).
+pub const RELATIVE_POSITION: &[&str] = &[
+    "Self",
+    "Self + Forward",
+    "Self + Backward",
+    "Self + Left",
+    "Self + Right",
+    "Self + Up",
+    "Self + Down",
+    "Forward",
+    "Backward",
+    "Left",
+    "Right",
+    "Up",
+    "Down",
+    "World",
+];
+
+/// Pitch-plane meaning of a RelativePosition mode.
+/// Forward = +X (goal axis); Left = +Z = our Y (sideline). Up/Down ignored in 2D.
+/// No per-transform facing in TeamApi — offsets use world axes (good enough for Self/World).
+pub fn relative_position_mode(mode: &str) -> RelativePosMode {
+    match mode.trim() {
+        "" | "Self" | "World" | "0" | "13" => RelativePosMode::WorldPos,
+        "Self + Forward" | "1" => RelativePosMode::PosPlus(Vec2::X),
+        "Self + Backward" | "2" => RelativePosMode::PosPlus(-Vec2::X),
+        "Self + Left" | "3" => RelativePosMode::PosPlus(Vec2::Y),
+        "Self + Right" | "4" => RelativePosMode::PosPlus(-Vec2::Y),
+        "Self + Up" | "5" | "Self + Down" | "6" => RelativePosMode::WorldPos,
+        "Forward" | "7" => RelativePosMode::DirOnly(Vec2::X),
+        "Backward" | "8" => RelativePosMode::DirOnly(-Vec2::X),
+        "Left" | "9" => RelativePosMode::DirOnly(Vec2::Y),
+        "Right" | "10" => RelativePosMode::DirOnly(-Vec2::Y),
+        "Up" | "11" | "Down" | "12" => RelativePosMode::DirOnly(Vec2::ZERO),
+        _ => RelativePosMode::WorldPos,
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum RelativePosMode {
+    /// Transform world position (Self / World).
+    WorldPos,
+    /// Position + world-axis unit offset.
+    PosPlus(Vec2),
+    /// Direction only (unit or zero).
+    DirOnly(Vec2),
+}
+
+pub fn apply_relative_position(pos: Vec2, mode: &str) -> Vec2 {
+    match relative_position_mode(mode) {
+        RelativePosMode::WorldPos => pos,
+        RelativePosMode::PosPlus(d) => pos + d,
+        RelativePosMode::DirOnly(d) => d,
+    }
+}
+
+#[cfg(test)]
+mod relative_pos_tests {
+    use super::*;
+
+    #[test]
+    fn self_and_world_are_world_pos() {
+        let p = Vec2::new(3.0, 4.0);
+        assert_eq!(apply_relative_position(p, "Self"), p);
+        assert_eq!(apply_relative_position(p, "World"), p);
+        assert_eq!(apply_relative_position(p, "13"), p);
+    }
+
+    #[test]
+    fn self_plus_forward_offsets_goal_axis() {
+        let p = Vec2::new(10.0, 0.0);
+        assert_eq!(apply_relative_position(p, "Self + Forward"), Vec2::new(11.0, 0.0));
+        assert_eq!(apply_relative_position(p, "Forward"), Vec2::X);
+    }
 }

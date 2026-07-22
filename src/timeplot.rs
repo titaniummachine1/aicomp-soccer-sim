@@ -9,7 +9,6 @@ use serde::Serialize;
 
 use crate::api::TeamApi;
 use crate::brain::{BrainOutput, TeamId};
-use crate::graph::{GraphBrain, GraphValue};
 use crate::player::PlayerId;
 use crate::world::MatchWorld;
 
@@ -47,7 +46,6 @@ impl TimePlotRecorder {
         &mut self,
         world: &MatchWorld,
         home_api: &TeamApi,
-        home_brain: &GraphBrain,
         home_out: &BrainOutput,
         dt: f32,
     ) {
@@ -126,28 +124,6 @@ impl TimePlotRecorder {
             },
             t,
         );
-
-        // AIA variables from graph eval.
-        for (name, val) in &home_brain.vars {
-            match val {
-                GraphValue::Bool(b) => {
-                    push_f(
-                        self,
-                        &format!("Var.{name}"),
-                        "#FFFF00",
-                        if *b { 1.0 } else { 0.0 },
-                        t,
-                    );
-                }
-                GraphValue::Float(f) => {
-                    push_f(self, &format!("Var.{name}"), "#FFFFFF", *f, t);
-                }
-                GraphValue::Vec(v) | GraphValue::Transform(v) => {
-                    push_xyz(self, &format!("Var.{name}"), "#00FFFF", *v, t);
-                }
-                GraphValue::String(_) | GraphValue::Null => {}
-            }
-        }
 
         // SoccerGet bools / floats (AIA_Debug In.* naming).
         for (label, v) in &home_api.bools {

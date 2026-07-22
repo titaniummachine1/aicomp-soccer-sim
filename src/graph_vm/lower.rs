@@ -332,10 +332,35 @@ impl Lowerer {
                 self.emit_load_api(node_sid, port_name, slot, RegisterKind::Vector)
             }
             "RelativePosition" => {
-                let pos = self
-                    .lower_input(node_sid, "Transform1")
-                    .unwrap_or_else(|| self.emit_const_vec2(node_sid, "Transform1", Vec2::ZERO));
-                self.emit_move(node_sid, port_name, pos, RegisterKind::Vector)
+                use crate::graph::dropdowns::{relative_position_mode, RelativePosMode};
+                match relative_position_mode(&node.modifier) {
+                    RelativePosMode::WorldPos => {
+                        let pos = self.lower_input(node_sid, "Transform1").unwrap_or_else(|| {
+                            self.emit_const_vec2(node_sid, "Transform1", Vec2::ZERO)
+                        });
+                        self.emit_move(node_sid, port_name, pos, RegisterKind::Vector)
+                    }
+                    RelativePosMode::DirOnly(d) => {
+                        self.emit_const_vec2(node_sid, port_name, d)
+                    }
+                    RelativePosMode::PosPlus(d) => {
+                        let pos = self.lower_input(node_sid, "Transform1").unwrap_or_else(|| {
+                            self.emit_const_vec2(node_sid, "Transform1", Vec2::ZERO)
+                        });
+                        let offset = self.emit_const_vec2(node_sid, "RelOffset", d);
+                        let dst = self.fresh_reg(RegisterKind::Vector);
+                        self.ir.push(IrInst {
+                            dest: Some(dst),
+                            kind: RegisterKind::Vector,
+                            op: OpCode::AddVec,
+                            args: vec![pos, offset],
+                            immediates: vec![],
+                            source_sid: node_sid.to_string(),
+                            source_port: port_name.to_string(),
+                        });
+                        dst
+                    }
+                }
             }
             "ConstructVector3" => {
                 let x = self

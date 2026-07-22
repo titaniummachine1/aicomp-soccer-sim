@@ -257,7 +257,10 @@ impl<'a> EvalCtx<'a> {
                     .input_named(node_sid, "Transform1")
                     .map(|v| v.as_transform_pos())
                     .unwrap_or(Vec2::ZERO);
-                GraphValue::Vec(pos)
+                GraphValue::Vec(crate::graph::dropdowns::apply_relative_position(
+                    pos,
+                    &node.modifier,
+                ))
             }
 
             "ConstructVector3" => {

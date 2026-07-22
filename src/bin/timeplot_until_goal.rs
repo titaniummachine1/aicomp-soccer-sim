@@ -9,7 +9,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aicomp_soccer_sim::brain::{TeamBrain, TeamId};
-use aicomp_soccer_sim::graph::{load_team_graph, GraphBrain};
+use aicomp_soccer_sim::graph::load_team_graph;
+use aicomp_soccer_sim::graph_vm::RuntimeBrain;
 use aicomp_soccer_sim::params::{default_params_path, SimParams};
 use aicomp_soccer_sim::world::{MatchWorld, FIXED_DT};
 use aicomp_soccer_sim::TimePlotRecorder;
@@ -37,8 +38,9 @@ fn main() {
     let graph = load_team_graph(&aia_path).unwrap_or_else(|e| {
         panic!("failed to load AIA from {aia_path:?}: {e}");
     });
-    let mut home = GraphBrain::new(graph.clone());
-    let mut away = GraphBrain::new(graph);
+    let cached = RuntimeBrain::compile_cached(graph);
+    let mut home = RuntimeBrain::from_cached(cached.clone());
+    let mut away = RuntimeBrain::from_cached(cached);
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let max_time = args
@@ -56,7 +58,7 @@ fn main() {
 
     let mut world = MatchWorld::new_kickoff_opening(params, opening);
     eprintln!(
-        "AIA vs AIA opening={opening:?} stop_at_goals={goal_target} max_secs={max_time} FIXED_DT={FIXED_DT}"
+        "AIA vs AIA RuntimeBrain O1 opening={opening:?} stop_at_goals={goal_target} max_secs={max_time} FIXED_DT={FIXED_DT}"
     );
     let mut plot = TimePlotRecorder::default();
 
@@ -66,7 +68,7 @@ fn main() {
         let (home_api, away_api) = world.build_apis();
         let home_out = home.think(&home_api);
         let away_out = away.think(&away_api);
-        plot.sample_home(&world, &home_api, &home, &home_out, FIXED_DT);
+        plot.sample_home(&world, &home_api, &home_out, FIXED_DT);
         world.step_with_commands(&home_out, &away_out, FIXED_DT);
         ticks += 1;
 

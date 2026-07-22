@@ -2,18 +2,25 @@
 //!
 //! ```text
 //! cargo run --release
+//! cargo run --release -- --fast --home chase --away idle
+//! cargo run --release -- --both aia --fast
+//! cargo run --release -- --home graph:C:\path\Team.txt --away chase
 //! cargo run --release --bin soccer_headless -- --help
 //! ```
 //!
-//! See README.md / AGENTS.md. Hotkeys: Space=pause, R=reload params.
+//! See README.md / AGENTS.md. Hotkeys: Space=pause, F=fast, R=reload params.
 
 use std::path::{Path, PathBuf};
 
-use aicomp_soccer_sim::brain::{BrainOutput, ChaseBallBrain, TeamBrain, TeamId};
+use aicomp_soccer_sim::batch::BrainInput;
+use aicomp_soccer_sim::brain::{
+    BrainOutput, ChaseBallBrain, IdleBrain, TeamBrain, TeamId,
+};
 use aicomp_soccer_sim::graph::load_team_graph;
 use aicomp_soccer_sim::graph_vm::RuntimeBrain;
 use aicomp_soccer_sim::params::{default_params_path, SimParams};
 use aicomp_soccer_sim::player::PlayerId;
+use aicomp_soccer_sim::probe_brains::{Test1Brain, Test2Brain};
 use aicomp_soccer_sim::team_threads::{think_barrier, ThinkTimings};
 use aicomp_soccer_sim::world::{MatchWorld, FIXED_DT};
 use bevy::picking::prelude::*;
@@ -21,11 +28,12 @@ use bevy::prelude::*;
 use bevy::window::PresentMode;
 
 const PPM: f32 = 10.0;
-/// Render target. Sim ticks stay on FIXED_DT (≈52.6 Hz / 19 ms).
+/// Render target. Sim ticks stay on FIXED_DT (≈52.6 Hz / 19 ms) unless Fast.
 const RENDER_HZ: f64 = 60.0;
-/// Max sim ticks processed in one render frame while catching up (never skip).
-#[allow(dead_code)]
+/// Wall-clock paced mode: at most one sim tick per render frame.
 const MAX_TICKS_PER_FRAME: u32 = 1;
+/// Fast mode: burst this many FIXED_DT ticks per render frame (no wall wait).
+const MAX_TICKS_PER_FRAME_FAST: u32 = 64;
 /// Status / tick HUD text refresh rate (keep readable).
 const UI_HZ: f32 = 10.0;
 
@@ -66,17 +74,125 @@ fn portable_asset_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets")
 }
 
+struct ViewerArgs {
+    fast: bool,
+    home: BrainInput,
+    away: BrainInput,
+}
+
+fn print_viewer_help() {
+    eprintln!(
+        "\
+soccer_sim — interactive AIComp Soccer viewer
+
+USAGE:
+  cargo run --release -- [OPTIONS]
+
+OPTIONS:
+  --home <brain>   Home / Team A brain (default: aia)
+  --away <brain>   Away / Team B brain (default: aia)
+  --both <brain>   Set home and away to the same brain
+  --fast, -f       Speedrun: process ticks ASAP (no wall-clock FIXED_DT wait)
+  -h, --help       Show this help
+
+BRAINS:
+  chase | idle | test1 | test2 | aia | graph:<path>
+  (graph/aia always compile to RuntimeBrain O1 — no slow reference interpreter)
+
+HOTKEYS:
+  Space  pause / resume
+  F      toggle Fast mode
+  R      restart match
+
+EXAMPLES:
+  cargo run --release -- --home chase --away idle
+  cargo run --release -- --both aia --fast
+  cargo run --release -- --home graph:C:\\path\\Team.txt --away chase
+"
+    );
+}
+
+fn parse_viewer_args() -> ViewerArgs {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let mut fast = false;
+    let mut home = BrainInput::Aia;
+    let mut away = BrainInput::Aia;
+    let mut i = 0usize;
+    while i < argv.len() {
+        match argv[i].as_str() {
+            "--fast" | "-f" => fast = true,
+            "--home" => {
+                i += 1;
+                let v = argv.get(i).map(|s| s.as_str()).unwrap_or_else(|| {
+                    eprintln!("error: --home needs a value");
+                    print_viewer_help();
+                    std::process::exit(1);
+                });
+                home = BrainInput::parse(v).unwrap_or_else(|e| {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                });
+            }
+            "--away" => {
+                i += 1;
+                let v = argv.get(i).map(|s| s.as_str()).unwrap_or_else(|| {
+                    eprintln!("error: --away needs a value");
+                    print_viewer_help();
+                    std::process::exit(1);
+                });
+                away = BrainInput::parse(v).unwrap_or_else(|e| {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                });
+            }
+            "--both" => {
+                i += 1;
+                let v = argv.get(i).map(|s| s.as_str()).unwrap_or_else(|| {
+                    eprintln!("error: --both needs a value");
+                    print_viewer_help();
+                    std::process::exit(1);
+                });
+                let brain = BrainInput::parse(v).unwrap_or_else(|e| {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                });
+                home = brain.clone();
+                away = brain;
+            }
+            "-h" | "--help" => {
+                print_viewer_help();
+                std::process::exit(0);
+            }
+            other => {
+                eprintln!("unknown arg: {other}");
+                print_viewer_help();
+                std::process::exit(1);
+            }
+        }
+        i += 1;
+    }
+    ViewerArgs { fast, home, away }
+}
+
 fn main() {
+    let args = parse_viewer_args();
     let params = SimParams::load_from_disk(&default_params_path()).unwrap_or_else(|e| {
         eprintln!("params load failed ({e}); using fallbacks");
         SimParams::default()
     });
-    let saves = soccer_saves_dir();
-    let aia = saves.join("AIA.txt");
-    let home_brain = load_brain(&aia);
-    let away_brain = load_brain(&aia);
+    let (home_brain, home_path) = resolve_brain(&args.home);
+    let (away_brain, away_path) = resolve_brain(&args.away);
 
     let asset_root = portable_asset_root();
+    eprintln!(
+        "viewer home={} away={} fast={}",
+        args.home.label(),
+        args.away.label(),
+        args.fast
+    );
+    if args.fast {
+        eprintln!("viewer Fast mode ON (F toggles; ticks ASAP, up to {MAX_TICKS_PER_FRAME_FAST}/frame)");
+    }
     App::new()
         .add_plugins(
             DefaultPlugins
@@ -103,12 +219,13 @@ fn main() {
             last_away: BrainOutput::default(),
         })
         .insert_resource(TeamScripts {
-            home_path: aia.clone(),
-            away_path: aia,
-            status: "graph interpreter MVP (consts/math/getters/controllers)".into(),
+            home_path,
+            away_path,
+            status: format!("cli home={} away={}", args.home.label(), args.away.label()),
         })
         .insert_resource(DebugSelection::default())
         .insert_resource(SimPaused(false))
+        .insert_resource(SimFast(args.fast))
         .insert_resource(TickClock::default())
         .insert_resource(InterpState::default())
         .insert_resource(UiPulse::default())
@@ -154,17 +271,23 @@ struct ViewerWorld {
     last_away: BrainOutput,
 }
 
-/// Compiled Graph VM (O1) if loadable, else chase fallback.
+/// Built-in brain or compiled Graph VM (O1). Graph load failure → chase fallback.
 enum ActiveBrain {
     Runtime(RuntimeBrain),
     Chase(ChaseBallBrain),
+    Idle(IdleBrain),
+    Test1(Test1Brain),
+    Test2(Test2Brain),
 }
 
 impl ActiveBrain {
     fn label(&self) -> &'static str {
         match self {
             ActiveBrain::Runtime(_) => "runtime",
-            ActiveBrain::Chase(_) => "chase-fallback",
+            ActiveBrain::Chase(_) => "chase",
+            ActiveBrain::Idle(_) => "idle",
+            ActiveBrain::Test1(_) => "test1",
+            ActiveBrain::Test2(_) => "test2",
         }
     }
 }
@@ -174,11 +297,35 @@ impl TeamBrain for ActiveBrain {
         match self {
             ActiveBrain::Runtime(g) => g.think(api),
             ActiveBrain::Chase(c) => c.think(api),
+            ActiveBrain::Idle(b) => b.think(api),
+            ActiveBrain::Test1(b) => b.think(api),
+            ActiveBrain::Test2(b) => b.think(api),
         }
     }
 }
 
-fn load_brain(path: &Path) -> ActiveBrain {
+/// Resolve CLI / button brain → ActiveBrain + display path for the status strip.
+fn resolve_brain(input: &BrainInput) -> (ActiveBrain, PathBuf) {
+    match input {
+        BrainInput::Chase => (ActiveBrain::Chase(ChaseBallBrain), PathBuf::from("chase")),
+        BrainInput::Idle => (ActiveBrain::Idle(IdleBrain), PathBuf::from("idle")),
+        BrainInput::Test1 => (
+            ActiveBrain::Test1(Test1Brain::default()),
+            PathBuf::from("test1"),
+        ),
+        BrainInput::Test2 => (
+            ActiveBrain::Test2(Test2Brain::default()),
+            PathBuf::from("test2"),
+        ),
+        BrainInput::Aia => {
+            let path = soccer_saves_dir().join("AIA.txt");
+            (load_graph_brain(&path), path)
+        }
+        BrainInput::Graph(path) => (load_graph_brain(path), path.clone()),
+    }
+}
+
+fn load_graph_brain(path: &Path) -> ActiveBrain {
     match load_team_graph(path) {
         Ok(g) => {
             info!(
@@ -211,6 +358,20 @@ struct DebugSelection {
 /// When true, sim ticks are skipped (Space / Pause button). Render still runs @ ~60 FPS.
 #[derive(Resource, Default)]
 struct SimPaused(bool);
+
+/// When true, skip wall-clock FIXED_DT wait and burst ticks each frame (F / `--fast`).
+#[derive(Resource, Default)]
+struct SimFast(bool);
+
+fn run_label(paused: bool, fast: bool) -> &'static str {
+    if paused {
+        "PAUSED"
+    } else if fast {
+        "FAST"
+    } else {
+        "RUNNING"
+    }
+}
 
 /// Fixed-dt accumulator + barrier timings (both teams must finish before step).
 #[derive(Resource)]
@@ -744,7 +905,7 @@ fn spawn_pitch_lines(
     }
 }
 
-fn setup_ui(mut commands: Commands, scripts: Res<TeamScripts>) {
+fn setup_ui(mut commands: Commands, scripts: Res<TeamScripts>, fast: Res<SimFast>) {
     commands
         .spawn((
             Node {
@@ -783,7 +944,8 @@ fn setup_ui(mut commands: Commands, scripts: Res<TeamScripts>) {
             parent.spawn((
                 StatusText,
                 Text::new(format!(
-                    "[RUNNING] 0-0 | A: {} | B: {} | {}",
+                    "[{}] 0-0 | A: {} | B: {} | {}",
+                    run_label(false, fast.0),
                     file_stem(&scripts.home_path),
                     file_stem(&scripts.away_path),
                     scripts.status
@@ -847,6 +1009,7 @@ fn file_stem(path: &Path) -> String {
 fn sim_tick_barrier(
     time: Res<Time>,
     paused: Res<SimPaused>,
+    fast: Res<SimFast>,
     mut viewer: ResMut<ViewerWorld>,
     mut clock: ResMut<TickClock>,
     mut interp: ResMut<InterpState>,
@@ -861,11 +1024,45 @@ fn sim_tick_barrier(
         return;
     }
 
-    // Advance sim with FIXED_DT only. Never burst multiple ticks to catch wall-clock:
-    // if a tick (brains+physics) is slow, match time slows with it — same tick sequence
-    // on every PC, just stretched in real time.
-    clock.accumulator += time.delta_secs();
     clock.ticks_this_frame = 0;
+
+    if fast.0 {
+        // Speedrun: no wall-clock wait — as soon as both brains finish, next tick.
+        let max_ticks = MAX_TICKS_PER_FRAME_FAST;
+        let mut last_ms = 0.0f32;
+        for _ in 0..max_ticks {
+            let tick0 = std::time::Instant::now();
+            let ViewerWorld {
+                world,
+                home,
+                away,
+                last_home,
+                last_away,
+            } = &mut *viewer;
+            let (home_api, away_api) = world.build_apis();
+            let (home_out, away_out, timings) = think_barrier(home, away, home_api, away_api);
+            *last_home = home_out.clone();
+            *last_away = away_out.clone();
+
+            let phys0 = std::time::Instant::now();
+            world.step_with_commands(&home_out, &away_out, FIXED_DT);
+            clock.physics_ms = phys0.elapsed().as_secs_f32() * 1000.0;
+            interp.push_tick(world);
+
+            clock.last = timings;
+            last_ms = tick0.elapsed().as_secs_f32() * 1000.0;
+            clock.ticks_this_frame += 1;
+        }
+        clock.tick_ms = last_ms;
+        clock.accumulator = 0.0;
+        clock.backlog_ticks = 0.0;
+        clock.alpha = 1.0;
+        return;
+    }
+
+    // Wall-clock paced: one FIXED_DT tick after ~19 ms real time.
+    // If a tick is slow, match time slows with it — same tick sequence on every PC.
+    clock.accumulator += time.delta_secs();
 
     if clock.accumulator >= FIXED_DT {
         let tick0 = std::time::Instant::now();
@@ -889,7 +1086,7 @@ fn sim_tick_barrier(
 
         clock.last = timings;
         clock.tick_ms = tick0.elapsed().as_secs_f32() * 1000.0;
-        clock.ticks_this_frame = 1;
+        clock.ticks_this_frame = MAX_TICKS_PER_FRAME;
         clock.accumulator -= FIXED_DT;
         // Discard overtime instead of queueing extra ticks (proportional slowdown).
         if clock.accumulator >= FIXED_DT {
@@ -933,6 +1130,7 @@ fn handle_hotkeys(
     mut viewer: ResMut<ViewerWorld>,
     mut selection: ResMut<DebugSelection>,
     mut paused: ResMut<SimPaused>,
+    mut fast: ResMut<SimFast>,
     mut interp: ResMut<InterpState>,
     mut clock: ResMut<TickClock>,
 ) {
@@ -943,6 +1141,9 @@ fn handle_hotkeys(
     if keys.just_pressed(KeyCode::Space) {
         toggle_pause(&mut paused);
     }
+    if keys.just_pressed(KeyCode::KeyF) {
+        toggle_fast(&mut fast, &mut clock);
+    }
 }
 
 fn toggle_pause(paused: &mut SimPaused) {
@@ -950,28 +1151,37 @@ fn toggle_pause(paused: &mut SimPaused) {
     info!(paused = paused.0, "simulation pause toggled");
 }
 
+fn toggle_fast(fast: &mut SimFast, clock: &mut TickClock) {
+    fast.0 = !fast.0;
+    clock.accumulator = 0.0;
+    clock.alpha = 1.0;
+    info!(fast = fast.0, "simulation fast mode toggled");
+}
+
 fn refresh_pause_ui(
     paused: Res<SimPaused>,
+    fast: Res<SimFast>,
     mut pause_label: Query<&mut Text, With<PauseButtonText>>,
     mut status_q: Query<&mut Text, (With<StatusText>, Without<PauseButtonText>)>,
     scripts: Res<TeamScripts>,
     viewer: Res<ViewerWorld>,
 ) {
-    if !paused.is_changed() {
+    if !paused.is_changed() && !fast.is_changed() {
         return;
     }
-    if let Ok(mut text) = pause_label.single_mut() {
-        *text = Text::new(if paused.0 {
-            "Resume (Space)"
-        } else {
-            "Pause (Space)"
-        });
+    if paused.is_changed() {
+        if let Ok(mut text) = pause_label.single_mut() {
+            *text = Text::new(if paused.0 {
+                "Resume (Space)"
+            } else {
+                "Pause (Space)"
+            });
+        }
     }
     if let Ok(mut text) = status_q.single_mut() {
-        let run = if paused.0 { "PAUSED" } else { "RUNNING" };
         *text = Text::new(format!(
             "[{}] {}-{} | A: {} | B: {} | {}",
-            run,
+            run_label(paused.0, fast.0),
             viewer.world.match_state.score_home,
             viewer.world.match_state.score_away,
             file_stem(&scripts.home_path),
@@ -1002,6 +1212,7 @@ fn handle_ui_buttons(
     mut status_q: Query<&mut Text, (With<StatusText>, Without<PauseButtonText>)>,
     mut selection: ResMut<DebugSelection>,
     mut paused: ResMut<SimPaused>,
+    fast: Res<SimFast>,
     mut interp: ResMut<InterpState>,
     mut clock: ResMut<TickClock>,
 ) {
@@ -1021,7 +1232,7 @@ fn handle_ui_buttons(
                     }
                     UiAction::LoadHome => {
                         if let Some(path) = pick_team_script("Load Team A (home / left)") {
-                            viewer.home = load_brain(&path);
+                            viewer.home = load_graph_brain(&path);
                             scripts.home_path = path;
                             scripts.status = format!(
                                 "Team A {} ({})",
@@ -1032,7 +1243,7 @@ fn handle_ui_buttons(
                     }
                     UiAction::LoadAway => {
                         if let Some(path) = pick_team_script("Load Team B (away / right)") {
-                            viewer.away = load_brain(&path);
+                            viewer.away = load_graph_brain(&path);
                             scripts.away_path = path;
                             scripts.status = format!(
                                 "Team B {} ({})",
@@ -1043,10 +1254,9 @@ fn handle_ui_buttons(
                     }
                 }
                 if let Ok(mut text) = status_q.single_mut() {
-                    let run = if paused.0 { "PAUSED" } else { "RUNNING" };
                     *text = Text::new(format!(
                         "[{}] {}-{} | A: {} | B: {} | {}",
-                        run,
+                        run_label(paused.0, fast.0),
                         viewer.world.match_state.score_home,
                         viewer.world.match_state.score_away,
                         file_stem(&scripts.home_path),
@@ -1092,11 +1302,16 @@ fn sync_visuals(
     mut q_num: Query<(&PlayerNum, &mut Transform), (Without<BallDisc>, Without<PlayerDisc>)>,
     mut q_ball: Query<&mut Transform, (With<BallDisc>, Without<PlayerDisc>)>,
     paused: Res<SimPaused>,
+    fast: Res<SimFast>,
     scripts: Res<TeamScripts>,
     mut status_q: Query<&mut Text, (With<StatusText>, Without<PauseButtonText>)>,
 ) {
     let w = &viewer.world;
-    let alpha = if paused.0 { 1.0 } else { clock.alpha };
+    let alpha = if paused.0 || fast.0 {
+        1.0
+    } else {
+        clock.alpha
+    };
     for (disc, mut tf) in &mut q_disc {
         let pos = interp.player(disc.team, disc.id, alpha).or_else(|| {
             w.players
@@ -1143,10 +1358,9 @@ fn sync_visuals(
     // Status strip only at 10 Hz.
     if pulse.fire {
         if let Ok(mut text) = status_q.single_mut() {
-            let run = if paused.0 { "PAUSED" } else { "RUNNING" };
             *text = Text::new(format!(
                 "[{}] {}-{} | A: {} | B: {} | {}",
-                run,
+                run_label(paused.0, fast.0),
                 w.match_state.score_home,
                 w.match_state.score_away,
                 file_stem(&scripts.home_path),
@@ -1160,6 +1374,7 @@ fn sync_visuals(
 fn refresh_tick_hud(
     clock: Res<TickClock>,
     pulse: Res<UiPulse>,
+    fast: Res<SimFast>,
     mut hud: Query<(&mut Text, &mut TextColor), With<TickHudText>>,
 ) {
     if !pulse.fire {
@@ -1169,14 +1384,19 @@ fn refresh_tick_hud(
         return;
     };
     let budget = FIXED_DT * 1000.0;
-    let overdue = clock.tick_ms > budget * 1.05;
+    let overdue = !fast.0 && clock.tick_ms > budget * 1.05;
     let slow = clock.last.slowest_label();
     let home_ms = clock.last.home_ms();
     let away_ms = clock.last.away_ms();
     let flag = if overdue { " OVER" } else { "" };
+    let pace = if fast.0 {
+        format!("FAST (F) ≤{MAX_TICKS_PER_FRAME_FAST} ticks/frame")
+    } else {
+        format!("paced (F=fast) | slow-mo if OVER")
+    };
     *text = Text::new(format!(
         "render ~{:.0}fps | UI {}Hz | sim dt {:.1}ms\n\
-         tick {:.2}ms{flag} (budget {:.1}) | slow-mo if OVER\n\
+         tick {:.2}ms{flag} (budget {:.1}) | {pace}\n\
          Home(A) think {home_ms:.2}ms | Away(B) {away_ms:.2}ms\n\
          slowest: {slow} | phys {:.2}ms | dropped {:.1}t | did {}",
         RENDER_HZ,
@@ -1190,6 +1410,8 @@ fn refresh_tick_hud(
     ));
     *color = TextColor(if overdue {
         Color::srgb(1.0, 0.35, 0.3)
+    } else if fast.0 {
+        Color::srgb(1.0, 0.85, 0.35)
     } else {
         Color::srgb(0.75, 0.95, 0.75)
     });

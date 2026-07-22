@@ -3,7 +3,7 @@
 //! Implements constants, float math (incl. Power), SoccerGet*, RelativePosition,
 //! and SoccerController1–4. Variables / functions / sensors come later.
 
-mod dropdowns;
+pub(crate) mod dropdowns;
 mod eval;
 pub(crate) mod load;
 mod value;

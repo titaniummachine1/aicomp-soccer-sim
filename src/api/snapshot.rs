@@ -253,6 +253,7 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
     floats.insert("Goal Width", params.goal_half_width * 2.0);
     // Visual/API height; pitch physics is 2D XZ. FIFA-ish default until TimePlot.
     floats.insert("Goal Height", 2.44);
+    floats.insert("Pi", std::f32::consts::PI);
     floats.insert("ground_line", 5.0);
     floats.insert("Area Depth", 12.5);
     floats.insert("Arena Semicircle Depth", 2.5);

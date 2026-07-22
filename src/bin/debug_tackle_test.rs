@@ -5,12 +5,13 @@
 //! cargo run --release --bin debug_tackle_test -- [max_secs] [--graph]
 //! ```
 //! Default: scripted Rust brains mirroring build_test1/2.py.
-//! `--graph`: load Test1.txt / Test2.txt via GraphBrain (finds graph gaps).
+//! `--graph`: load Test1.txt / Test2.txt via RuntimeBrain (O1).
 
 use std::path::PathBuf;
 
 use aicomp_soccer_sim::brain::{TeamBrain, TeamId};
-use aicomp_soccer_sim::graph::{load_team_graph, GraphBrain};
+use aicomp_soccer_sim::graph::load_team_graph;
+use aicomp_soccer_sim::graph_vm::RuntimeBrain;
 use aicomp_soccer_sim::params::{default_params_path, SimParams};
 use aicomp_soccer_sim::player::PlayerId;
 use aicomp_soccer_sim::probe_brains::{Test1Brain, Test2Brain};
@@ -61,8 +62,8 @@ fn main() {
 
     let mut home_s = Test1Brain::default();
     let mut away_s = Test2Brain::default();
-    let mut home_g: Option<GraphBrain> = None;
-    let mut away_g: Option<GraphBrain> = None;
+    let mut home_g: Option<RuntimeBrain> = None;
+    let mut away_g: Option<RuntimeBrain> = None;
 
     if use_graph {
         let dir = soccer_saves_dir();
@@ -73,12 +74,12 @@ fn main() {
             panic!("Test2.txt load failed: {e}");
         });
         eprintln!(
-            "loaded graphs home_nodes={} away_nodes={}",
+            "loaded graphs home_nodes={} away_nodes={} → RuntimeBrain O1",
             h.nodes.len(),
             a.nodes.len()
         );
-        home_g = Some(GraphBrain::new(h));
-        away_g = Some(GraphBrain::new(a));
+        home_g = Some(RuntimeBrain::compile(h));
+        away_g = Some(RuntimeBrain::compile(a));
     }
 
     let mut t = 0.0_f32;

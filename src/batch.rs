@@ -119,9 +119,9 @@ impl BrainInput {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GraphEngine {
-    /// Permanent oracle — recursive GraphBrain.
+    /// Slow recursive GraphBrain — **tests / acceptance only**, never match CLIs.
     Reference,
-    /// O0/O1 compiled RuntimeProgram.
+    /// Compiled RuntimeProgram (O0/O1). Required for all match runners.
     Runtime,
 }
 

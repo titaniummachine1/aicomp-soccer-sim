@@ -34,7 +34,7 @@ Reading them as values yields Null (correct).
 
 | Item | Status | Gap |
 | ---- | ------ | --- |
-| **RelativePosition** | Returns **world position** of input transform only | Does **not** honor modifier **Self** vs **World**. Quirk #8: Self = local frame of *input* transform, not controlling player. Legia `Relative Direction` uses World — works today. Self-offset graphs will be wrong until fixed. |
+| **RelativePosition** | **Self / World** = world pos of Transform1. Cardinal / Self+* use **world axes** (Forward=+X, Left=+Y/Z). Up/Down ignored in 2D. | No TeamApi facing yet — Self+Forward is world-axis, not transform.forward. Enough for stock graphs (Self/World). |
 | **Clear-dir / OppGoal dir** | Implemented in API snapshot | Sensors path (Spherecast → HitInfo → Sensors) still blank; we **approximate** with geometric clear rays. |
 
 ---
@@ -43,9 +43,7 @@ Reading them as values yields Null (correct).
 
 Unity dropdown labels vs sim:
 
-- Almost all BOOL / FLOAT / TRANSFORM / VECTOR3 labels are **wired**.
-- Still missing from `labels.rs` (but already filled in snapshot): `Is Away Team`, `Is Kickoff`, `Is Opponent Kicking off`.
-- Still **BLANK** float: **`Pi`** (trivial constant).
+- BOOL / FLOAT / TRANSFORM / VECTOR3 dropdown labels used by graphs are **wired**, including `Pi`, `Is Away Team`, `Is Kickoff`, `Is Opponent Kicking off`.
 
 ---
 
@@ -69,11 +67,10 @@ Implementations exist so graphs compile; **do not treat as locked** until measur
 
 ## 5. Implementation priority (suggested)
 
-1. **`Pi`** — trivial.
-2. **RelativePosition Self vs World** — blocks correct distance helpers that use Self.
-3. **Spherecast + HitInfo + SoccerPlayerSensors1..4** — needed if a bot relies on raw sensor hits instead of SoccerGet clear-dirs.
-4. **ConstructSoccerProperties / Country** — only if debugging kickoff faceoff construction in-graph.
-5. Lock §4 UNSURE rows via TimePlot / AIA answers.
+1. **Spherecast + HitInfo + SoccerPlayerSensors1..4** — needed if a bot relies on raw sensor hits instead of SoccerGet clear-dirs.
+2. **ConstructSoccerProperties / Country** — only if debugging kickoff faceoff construction in-graph.
+3. Lock §4 UNSURE rows via TimePlot / AIA answers.
+4. Optional: RelativePosition facing from transform rotation (if Unity Self+Forward ever matters).
 
 ---
 
@@ -82,4 +79,6 @@ Implementations exist so graphs compile; **do not treat as locked** until measur
 Opp has-ball / nearby / closest ×4, winning, scored-last, opp side, headed-towards,
 shots, possession%, attacking%, ball speed, charge%, goal W/H, sim clocks, Δt,
 nearest-opp stamina ×4, opp nearest-TP transforms, opp posts, nearest-goal
-transforms, direction of ball from Opponent 1–4. See §4 for soft ones.
+transforms, direction of ball from Opponent 1–4, **`Pi`**, RelativePosition
+Self/World (+ world-axis Self+*), Is Away / Kickoff / Opp kicking off labels.
+See §4 for soft ones.
