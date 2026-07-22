@@ -208,13 +208,13 @@ impl MatchWorld {
                     .filter(|(j, _)| *j != i)
                     .map(|(_, p)| p.pos)
                     .collect();
-                let blocker_r = self.params.body_radius * 1.5;
+                let blocker_r = self.params.body_radius + crate::api::SPHERECAST_RADIUS;
                 first_clear_dir(
                     origin,
                     is_home,
                     &blockers,
                     blocker_r,
-                    12.0,
+                    crate::api::SPHERECAST_DISTANCE,
                     true,
                     true,
                     self.params.x_min,

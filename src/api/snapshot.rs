@@ -537,9 +537,10 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
     vectors.insert("Upper Midfield", Some(Vec2::new(0.0, params.z_max * 0.5)));
     vectors.insert("Lower Midfield", Some(Vec2::new(0.0, -params.z_max * 0.5)));
 
-    // ~0.75 m (body*1.5): real Clear stays C until ~t=0.25; *1.75 flipped ~0.20.
-    let blocker_r = params.body_radius * 1.5;
-    let range = 12.0;
+    // AIA Spherecast Floats: radius=0.25, distance=20 (graph + Debug rays).
+    // Geometric blocker disc ≈ cast_r + body (Unity hits player colliders).
+    let blocker_r = params.body_radius + crate::api::SPHERECAST_RADIUS;
+    let range = crate::api::SPHERECAST_DISTANCE;
     let all_others = |except: Option<(TeamId, u8)>| -> Vec<Vec2> {
         world
             .players

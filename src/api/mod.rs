@@ -13,7 +13,10 @@ mod snapshot;
 #[cfg(test)]
 mod coverage_test;
 
-pub use clear::{first_clear_dir, CLEAR_ORDER_AWAY, CLEAR_ORDER_HOME, SensorDir};
+pub use clear::{
+    first_clear_dir, CLEAR_ORDER_AWAY, CLEAR_ORDER_HOME, SensorDir,
+    SPHERECAST_DISTANCE, SPHERECAST_RADIUS,
+};
 pub use labels::*;
 pub use snapshot::{build_team_api, WorldSensors};
 

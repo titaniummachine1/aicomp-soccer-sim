@@ -15,9 +15,9 @@ them as Null today (except controllers, which are **write-only** sinks).
 
 | Node | Used in saves? | Notes / how to infer |
 | ---- | -------------- | -------------------- |
-| **Spherecast** | yes (×4 in some graphs) | Frida: inputs Float1/Float2. Likely origin+radius or length+radius. Feeds sensors. |
-| **SoccerPlayerSensors1..4** | yes | Frida: 8× Spherecast in → 8× RaycastHit out (A–H). Clear-dir system in Unity. |
-| **HitInfo** | rare / via sensors | Frida outs: Bool1, Float1, String1 from RaycastHit1. Hit? / distance? / collider name? |
+| **Spherecast** | yes (AIA ×1) | **LOCKED** AIA: Float radius **0.25**, distance **20** → shared into Sensors1..4. Unity SphereCast shape. |
+| **SoccerPlayerSensors1..4** | yes (AIA ×1 each) | 8× casts A–H → RaycastHit. Debug: green=clear, red=hit. Clear-dir order in game-model §5. |
+| **HitInfo** | rare / via sensors | **LOCKED** = Unity `RaycastHit` split: Bool hit?, Float **distance** (`∞` if miss — AIComp), String **collider.tag**. Assume default Unity `Physics.SphereCast` hit rules (players/walls/ball = tagged colliders). |
 | **ConstructSoccerProperties** | yes (faceoff) | Faceoff Vector31–34 + Country. Match setup, not per-tick brain I/O. |
 | **Country** | yes (w/ Construct) | Team/country pick for ConstructSoccerProperties. |
 | **Color** | yes (debug draw) | Visual only; Null OK for headless. |
@@ -65,16 +65,40 @@ Implementations exist so graphs compile; **do not treat as locked** until measur
 
 ---
 
-## 5. Implementation priority (suggested)
+## 5. Survival / Unity — what you *can* vs *cannot* deduce
 
-1. **Spherecast + HitInfo + SoccerPlayerSensors1..4** — needed if a bot relies on raw sensor hits instead of SoccerGet clear-dirs.
+Searched Survival (Aya / public writeups + Frida catalog) for Soccer sensor truth:
+
+| Deduce? | What |
+| ------- | ---- |
+| **Yes (shape)** | Unity `Physics.SphereCast` → `RaycastHit`. Spherecast → Sensors (8 dirs A–H) → SoccerGet clear-dir. |
+| **Yes (order)** | Home `E,C,H,B,G,A,F,D` / Away `D,F,A,G,B,H,C,E` — game-model §5; `api/clear.rs`. |
+| **Yes (AIA numbers)** | **radius 0.25**, **distance 20** — locked from AIA graph + Debug (quirk #15). Not Survival. |
+| **No** | Layer masks / collider name strings. Survival walk/sprint numbers do **not** transfer (Soccer walk **7** / sprint **8**). |
+| **AIA reality** | Gameplay reads SoccerGet clear-dirs / opp-goal-dirs. Raw HitInfo path still Null in sim. OppGoal-dir often **null** (= clear lane). |
+
+AIA usage scan: `python scripts/aia_gap_report.py`
+
+Headless parity capture:
+
+```bat
+cargo run --release --bin timeplot_until_goal -- --secs 30 --home aia --away idle
+```
+
+Unity: load `AIA_Debug.txt`, same opening/length, export TimePlot → compare series.
+
+---
+
+## 6. Implementation priority (suggested)
+
+1. **Spherecast + HitInfo + SoccerPlayerSensors1..4** — only if a bot relies on raw sensor hits instead of SoccerGet clear-dirs (AIA mostly uses the getters).
 2. **ConstructSoccerProperties / Country** — only if debugging kickoff faceoff construction in-graph.
 3. Lock §4 UNSURE rows via TimePlot / AIA answers.
 4. Optional: RelativePosition facing from transform rotation (if Unity Self+Forward ever matters).
 
 ---
 
-## 6. Done recently (not blank)
+## 7. Done recently (not blank)
 
 Opp has-ball / nearby / closest ×4, winning, scored-last, opp side, headed-towards,
 shots, possession%, attacking%, ball speed, charge%, goal W/H, sim clocks, Δt,

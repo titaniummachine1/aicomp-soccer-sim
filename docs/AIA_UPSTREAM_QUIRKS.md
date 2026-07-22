@@ -205,15 +205,29 @@ Status legend: `ENGINE` = Unity/AIComp soccer runtime · `BOT` = AIA graph logic
 
 ---
 
-### 15. Clear-dir spherecast radius is slim (≈body); goal-dir is thicker
+### 15. Player sensors = 8× Spherecast @ 45° (AIA radius **0.25**, distance **20**)
 
-- **Where:** `ENGINE` · `SUSPECTED`→working assumption (split radii)
-- **What:** General clear-dir matches better with slim ≈`body_radius * 1.1`.
-  Goal-mouth dirs need a thicker probe (≈`Player Interact Radius` 1.75): slim
-  midfield E often misses an opponent by <1 m → false Present → Ready at
-  charge≈0.5. Real OppGoal Present ~12%, first ~t=14.5 near x≈35 (AIA: null if
-  no clear sensor dir of the goal).
-- **Ask:** Publish spherecast radius/length per getter family.
+- **Where:** `BOT`/`ENGINE` · `LOCKED` (AIA graph Floats + SoccerPlayerSensors
+  **Debug** viz 2026-07-22)
+- **What:** Stock AIA wires one `Spherecast` → all four `SoccerPlayerSensors`:
+  - **radius = 0.25**, **distance = 20** (European Float `"0,25"`).
+  - Each sensor fires **8 spherecasts** A–H every **45°** (compass rose).
+  - Node **Debug** draws those rays: **green = clear** to max range, **red =
+    hit** (shortens to collider). That overlay is **Player Sensors**, not a
+    separate Spherecast debug.
+  - Origin while held ≈ **ball / hold point** (looks “ball-sized”); AIA still
+    hardcodes 0.25 — it is **not** the `Ball Radius` getter (sim ball_r ≈
+    **0.406**). Plausible “ball hitbox probe” by design, but the Float is
+    fixed in-graph.
+- **Clear-dir / OppGoal-dir:** SoccerGets consume those hits (null = clear lane
+  for OppGoal). Sim geometric approx: **range=20**, blocker ≈
+  `body_radius + 0.25`. Goal-mouth dirs may still need thicker probe
+  (≈ interact 1.75) — keep split until TimePlot disagrees.
+- **HitInfo:** assume **default Unity** `RaycastHit` after `Physics.SphereCast`
+  (has hit / distance / `collider.tag`). AIComp only packages those three outs;
+  miss distance = **infinity** per tooltip. No custom Soccer hit logic assumed.
+- **Ask:** Exact tag strings if a bot filters HitInfo String (otherwise clear-dir
+  SoccerGets hide that).
 
 ### 16. Held-ball velocity mirrors carrier (real), not zero
 

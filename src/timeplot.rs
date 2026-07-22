@@ -1,4 +1,7 @@
 //! ApiProbe / AIA_Debug-compatible TimePlot recorder (pitch XZ only).
+//!
+//! Also emits one-sample `Event.*` pulses (score / phase / possession / kick /
+//! steal) so a single JSON shows how the match unfolded.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -9,6 +12,7 @@ use serde::Serialize;
 
 use crate::api::TeamApi;
 use crate::brain::{BrainOutput, TeamId};
+use crate::match_state::MatchPhase;
 use crate::player::PlayerId;
 use crate::world::MatchWorld;
 
@@ -17,6 +21,19 @@ pub struct TimePlotRecorder {
     sim_time: f32,
     /// name → (color, xs, ys)
     series: BTreeMap<String, SeriesBuf>,
+    prev: Option<PlotPrev>,
+}
+
+#[derive(Debug, Clone)]
+struct PlotPrev {
+    score_home: u32,
+    score_away: u32,
+    phase: MatchPhase,
+    /// 0=loose, 1=home, 2=away
+    poss: u8,
+    home_has: bool,
+    home_charge: f32,
+    carrier: Option<(TeamId, u8)>,
 }
 
 #[derive(Debug, Default)]
@@ -215,6 +232,108 @@ impl TimePlotRecorder {
             world.match_state.score_away as f32,
             t,
         );
+
+        let home_has = home_api
+            .get_bool("Team Has Ball")
+            .unwrap_or(false);
+        let opp_has = home_api
+            .get_bool("Opponent Has Ball")
+            .unwrap_or(false);
+        let poss = if home_has {
+            1u8
+        } else if opp_has {
+            2u8
+        } else {
+            0u8
+        };
+        let home_charge = home_api
+            .get_float("Ball Carrier Shot Charge")
+            .or_else(|| home_api.get_float("Teammate 1 Shot Charge"))
+            .unwrap_or(0.0);
+        let carrier = world.possession.carrier;
+        let phase = world.match_state.phase;
+        let sh = world.match_state.score_home;
+        let sa = world.match_state.score_away;
+
+        // Continuous event-ish channels (also in Unity AIA_Debug DB31+).
+        push_f(self, "Event.PossCode", "#FFFF00", poss as f32, t);
+        push_f(
+            self,
+            "Event.PhaseCode",
+            "#FFFF00",
+            match phase {
+                MatchPhase::Kickoff => 0.0,
+                MatchPhase::Play => 1.0,
+                MatchPhase::GoalPause => 2.0,
+            },
+            t,
+        );
+
+        // One-sample pulses (0 most frames, 1 on edge).
+        let mut goal_h = 0.0;
+        let mut goal_a = 0.0;
+        let mut kickoff = 0.0;
+        let mut play = 0.0;
+        let mut pause = 0.0;
+        let mut poss_team = 0.0;
+        let mut poss_opp = 0.0;
+        let mut poss_loose = 0.0;
+        let mut kick_rel = 0.0;
+        let mut steal = 0.0;
+
+        if let Some(prev) = &self.prev {
+            if sh > prev.score_home {
+                goal_h = 1.0;
+            }
+            if sa > prev.score_away {
+                goal_a = 1.0;
+            }
+            if phase != prev.phase {
+                match phase {
+                    MatchPhase::Kickoff => kickoff = 1.0,
+                    MatchPhase::Play => play = 1.0,
+                    MatchPhase::GoalPause => pause = 1.0,
+                }
+            }
+            if poss != prev.poss {
+                match poss {
+                    1 => poss_team = 1.0,
+                    2 => poss_opp = 1.0,
+                    _ => poss_loose = 1.0,
+                }
+            }
+            // Kick release: team held ball with charge, then lost possession.
+            if prev.home_has && !home_has && prev.home_charge >= 0.15 {
+                kick_rel = 1.0;
+            }
+            // Steal: carrier team flips without a charged release this tick.
+            if let (Some((pt, _)), Some((ct, _))) = (prev.carrier, carrier) {
+                if pt != ct && kick_rel < 0.5 {
+                    steal = 1.0;
+                }
+            }
+        }
+
+        push_f(self, "Event.Goal.Home", "#00FF00", goal_h, t);
+        push_f(self, "Event.Goal.Away", "#FF0000", goal_a, t);
+        push_f(self, "Event.Kickoff", "#FFFFFF", kickoff, t);
+        push_f(self, "Event.Play", "#808080", play, t);
+        push_f(self, "Event.GoalPause", "#FF00FF", pause, t);
+        push_f(self, "Event.Poss.Team", "#00FFFF", poss_team, t);
+        push_f(self, "Event.Poss.Opp", "#FFA500", poss_opp, t);
+        push_f(self, "Event.Poss.Loose", "#808080", poss_loose, t);
+        push_f(self, "Event.Kick.Release", "#FF00FF", kick_rel, t);
+        push_f(self, "Event.Steal", "#FFFF00", steal, t);
+
+        self.prev = Some(PlotPrev {
+            score_home: sh,
+            score_away: sa,
+            phase,
+            poss,
+            home_has,
+            home_charge,
+            carrier,
+        });
     }
 
     pub fn write_json(&self, path: &Path) -> Result<(), String> {

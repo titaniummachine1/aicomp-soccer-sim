@@ -1,6 +1,14 @@
 //! 8-way clear-direction sensors (AIComp order).
+//!
+//! AIA Spherecast Floats (LOCKED): radius **0.25**, distance **20**.
+//! HitInfo ≈ Unity RaycastHit (hit / distance / collider.tag); miss → ∞.
 
 use bevy::prelude::*;
+
+/// AIA graph Spherecast radius (not `Ball Radius` ≈0.406).
+pub const SPHERECAST_RADIUS: f32 = 0.25;
+/// AIA graph Spherecast max distance.
+pub const SPHERECAST_DISTANCE: f32 = 20.0;
 
 /// Sensor wedge labels A–H around a player (top-down).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
