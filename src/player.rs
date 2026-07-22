@@ -104,7 +104,7 @@ pub fn step_mover(
 
     // Facing: carriers track Clear when provided (not MoveTo). During charge
     // warmup, facing is sticky — reject ~90° flips so C→H Clear does not yank
-    // Ball.Z down early. Cap turn rate by Frida angularSpeed (deg/s).
+    // Ball.Z down early. Cap by TimePlot/Frida angularSpeed=2500 deg/s.
     let want_move = to.normalize();
     let want_face = face_aim
         .filter(|d| d.length_squared() > 1e-8)

@@ -133,7 +133,8 @@
     "kickoff_frida": {
       "circle_radius_m": 7.25,
       "spawn_circle_margin_m": 0.5,
-      "delay_seconds": 1.0
+      "delay_seconds": 4.9,
+      "note": "Post-goal freeze→ball reset. TimePlot 17-37-34 DB17 measured ~4.88s. Frida kickoffDelaySeconds=1.0 is a different knob (not this pause)."
     },
     "stale_ball_frida": {
       "timeout_seconds": 5.0,
@@ -144,9 +145,9 @@
       "max": 100.0,
       "consume_rate": 0.15,
       "regen_rate": 5.0,
-      "regen_delay_s": 1.0,
+      "regen_delay_s": 0.0,
       "tackle_regen_delay_s": 1.5,
-      "note": "Frida consume/regen raw units still ambiguous. TimePlot 17-05-04 DB14 locks 0..1 drain/regen times below."
+      "note": "TimePlot 17-27-22 DB15: regen starts next tick after sprint OFF (no 1.0s flat). Frida staminaRegenDelay=1.0 unused/wrong for live drain. tackle delay still Frida candidate."
     },
     "stamina_drain_full_s": 34.5,
     "stamina_regen_full_s": 20.0,
@@ -166,7 +167,7 @@
     "Walls: cuboid colliders on playable AABB sides; restitution 0.2; open goal mouths |z|<=6 at x=\u00b139.5 do not collide",
     "Posts optional: capsules at (\u00b140.2, \u00b16) contact radius ~0.706; can omit for v1",
     "No linear damping on rigidbody \u2014 deceleration is material/custom friction only",
-    "Players: kinematic simple movers; stamina 0..1 drain 34.5s / regen 20s (TimePlot DB14); angularSpeed 2500 wired",
+    "Players: kinematic simple movers; stamina 0..1 drain 34.5s / regen 20s (TimePlot DB14); angularSpeed 2500 locked (DB18 yaw; Forward.X is cos)",
     "Kicks: TimePlot charge->horiz/lift (see kick_airborne_candidates); ground slide only when grounded; Y hang drives carry distance"
   ]
 }

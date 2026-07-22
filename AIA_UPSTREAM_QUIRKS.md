@@ -345,12 +345,9 @@ Update this file whenever a new confirmed quirk shows up.
 
 What is still soft / optional:
 
-1. **Frida regen-delay exactness** — delays wired (1s / 1.5s tackle); probe
-   transitions looked ~0.2s. Fine for AI; polish later.
-2. **Kickoff first-touch polish** — delay 1.0s wired into GoalPause; spawn margin
-   0.5 reserved.
-3. **No-ball turn rate** — flick confirmed without turning; free turn-in-place
-   while not charging still lightly tested.
+1. **Tackle regen delay 1.5s** — Frida candidate; first TackleRegen capture
+   missed (Away body-chased; equal-stam before first kick). Reload fixed
+   TackleRegenProbe/Away (chase ball + short kick then bait).
 
 ### Locked (no new capture needed)
 
@@ -358,9 +355,17 @@ What is still soft / optional:
 - Vertical bounce **e≈0.23**
 - Hang vs charge (~0.28s@0.5 → ~0.61s@full)
 - Stamina drain **~34.5s** / regen **~20s**; no snap@0; sprint works to empty
+- Sprint-off regen delay = **0** (immediate next tick; Frida 1.0s not live)
 - Kick flick: Interact↓ = **MoveTo** dir (TimePlot 17-11-17); sim already matches
 - Exchange pickup lockout **0.25s** on tackle win
 - Pickup airborne uses real grounded Y
+- Facing turn: **angularSpeed=2500 deg/s** locked (TimePlot 17-46-22 DB18).
+  Yaw steps are linear at 47.5° per FixedDt≈0.019s (=2500). `Forward.X` looks
+  nonlinear because it is **cos(θ)** — peak |dForward.X/dt|≈40 is not deg/s.
+  180 finishes in 0.095s (1 tick lag + 4 steps; last step 37.5°). Sticky
+  charge-warmup reject of ~90° flips still applies while carrying.
+- Post-goal pause → kickoff reset **~4.9s** (TimePlot 17-37-34); Frida 1.0s is
+  not that freeze.
 
 ---
 
