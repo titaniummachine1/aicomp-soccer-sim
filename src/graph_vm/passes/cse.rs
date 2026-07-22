@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::graph_vm::ir::{IrInst, LoweredIR, Reg};
+use crate::graph_vm::ir::{LoweredIR, Reg};
 use crate::graph_vm::opcode::{OpCode, OpEffect};
 use crate::graph_vm::passes::Pass;
 use crate::graph_vm::value::RegisterKind;

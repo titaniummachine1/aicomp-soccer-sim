@@ -9,6 +9,7 @@ use crate::graph_vm::ir::LoweredIR;
 
 pub use const_fold::ConstFold;
 pub use cse::Cse;
+pub use fusion::Fusion;
 pub use relay_removal::RelayRemoval;
 
 pub trait Pass {
@@ -28,15 +29,16 @@ impl PassManager {
         }
     }
 
-    /// O1 pipeline: ConstFold followed by RelayRemoval and CSE.
+    /// O1 pipeline: ConstFold followed by RelayRemoval, CSE, and Fusion.
     ///
-    /// Fusion lands later.
+    /// RegAlloc lands later.
     pub fn o1() -> Self {
         Self {
             passes: vec![
                 Box::new(ConstFold),
                 Box::new(RelayRemoval),
                 Box::new(Cse),
+                Box::new(Fusion),
             ],
         }
     }

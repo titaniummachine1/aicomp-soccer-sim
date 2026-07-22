@@ -190,6 +190,16 @@ fn run_inst(inst: &Instruction, ctx: &mut ExecutionContext) {
                 ctx.frame.registers[dst] = VmValue::Vector(v * s);
             }
         }
+        OpCode::ScaleAddVec => {
+            if ops.len() >= 4 {
+                let dst = ops[0] as usize;
+                let v = reg_v(ctx, ops[1] as usize);
+                let s = reg_f(ctx, ops[2] as usize);
+                let addend = reg_v(ctx, ops[3] as usize);
+                let scaled = v * s;
+                ctx.frame.registers[dst] = VmValue::Vector(scaled + addend);
+            }
+        }
         OpCode::Normalize => {
             if ops.len() >= 2 {
                 let dst = ops[0] as usize;

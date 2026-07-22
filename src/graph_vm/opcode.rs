@@ -55,6 +55,7 @@ pub enum OpCode {
     IsNull,
     Nor,
     Nand,
+    ScaleAddVec,
 }
 
 /// Effect class for CSE / fusion / movement barriers.
@@ -82,8 +83,8 @@ impl OpCode {
                 OpEffect::Pure
             }
             Eq | Ne | Lt | Gt | Le | Ge | And | Or | Not | Nor | Nand => OpEffect::Pure,
-            ConstructVec | SplitVec | AddVec | SubVec | ScaleVec | Normalize | Magnitude
-            | Distance | Dot | Select | Move | Operation | IsNull => OpEffect::Pure,
+            ConstructVec | SplitVec | AddVec | SubVec | ScaleVec | ScaleAddVec | Normalize
+            | Magnitude | Distance | Dot | Select | Move | Operation | IsNull => OpEffect::Pure,
             LoadApi | LoadVar => OpEffect::ReadOnly,
             StoreVar => OpEffect::Write,
             Call | Return => OpEffect::Write,

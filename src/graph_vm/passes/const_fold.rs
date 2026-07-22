@@ -217,6 +217,10 @@ fn try_fold(inst: &IrInst, known: &[Option<VmValue>]) -> Option<VmValue> {
         OpCode::ScaleVec if args.len() >= 2 => {
             Some(VmValue::Vector(as_v(args[0]) * as_f(args[1])))
         }
+        OpCode::ScaleAddVec if args.len() >= 3 => {
+            let scaled = as_v(args[0]) * as_f(args[1]);
+            Some(VmValue::Vector(scaled + as_v(args[2])))
+        }
         OpCode::Normalize if args.len() >= 1 => {
             let v = as_v(args[0]);
             let len = v.length();
@@ -492,6 +496,7 @@ mod tests {
                     | OpCode::AddVec
                     | OpCode::SubVec
                     | OpCode::ScaleVec
+                    | OpCode::ScaleAddVec
                     | OpCode::Normalize
                     | OpCode::Magnitude
                     | OpCode::Distance
