@@ -237,11 +237,11 @@ Offline sim: `ball_physics_sim.py`. Bevy pack: `bevy_sim_params_v05.json`.
 
 ## 9. Related files
 
-| File | Role |
-| ---- | ---- |
-| `docs/SOCCER_GAME_MODEL.md` | **This document** — human game model |
-| `data/reference/soccer_ball_sim_params.json` | Numbers for ball sim + community block |
-| `bevy_sim_params_v05.json` | Bevy/Rust extract (crate root) |
-| `data/reference/soccer_api_dump.md` | Getter label lists |
-| `ball_physics_sim.py` (worldcupteams) | Offline free-ball simulator |
-| `AIGamePyLibrary/README.md` | Official Soccer node docs (kickoff, sensors, controllers) |
+| File                                         | Role                                                      |
+| -------------------------------------------- | --------------------------------------------------------- |
+| `docs/SOCCER_GAME_MODEL.md`                  | **This document** — human game model                      |
+| `data/reference/soccer_ball_sim_params.json` | Numbers for ball sim + community block                    |
+| `bevy_sim_params_v05.json`                   | Bevy/Rust extract (crate root)                            |
+| `data/reference/soccer_api_dump.md`          | Getter label lists                                        |
+| `ball_physics_sim.py` (worldcupteams)        | Offline free-ball simulator                               |
+| `AIGamePyLibrary/README.md`                  | Official Soccer node docs (kickoff, sensors, controllers) |

@@ -10,6 +10,7 @@ pub mod api;
 pub mod ball;
 pub mod brain;
 pub mod graph;
+pub mod graph_vm;
 pub mod match_state;
 pub mod params;
 pub mod player;

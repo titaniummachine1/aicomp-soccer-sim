@@ -40,12 +40,12 @@ Exit `0` = steal seen; `2` = failed assert.
 
 ## Truth files
 
-| File | Use |
-|------|-----|
+| File                          | Use                                       |
+| ----------------------------- | ----------------------------------------- |
 | `docs/AIA_UPSTREAM_QUIRKS.md` | Locked Unity measurements + sim checklist |
-| `bevy_sim_params_v05.json` | Live numbers (crate root) |
-| `data/reference/` | API / Frida dumps (read-only) |
-| `README.md` | Human entry points |
+| `bevy_sim_params_v05.json`    | Live numbers (crate root)                 |
+| `data/reference/`             | API / Frida dumps (read-only)             |
+| `README.md`                   | Human entry points                        |
 
 ## Don't
 

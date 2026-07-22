@@ -1,12 +1,16 @@
-//! Headless AIA vs AIA until first goal; write AIA_Debug-compatible TimePlot JSON.
+//! Headless AIA vs AIA TimePlot capture.
+//!
+//! ```text
+//! cargo run --release --bin timeplot_until_goal -- [max_secs] [home|away] [goal_count]
+//! ```
+//! Defaults: max_secs=600, opening=home, stop after 5 total goals (or max_secs).
 
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use aicomp_soccer_sim::brain::TeamBrain;
+use aicomp_soccer_sim::brain::{TeamBrain, TeamId};
 use aicomp_soccer_sim::graph::{load_team_graph, GraphBrain};
 use aicomp_soccer_sim::params::{default_params_path, SimParams};
-use aicomp_soccer_sim::brain::TeamId;
 use aicomp_soccer_sim::world::{MatchWorld, FIXED_DT};
 use aicomp_soccer_sim::TimePlotRecorder;
 
@@ -36,19 +40,25 @@ fn main() {
     let mut home = GraphBrain::new(graph.clone());
     let mut away = GraphBrain::new(graph);
 
-    // Match capture: home|away. Default Home (timeplot_2026-07-22_05-01-57).
-    let opening = match std::env::args().nth(2).as_deref() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let max_time = args
+        .first()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(600.0);
+    let opening = match args.get(1).map(|s| s.as_str()) {
         Some("away") | Some("Away") => TeamId::Away,
         _ => TeamId::Home,
     };
-    let mut world = MatchWorld::new_kickoff_opening(params, opening);
-    eprintln!("opening kickoff: {opening:?}");
-    let mut plot = TimePlotRecorder::default();
+    let goal_target = args
+        .get(2)
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(5);
 
-    let max_time = std::env::args()
-        .nth(1)
-        .and_then(|s| s.parse::<f32>().ok())
-        .unwrap_or(20.0);
+    let mut world = MatchWorld::new_kickoff_opening(params, opening);
+    eprintln!(
+        "AIA vs AIA opening={opening:?} stop_at_goals={goal_target} max_secs={max_time} FIXED_DT={FIXED_DT}"
+    );
+    let mut plot = TimePlotRecorder::default();
 
     let mut ticks = 0u64;
     let mut last_score = 0u32;
@@ -63,27 +73,38 @@ fn main() {
         let scored_now = world.match_state.score_home + world.match_state.score_away;
         if scored_now > last_score {
             eprintln!(
-                "goal at t={:.3}s ticks={ticks} score={}-{} phase={:?} (continuing to {max_time}s)",
-                plot_sim_time(&plot),
+                "goal at t={:.3}s ticks={ticks} score={}-{} phase={:?}",
+                plot.sim_time(),
                 world.match_state.score_home,
                 world.match_state.score_away,
                 world.match_state.phase
             );
             last_score = scored_now;
         }
-        if plot_sim_time(&plot) >= max_time {
+        if scored_now >= goal_target {
             eprintln!(
-                "done t={:.3}s score={}-{}",
-                plot_sim_time(&plot),
+                "done (goals) t={:.3}s score={}-{} goals={}",
+                plot.sim_time(),
                 world.match_state.score_home,
-                world.match_state.score_away
+                world.match_state.score_away,
+                scored_now
             );
             break;
         }
-        if ticks % 500 == 0 {
+        if plot.sim_time() >= max_time {
+            eprintln!(
+                "done (time cap) t={:.3}s score={}-{} goals={}",
+                plot.sim_time(),
+                world.match_state.score_home,
+                world.match_state.score_away,
+                scored_now
+            );
+            break;
+        }
+        if ticks % 1000 == 0 {
             eprintln!(
                 "… t={:.1}s ball=({:.1},{:.1}) score={}-{}",
-                plot_sim_time(&plot),
+                plot.sim_time(),
                 world.ball.pos.x,
                 world.ball.pos.y,
                 world.match_state.score_home,
@@ -96,16 +117,16 @@ fn main() {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let out = soccer_saves_dir()
-        .join("Timeplots")
-        .join(format!("sim_timeplot_until_goal_{stamp}.json"));
+    let out_dir = soccer_saves_dir().join("Timeplots");
+    let _ = std::fs::create_dir_all(&out_dir);
+    let total_goals = world.match_state.score_home + world.match_state.score_away;
+    let out = out_dir.join(format!("sim_aia_vs_aia_{total_goals}goals_{stamp}.json"));
     plot.write_json(&out).expect("write timeplot");
+    eprintln!(
+        "final score {}-{} t={:.3}s ticks={ticks}",
+        world.match_state.score_home,
+        world.match_state.score_away,
+        plot.sim_time()
+    );
     println!("{}", out.display());
-}
-
-fn plot_sim_time(plot: &TimePlotRecorder) -> f32 {
-    // Recreate via private field access — use score clocks from a lightweight approach:
-    // TimePlotRecorder doesn't expose sim_time publicly; mirror via writing path.
-    // Instead track externally — fix by adding getter.
-    plot.sim_time()
 }
