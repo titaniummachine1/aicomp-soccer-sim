@@ -5,11 +5,13 @@
 
 mod dropdowns;
 mod eval;
-mod load;
+pub(crate) mod load;
 mod value;
 
 pub use eval::GraphBrain;
-pub use load::{load_team_graph, TeamGraph};
+pub use load::{
+    index_graph, load_team_graph, RawConnection, RawGraph, RawNode, RawPort, TeamGraph,
+};
 pub use value::GraphValue;
 
 #[cfg(test)]

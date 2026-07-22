@@ -50,6 +50,11 @@ pub enum OpCode {
     Debug,
     TimePlot,
     OpaqueEffect,
+    Move,
+    Operation,
+    IsNull,
+    Nor,
+    Nand,
 }
 
 /// Effect class for CSE / fusion / movement barriers.
@@ -76,9 +81,9 @@ impl OpCode {
             Add | Sub | Mul | Div | Mod | Pow | Min | Max | Abs | Clamp | Lerp | Neg => {
                 OpEffect::Pure
             }
-            Eq | Ne | Lt | Gt | Le | Ge | And | Or | Not => OpEffect::Pure,
+            Eq | Ne | Lt | Gt | Le | Ge | And | Or | Not | Nor | Nand => OpEffect::Pure,
             ConstructVec | SplitVec | AddVec | SubVec | ScaleVec | Normalize | Magnitude
-            | Distance | Dot | Select => OpEffect::Pure,
+            | Distance | Dot | Select | Move | Operation | IsNull => OpEffect::Pure,
             LoadApi | LoadVar => OpEffect::ReadOnly,
             StoreVar => OpEffect::Write,
             Call | Return => OpEffect::Write,
