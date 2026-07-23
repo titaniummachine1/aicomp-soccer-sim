@@ -32,9 +32,12 @@ pub struct Possession {
     /// serialized ~3.0s). Teammates may still mid-air claim after ball lockout.
     pub kick_exclude_shooter: Option<(TeamId, u8)>,
     pub kick_exclude_left: f32,
-    /// After the first kick of the match, opp-carrier chase is slowed.
+    /// True after the **match's** first charged release. Gates opening-only
+    /// scripts (Away Clear-F dump, Home 0.45 press). Kept across goal/whistle.
     pub first_kick_done: bool,
-    /// True after the match's first charged release until the hang window ends.
+    /// True after the **current kickoff's** first release. Resets each
+    /// goal/whistle. Gates receiving-team no-tackle until that touch.
+    pub kickoff_touch_done: bool,
     /// Opening dump (DB33): ball must fly ~0.1s before Home can hot-claim.
     pub opening_dump_hang: bool,
     /// Ball-side flag: only the opening dump allows the fat opponent hot-reclaim
@@ -50,10 +53,25 @@ impl Default for Possession {
             kick_exclude_shooter: None,
             kick_exclude_left: 0.0,
             first_kick_done: false,
+            kickoff_touch_done: false,
             opening_dump_hang: false,
             opening_hot_reclaim: false,
         }
     }
+}
+
+/// Clear post-kick contest state for a fresh kickoff (goal or whistle).
+/// Stamina stays on players. Match-level `first_kick_done` is **kept** so
+/// opening press/dump scripts do not re-arm every round (that made Home
+/// kickoffs unwinnable — Away ran ~16.8s goal loops to 10–1).
+pub fn reset_possession_for_kickoff(poss: &mut Possession) {
+    poss.carrier = None;
+    poss.pickup_lockout = 0.0;
+    poss.kick_exclude_shooter = None;
+    poss.kick_exclude_left = 0.0;
+    poss.kickoff_touch_done = false;
+    poss.opening_dump_hang = false;
+    poss.opening_hot_reclaim = false;
 }
 
 pub fn tick_possession_timers(poss: &mut Possession, dt: f32) {
@@ -183,6 +201,7 @@ pub fn apply_interact(
             poss.kick_exclude_shooter = Some((player.team, player.id.0));
             poss.kick_exclude_left = 3.0;
             poss.first_kick_done = true;
+            poss.kickoff_touch_done = true;
             // DB33 Away opening: Ball.X keeps traveling ~0.1s before Home claims.
             poss.opening_dump_hang = was_opening;
             poss.opening_hot_reclaim = was_opening;
@@ -256,20 +275,37 @@ pub fn apply_interact(
                     let carrier_stam = carrier_stamina.unwrap_or(0.0);
                     let eps = 1e-4;
                     let drain = player.stamina.min(carrier_stam);
+                    // After drain: tackler rem = max(0,T−C), carrier rem = max(0,C−T).
+                    // Equal stam → both 0 → tackler wins (one real contest).
+                    // Both *already* empty (drain=0, T≈0): do NOT flip — that
+                    // was the oppose-stack tackle lock (steal every 0.25s).
+                    let would_both_empty = drain <= eps && player.stamina <= eps;
+                    if would_both_empty {
+                        poss.pickup_lockout = poss.pickup_lockout.max(0.40);
+                        trace(format!(
+                            "TACKLE_BOTH_EMPTY {:?} P{} on {:?} P{} (no flip)",
+                            player.team, player.id.0, ct, cid
+                        ));
+                        return InteractOutcome::default();
+                    }
                     player.stamina = (player.stamina - drain).max(0.0);
                     player.stamina_regen_lock_left = params
                         .stamina_tackle_regen_delay_s
                         .max(player.stamina_regen_lock_left);
-                    // After drain: tackler rem = max(0,T−C), carrier rem = max(0,C−T).
-                    // Tackler wins if rem_t >= rem_c (covers equal→both 0 and T>C).
                     let carrier_after = (carrier_stam - drain).max(0.0);
                     let attacker_wins = player.stamina + eps >= carrier_after;
                     if attacker_wins {
                         poss.carrier = Some((player.team, player.id.0));
                         player.shot_charge = 0.0;
                         player.charge_warmup_left = params.shot_charge_warmup_s;
-                        // Ball exchange lockout (global), not a per-player gate.
-                        poss.pickup_lockout = params.pickup_delay_after_exchange_s;
+                        // Longer ball lock when the contest spent both — stops
+                        // immediate re-tackle while stam is still ~0.
+                        let both_spent = player.stamina <= eps && carrier_after <= eps;
+                        poss.pickup_lockout = if both_spent {
+                            0.55
+                        } else {
+                            params.pickup_delay_after_exchange_s
+                        };
                         trace(format!(
                             "STEAL {:?} P{} from {:?} P{} drain={drain:.2} (carrier had charge={:.2})",
                             player.team,
@@ -439,6 +475,52 @@ mod tests {
             "equal stam must dump tackler stamina, got {}",
             attacker.stamina
         );
+    }
+
+    #[test]
+    fn both_empty_stamina_does_not_pingpong_steal() {
+        let params = SimParams::default();
+        let mut ball = Ball {
+            pos: Vec2::ZERO,
+            vel: Vec2::ZERO,
+            height: params.ball_rest_height,
+            vel_y: 0.0,
+            held: true,
+        };
+        let mut poss = Possession {
+            carrier: Some((TeamId::Home, 1)),
+            ..Default::default()
+        };
+        let mut attacker = Player {
+            team: TeamId::Away,
+            id: PlayerId(1),
+            pos: Vec2::new(0.5, 0.0),
+            vel: Vec2::ZERO,
+            facing: -Vec2::X,
+            stamina: 0.0,
+            stamina_regen_lock_left: 0.0,
+            shot_charge: 0.0,
+            charge_warmup_left: 0.0,
+        };
+        let cmd = BrainCommand {
+            move_to: attacker.pos,
+            sprint: false,
+            interact: true,
+        };
+        let out = apply_interact(
+            &mut attacker,
+            &mut ball,
+            &mut poss,
+            cmd,
+            &params,
+            0.019,
+            Some(0.0),
+            Some(0.0),
+            None,
+        );
+        assert!(out.drain.is_none());
+        assert_eq!(poss.carrier, Some((TeamId::Home, 1)));
+        assert!(poss.pickup_lockout >= 0.40);
     }
 
     #[test]

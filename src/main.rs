@@ -3,13 +3,14 @@
 //! ```text
 //! cargo run --release
 //! cargo run --release -- --fast --home chase --away idle
-//! cargo run --release -- --both aia --fast
+//! cargo run --release -- --both aia --fast --opening home
 //! cargo run --release -- --home graph:C:\path\Team.txt --away chase
 //! cargo run --release --bin soccer_headless -- --help
 //! ```
 //!
 //! See README.md / AGENTS.md.
-//! Hotkeys: Space=pause, F=fast (skip idle wait after tick lock), R=restart.
+//! Hotkeys: Space=pause, F=fast (skip idle wait after tick lock), R=restart
+//! (same opening side — not random).
 //!
 //! Timing model:
 //! - **Tick lock** always: both brains must finish before physics / next tick.
@@ -89,6 +90,8 @@ struct ViewerArgs {
     speed_t: f32,
     home: BrainInput,
     away: BrainInput,
+    /// Deterministic opening kickoff (default Home). R restart keeps this.
+    opening: TeamId,
 }
 
 fn print_viewer_help() {
@@ -103,6 +106,8 @@ OPTIONS:
   --home <brain>        Home / Team A brain (default: aia)
   --away <brain>        Away / Team B brain (default: aia)
   --both <brain>        Set home and away to the same brain
+  --opening home|away   Opening kickoff side (default: home; R keeps it)
+  --seed <u64>          Opening from seed: even=home, odd=away
   --fast, -f            Zero idle (same as scrubber all the way right)
   --speed <0..1>        Scrubber: 0=1 tick/s … 1=no idle (default ≈ realtime)
   -h, --help            Show this help
@@ -113,11 +118,12 @@ BRAINS:
 TIMING:
   Tick lock always waits for both brains.
   Speed scrubber sets idle budget after that (log): left slow, right no wait.
+  Opening is fixed (not random) so Fast/R replays stay comparable.
 
 HOTKEYS:
   Space  pause / resume
   F      toggle Fast (zero idle)
-  R      restart match
+  R      restart match (same opening)
 "
     );
 }
@@ -128,6 +134,7 @@ fn parse_viewer_args() -> ViewerArgs {
     let mut speed_t = idle_budget_to_fill(FIXED_DT);
     let mut home = BrainInput::Aia;
     let mut away = BrainInput::Aia;
+    let mut opening = TeamId::Home;
     let mut i = 0usize;
     while i < argv.len() {
         match argv[i].as_str() {
@@ -144,6 +151,39 @@ fn parse_viewer_args() -> ViewerArgs {
                     std::process::exit(1);
                 });
                 speed_t = speed_t.clamp(0.0, 1.0);
+            }
+            "--opening" => {
+                i += 1;
+                let v = argv.get(i).map(|s| s.as_str()).unwrap_or_else(|| {
+                    eprintln!("error: --opening needs home|away");
+                    print_viewer_help();
+                    std::process::exit(1);
+                });
+                opening = match v {
+                    "home" | "Home" | "a" | "A" => TeamId::Home,
+                    "away" | "Away" | "b" | "B" => TeamId::Away,
+                    other => {
+                        eprintln!("error: --opening expected home|away, got {other}");
+                        std::process::exit(1);
+                    }
+                };
+            }
+            "--seed" => {
+                i += 1;
+                let v = argv.get(i).map(|s| s.as_str()).unwrap_or_else(|| {
+                    eprintln!("error: --seed needs a u64");
+                    print_viewer_help();
+                    std::process::exit(1);
+                });
+                let s: u64 = v.parse().unwrap_or_else(|_| {
+                    eprintln!("error: --seed must be an integer");
+                    std::process::exit(1);
+                });
+                opening = if s % 2 == 0 {
+                    TeamId::Home
+                } else {
+                    TeamId::Away
+                };
             }
             "--home" => {
                 i += 1;
@@ -200,6 +240,7 @@ fn parse_viewer_args() -> ViewerArgs {
         speed_t,
         home,
         away,
+        opening,
     }
 }
 
@@ -214,9 +255,10 @@ fn main() {
 
     let asset_root = portable_asset_root();
     eprintln!(
-        "viewer home={} away={} fast={} speed_t={:.3} idle≈{:.3}s",
+        "viewer home={} away={} opening={:?} fast={} speed_t={:.3} idle≈{:.3}s",
         args.home.label(),
         args.away.label(),
+        args.opening,
         args.fast,
         args.speed_t,
         fill_to_idle_budget(args.speed_t)
@@ -242,8 +284,9 @@ fn main() {
                 }),
         )
         .insert_resource(ClearColor(Color::srgb(0.10, 0.40, 0.16)))
+        .insert_resource(ViewerOpening(args.opening))
         .insert_resource({
-            let mut world = MatchWorld::new_kickoff(params);
+            let mut world = MatchWorld::new_kickoff_opening(params, args.opening);
             // Viewer: no post-goal freeze (looks like lag on stream/demo).
             // Strip cosmetic GoalPause wait for playable viewer. Kickoff-phase
             // events (free ball, faceoff walk-in, hold, first kick) still run.
@@ -1479,9 +1522,10 @@ fn handle_hotkeys(
     mut fast: ResMut<SimFast>,
     mut interp: ResMut<InterpState>,
     mut clock: ResMut<TickClock>,
+    opening: Res<ViewerOpening>,
 ) {
     if keys.just_pressed(KeyCode::KeyR) {
-        restart_match(&mut viewer, &mut interp, &mut clock);
+        restart_match(&mut viewer, &mut interp, &mut clock, opening.0);
         selection.selected = None;
     }
     if keys.just_pressed(KeyCode::Space) {
@@ -1551,16 +1595,25 @@ fn refresh_pause_ui(
     }
 }
 
-fn restart_match(viewer: &mut ViewerWorld, interp: &mut InterpState, clock: &mut TickClock) {
+/// Fixed opening kickoff for this viewer session (R restart keeps it).
+#[derive(Resource, Clone, Copy)]
+struct ViewerOpening(TeamId);
+
+fn restart_match(
+    viewer: &mut ViewerWorld,
+    interp: &mut InterpState,
+    clock: &mut TickClock,
+    opening: TeamId,
+) {
     let mut params = viewer.world.params.clone();
     params.kickoff_delay_s = 0.0;
-    viewer.world = MatchWorld::new_kickoff(params);
+    viewer.world = MatchWorld::new_kickoff_opening(params, opening);
     viewer.last_home = BrainOutput::default();
     viewer.last_away = BrainOutput::default();
     interp.reset_from(&viewer.world);
     clock.accumulator = 0.0;
     clock.alpha = 1.0;
-    info!("match restarted");
+    info!(?opening, "match restarted");
 }
 
 fn lighten(c: Color, amount: f32) -> Color {
@@ -1585,6 +1638,7 @@ fn handle_ui_buttons(
     mut fast: ResMut<SimFast>,
     mut interp: ResMut<InterpState>,
     mut clock: ResMut<TickClock>,
+    opening: Res<ViewerOpening>,
 ) {
     for (interaction, action, mut bg) in &mut interactions {
         let base = match action {
@@ -1600,7 +1654,7 @@ fn handle_ui_buttons(
                 *bg = BackgroundColor(lighten(base, 0.20));
                 match action {
                     UiAction::Restart => {
-                        restart_match(&mut viewer, &mut interp, &mut clock);
+                        restart_match(&mut viewer, &mut interp, &mut clock, opening.0);
                         selection.selected = None;
                     }
                     UiAction::TogglePause => toggle_pause(&mut paused),

@@ -71,22 +71,15 @@ pub fn step_mover(
     let max_speed = if sprint {
         mover.max_speed
     } else if is_carrier || !opp_has_ball || !first_kick_done {
-        // Carriers, loose ball, and pre-first-kick press (Away closing on Home
-        // charge to flip Clear C→H): near cruise.
+        // Carriers, loose ball, and pre-first-kick press: near cruise.
         mover.max_speed * 0.95
     } else {
-        // After first kick, closing an opponent carrier:
-        // Home press stays slow so Home doesn't sit on Away's −Z Clear lane.
-        // Away press stays nearer cruise so Away can reclaim around t≈2
-        // (real OppHas; sim was over-holding as Home).
-        let scale = if player.team == TeamId::Home {
-            // Fast enough to contest Away's first charge (~t=1.36 steal),
-            // still well below cruise so Away Clear −X lane stays open.
-            0.45
-        } else {
-            0.95
-        };
-        mover.max_speed * scale
+        // After the match opening kick, both sides close an opponent carrier
+        // at the same near-cruise rate. An older Home-only 0.45 scale was for
+        // the opening Away Clear lane; leaving it on for the whole match made
+        // every post-goal Home kickoff a free Away goal (and flipped cleanly
+        // when Away took kickoffs).
+        mover.max_speed * 0.95
     };
 
     let to = move_to - player.pos;

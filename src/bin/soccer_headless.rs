@@ -32,6 +32,8 @@ struct Args {
     params: Option<PathBuf>,
     json_out: Option<PathBuf>,
     until_goal: bool,
+    /// First side to this many goals wins (still capped by --secs).
+    win_goals: Option<u32>,
     quiet: bool,
     /// When `Some`, run N matches and emit JSONL (even if N == 1).
     batch: Option<usize>,
@@ -56,6 +58,7 @@ OPTIONS:
   --params <path>           Params JSON (default: bevy_sim_params_v05.json)
   --json <path>             Also write result JSON to this file (single match)
   --until-goal              Stop at first goal (still capped by --secs)
+  --win-goals <N>           Stop when either side reaches N goals (first-to-N)
   --batch <N>               Run N matches in parallel; stdout is JSONL
   --jobs <N>                Thread pool size (default: logical CPUs − 1, min 1)
   --quiet                   No stderr heartbeats
@@ -82,6 +85,7 @@ EXAMPLES:
   cargo run --release --bin soccer_headless -- --secs 20 --home chase --away idle
   cargo run --release --bin soccer_headless -- --secs 40 --home test1 --away test2 --opening home
   cargo run --release --bin soccer_headless -- --home aia --away aia --until-goal --secs 60
+  cargo run --release --bin soccer_headless -- --home aia --away aia --win-goals 10 --secs 3600
   cargo run --release --bin soccer_headless -- --batch 16 --jobs 8 --secs 20 --home chase --away idle --quiet
 "
     );
@@ -96,6 +100,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut params = None;
     let mut json_out = None;
     let mut until_goal = false;
+    let mut win_goals = None;
     let mut quiet = false;
     let mut batch = None;
     let mut jobs = None;
@@ -199,6 +204,18 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 jobs = Some(n);
             }
             "--until-goal" => until_goal = true,
+            "--win-goals" => {
+                i += 1;
+                let n: u32 = argv
+                    .get(i)
+                    .ok_or("--win-goals needs a value")?
+                    .parse()
+                    .map_err(|e| format!("--win-goals: {e}"))?;
+                if n == 0 {
+                    return Err("--win-goals must be >= 1".into());
+                }
+                win_goals = Some(n);
+            }
             "--quiet" => quiet = true,
             other => return Err(format!("unknown arg '{other}' (see --help)")),
         }
@@ -224,6 +241,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         params,
         json_out,
         until_goal,
+        win_goals,
         quiet,
         batch,
         jobs,
@@ -258,6 +276,7 @@ fn run_single(args: &Args, params: SimParams) -> Result<BatchMatchResult, String
         opening: args.opening,
         seed: args.seed,
         until_goal: args.until_goal,
+        win_goals: args.win_goals,
         engine: GraphEngine::Runtime,
         params,
         job_index: None,
@@ -283,6 +302,7 @@ fn run_batch(args: &Args, params: SimParams) -> Vec<Result<BatchMatchResult, Str
                 },
                 seed: Some(seed),
                 until_goal: args.until_goal,
+                win_goals: args.win_goals,
                 engine: GraphEngine::Runtime,
                 params: params.clone(),
                 job_index: Some(i),
@@ -360,6 +380,7 @@ fn main() -> ExitCode {
                     "score_away": result.score_away,
                     "phase": result.phase,
                     "until_goal": result.until_goal,
+                    "win_goals": result.win_goals,
                     "goal_stopped": result.goal_stopped,
                 }))
                 .expect("serialize MatchResult");

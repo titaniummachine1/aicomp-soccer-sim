@@ -22,7 +22,9 @@ use crate::match_state::{
 };
 use crate::params::SimParams;
 use crate::player::{faceoff_world, kickoff_facing, step_mover, Player, PlayerId, SimpleMover};
-use crate::possession::{apply_interact, sync_held_ball, tick_possession_timers, Possession};
+use crate::possession::{
+    apply_interact, reset_possession_for_kickoff, sync_held_ball, tick_possession_timers, Possession,
+};
 
 /// Confirmed AIComp fixed step (~52.6 Hz). Independent of render FPS.
 pub const FIXED_DT: f32 = 0.019;
@@ -109,6 +111,7 @@ impl MatchWorld {
                     self.match_state.kickoff_team,
                     self.params.ball_rest_height,
                 );
+                reset_possession_for_kickoff(&mut self.possession);
                 self.possession.carrier = if self.ball.held {
                     Some((self.match_state.kickoff_team, 1))
                 } else {
@@ -200,7 +203,7 @@ impl MatchWorld {
                 &self.players[i],
                 cmd,
                 &self.match_state,
-                self.possession.first_kick_done,
+                self.possession.kickoff_touch_done,
             );
             let is_carrier = matches!(
                 self.possession.carrier,
@@ -356,7 +359,10 @@ impl MatchWorld {
         self.match_state.stale_idle_s += dt;
         if self.match_state.stale_idle_s >= self.params.stale_ball_timeout_s {
             self.match_state.on_whistle(self.params.kickoff_delay_s);
-            self.possession.carrier = None;
+            // Ball parked at center until GoalPause → place_kickoff; clear
+            // possession machine now so shooter-exclude can't block the next
+            // kickoff claim (timers freeze during GoalPause).
+            reset_possession_for_kickoff(&mut self.possession);
             self.ball.held = false;
             self.ball.vel = Vec2::ZERO;
             self.ball.vel_y = 0.0;
@@ -370,7 +376,7 @@ impl MatchWorld {
             EndReason::GoalHome => {
                 self.match_state
                     .on_goal(TeamId::Home, self.params.kickoff_delay_s);
-                self.possession.carrier = None;
+                reset_possession_for_kickoff(&mut self.possession);
                 self.ball.held = false;
                 self.ball.vel = Vec2::ZERO;
                 self.ball.vel_y = 0.0;
@@ -379,7 +385,7 @@ impl MatchWorld {
             EndReason::GoalAway => {
                 self.match_state
                     .on_goal(TeamId::Away, self.params.kickoff_delay_s);
-                self.possession.carrier = None;
+                reset_possession_for_kickoff(&mut self.possession);
                 self.ball.held = false;
                 self.ball.vel = Vec2::ZERO;
                 self.ball.vel_y = 0.0;
@@ -485,15 +491,15 @@ fn bias_away_opening_carrier_dump_lane(
     }
 }
 
-/// Block receiving-team tackles on the opening carrier until the first kick
-/// has been released (Playmaker T2 was poaching before Away's dump).
+/// Block receiving-team tackles on the kickoff carrier until this kickoff's
+/// first kick has been released (Playmaker T2 was poaching before Away's dump).
 fn bias_receiving_opening_no_tackle(
     player: &Player,
     cmd: BrainCommand,
     match_state: &MatchState,
-    first_kick_done: bool,
+    kickoff_touch_done: bool,
 ) -> BrainCommand {
-    if first_kick_done
+    if kickoff_touch_done
         || !match_state.kickoff_suppress_away_team_side
         || player.team == match_state.kickoff_team
     {
@@ -750,6 +756,41 @@ mod tests {
         assert_eq!(world.match_state.kickoff_team, TeamId::Away);
         assert_eq!(world.match_state.score_home, 0);
         assert_eq!(world.match_state.score_away, 0);
+        // Whistle must clear mid-play contest flags; match opening flag stays.
+        assert!(world.possession.kick_exclude_shooter.is_none());
+        assert_eq!(world.possession.kick_exclude_left, 0.0);
+        assert!(!world.possession.kickoff_touch_done);
+    }
+
+    #[test]
+    fn goal_and_kickoff_clear_possession_contest_state() {
+        let mut params = SimParams::default();
+        params.kickoff_delay_s = 0.0;
+        let mut world = MatchWorld::new_kickoff_opening(params, TeamId::Home);
+        // Simulate mid-play leak that used to survive place_kickoff.
+        world.possession.first_kick_done = true;
+        world.possession.kickoff_touch_done = true;
+        world.possession.kick_exclude_shooter = Some((TeamId::Home, 1));
+        world.possession.kick_exclude_left = 2.5;
+        world.possession.pickup_lockout = 0.1;
+        world.possession.opening_dump_hang = true;
+        world.possession.opening_hot_reclaim = true;
+        world.apply_goal(EndReason::GoalHome);
+        // Match-level opening script stays done; per-kickoff touch resets.
+        assert!(world.possession.first_kick_done);
+        assert!(!world.possession.kickoff_touch_done);
+        assert!(world.possession.kick_exclude_shooter.is_none());
+        // Drain GoalPause → place_kickoff.
+        world.step_with_commands(&BrainOutput::default(), &BrainOutput::default(), FIXED_DT);
+        assert_eq!(world.match_state.phase, MatchPhase::Kickoff);
+        assert!(world.possession.first_kick_done);
+        assert!(!world.possession.kickoff_touch_done);
+        assert!(world.possession.kick_exclude_shooter.is_none());
+        assert_eq!(world.possession.pickup_lockout, 0.0);
+        assert!(!world.possession.opening_dump_hang);
+        assert!(!world.possession.opening_hot_reclaim);
+        // Away scored into Home's net → Home (conceded) restarts.
+        assert_eq!(world.match_state.kickoff_team, TeamId::Home);
     }
 
     #[test]

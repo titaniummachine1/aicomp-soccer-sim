@@ -141,6 +141,8 @@ pub struct MatchJob {
     pub opening: TeamId,
     pub seed: Option<u64>,
     pub until_goal: bool,
+    /// Stop when either side reaches this score (first-to-N). `None` = unused.
+    pub win_goals: Option<u32>,
     pub engine: GraphEngine,
     pub params: SimParams,
     pub job_index: Option<usize>,
@@ -163,6 +165,8 @@ pub struct BatchMatchResult {
     pub phase: String,
     pub until_goal: bool,
     pub goal_stopped: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub win_goals: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job_index: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -252,12 +256,13 @@ pub fn run_match_job(
             GraphEngine::Runtime => "runtime",
         };
         eprintln!(
-            "match_job home={} away={} opening={} secs={} until_goal={} engine={eng} FIXED_DT={FIXED_DT} kickoff_delay_s={:.2} (max-speed)",
+            "match_job home={} away={} opening={} secs={} until_goal={} win_goals={:?} engine={eng} FIXED_DT={FIXED_DT} kickoff_delay_s={:.2} (max-speed)",
             job.home.label(),
             job.away.label(),
             opening_str(job.opening),
             job.secs,
             job.until_goal,
+            job.win_goals,
             world.params.kickoff_delay_s
         );
     }
@@ -265,24 +270,39 @@ pub fn run_match_job(
     let start_score = world.match_state.score_home + world.match_state.score_away;
     let mut ticks = 0u64;
     let mut goal_stopped = false;
+    let mut last_total = start_score;
     let max_ticks = ((job.secs / FIXED_DT).ceil() as u64).max(1);
 
     while ticks < max_ticks {
         world.step_brains(&mut *home, &mut *away, FIXED_DT);
         ticks += 1;
-        if job.until_goal {
-            let scored = world.match_state.score_home + world.match_state.score_away;
-            if scored > start_score {
+        let sh = world.match_state.score_home;
+        let sa = world.match_state.score_away;
+        let total = sh + sa;
+        if !quiet && total > last_total {
+            eprintln!(
+                "  goal t={:.1}s score={sh}-{sa} ko={:?} first_kick={} ko_touch={}",
+                ticks as f32 * FIXED_DT,
+                world.match_state.kickoff_team,
+                world.possession.first_kick_done,
+                world.possession.kickoff_touch_done,
+            );
+            last_total = total;
+        }
+        if job.until_goal && total > start_score {
+            goal_stopped = true;
+            break;
+        }
+        if let Some(win) = job.win_goals {
+            if sh >= win || sa >= win {
                 goal_stopped = true;
                 break;
             }
         }
-        if !quiet && ticks % 500 == 0 {
+        if !quiet && ticks % 2000 == 0 {
             eprintln!(
-                "  t={:.1}s score={}-{} phase={:?}",
+                "  t={:.1}s score={sh}-{sa} phase={:?}",
                 ticks as f32 * FIXED_DT,
-                world.match_state.score_home,
-                world.match_state.score_away,
                 world.match_state.phase
             );
         }
@@ -303,6 +323,7 @@ pub fn run_match_job(
         phase: format!("{:?}", world.match_state.phase),
         until_goal: job.until_goal,
         goal_stopped,
+        win_goals: job.win_goals,
         job_index: job.job_index,
         wall_ms: Some(wall.elapsed().as_millis() as u64),
     })
@@ -358,6 +379,7 @@ mod tests {
                     },
                     seed: Some(seed),
                     until_goal: false,
+                    win_goals: None,
                     engine: GraphEngine::Runtime,
                     params: params.clone(),
                     job_index: Some(i),

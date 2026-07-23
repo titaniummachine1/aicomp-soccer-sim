@@ -26,7 +26,7 @@ use aicomp_soccer_sim::graph_vm::RuntimeBrain;
 use aicomp_soccer_sim::params::{default_params_path, SimParams};
 use aicomp_soccer_sim::probe_brains::{PerfectControllerBrain, Test1Brain, Test2Brain};
 use aicomp_soccer_sim::world::{MatchWorld, FIXED_DT};
-use aicomp_soccer_sim::TimePlotRecorder;
+use aicomp_soccer_sim::{MatchPhase, TimePlotRecorder};
 
 #[derive(Debug)]
 struct Args {
@@ -277,6 +277,8 @@ fn main() -> ExitCode {
     let mut ticks = 0u64;
     let start_score = world.match_state.score_home + world.match_state.score_away;
     let mut last_score = start_score;
+    let mut last_phase = world.match_state.phase;
+    let mut whistle_n = 0u32;
 
     loop {
         let (home_api, away_api) = world.build_apis();
@@ -286,13 +288,53 @@ fn main() -> ExitCode {
         world.step_with_commands(&home_out, &away_out, FIXED_DT);
         ticks += 1;
 
+        let phase = world.match_state.phase;
+        if !args.quiet
+            && last_phase != MatchPhase::GoalPause
+            && phase == MatchPhase::GoalPause
+        {
+            let scored_now = world.match_state.score_home + world.match_state.score_away;
+            if scored_now == last_score {
+                whistle_n += 1;
+                eprintln!(
+                    "whistle #{whistle_n} at t={:.3}s ticks={ticks} score={}-{} next_ko={:?} first_kick_done={} exclude={:?}/{:.2}",
+                    plot.sim_time(),
+                    world.match_state.score_home,
+                    world.match_state.score_away,
+                    world.match_state.kickoff_team,
+                    world.possession.first_kick_done,
+                    world.possession.kick_exclude_shooter,
+                    world.possession.kick_exclude_left,
+                );
+            }
+        }
+        if !args.quiet
+            && last_phase == MatchPhase::GoalPause
+            && phase == MatchPhase::Kickoff
+        {
+            eprintln!(
+                "kickoff resume t={:.3}s score={}-{} ko={:?} first_kick_done={} exclude={:?} carrier={:?}",
+                plot.sim_time(),
+                world.match_state.score_home,
+                world.match_state.score_away,
+                world.match_state.kickoff_team,
+                world.possession.first_kick_done,
+                world.possession.kick_exclude_shooter,
+                world.possession.carrier,
+            );
+        }
+        last_phase = phase;
+
         let scored_now = world.match_state.score_home + world.match_state.score_away;
         if scored_now > last_score && !args.quiet {
             eprintln!(
-                "goal at t={:.3}s ticks={ticks} score={}-{}",
+                "goal at t={:.3}s ticks={ticks} score={}-{} next_ko={:?} first_kick_done={} exclude={:?}",
                 plot.sim_time(),
                 world.match_state.score_home,
-                world.match_state.score_away
+                world.match_state.score_away,
+                world.match_state.kickoff_team,
+                world.possession.first_kick_done,
+                world.possession.kick_exclude_shooter,
             );
             last_score = scored_now;
         }

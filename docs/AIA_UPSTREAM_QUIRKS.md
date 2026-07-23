@@ -304,7 +304,9 @@ Editor / saves (workflow, not sim physics):
   - `drain = min(attacker.stam, carrier.stam)` applied to **both**.
   - After drain: remaining stam keeps the ball; if both **0** (were equal) →
     **tackler** takes it.
-  - Exchange pickup lockout **0.25s** after win. Frida `tackleRegenDelay=1.5s` not live.
+  - Exchange pickup lockout **0.25s** after win (**0.55s** if contest spent both
+    to 0). Frida `tackleRegenDelay=1.5s` not live.
+  - Both already at 0 stam: **no** free flip (was oppose-stack tackle lock).
 
 ### 19. Shot charge: ~0.30s warmup after pickup, then ~0.38s to 1.0
 
