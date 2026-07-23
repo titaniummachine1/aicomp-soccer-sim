@@ -32,7 +32,7 @@ pub use brain::{BrainCommand, BrainOutput, ChaseBallBrain, IdleBrain, TeamBrain,
 pub use graph::{load_team_graph, GraphBrain, TeamGraph};
 pub use match_state::{MatchPhase, MatchState};
 pub use params::SimParams;
-pub use player::{Player, PlayerId, SimpleMover};
+pub use player::{project_hold_into_playable, Player, PlayerId, SimpleMover};
 pub use possession::Possession;
 pub use scenario::{evaluate_scenario1, MatchScenario, Scenario1Outcome};
 pub use titanium::TitaniumBrain;

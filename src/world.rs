@@ -320,8 +320,7 @@ impl MatchWorld {
             &mut self.ball,
             &self.players,
             &self.possession,
-            self.params.hold_offset,
-            self.params.ball_rest_height,
+            &self.params,
         );
 
         // Always verify goal volume after hold sync.

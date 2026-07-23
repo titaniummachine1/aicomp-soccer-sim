@@ -34,6 +34,27 @@ impl Player {
     pub fn hold_pos(&self, hold_offset: f32) -> Vec2 {
         self.pos + self.facing * hold_offset
     }
+
+    /// Hold point after wall projection (Unity v0.61 / PerfectController probe).
+    pub fn hold_pos_playable(&self, params: &SimParams) -> Vec2 {
+        project_hold_into_playable(self.hold_pos(params.hold_offset), params)
+    }
+}
+
+/// Project a held-ball center into the playable region.
+///
+/// Matches free-ball walls: sidelines always; endlines only outside the goal
+/// mouth (mouth stays open so walk-in goals remain possible). Yaw is not
+/// rejected — Unity TimePlot 2026-07-24: free rotate against walls while the
+/// ball slides on the boundary and `|Ball-Body|` compresses.
+pub fn project_hold_into_playable(hold: Vec2, params: &SimParams) -> Vec2 {
+    let mut actual = hold;
+    actual.y = actual.y.clamp(params.z_min, params.z_max);
+    let in_mouth = actual.y.abs() <= params.goal_half_width;
+    if !in_mouth {
+        actual.x = actual.x.clamp(params.x_min, params.x_max);
+    }
+    actual
 }
 
 #[derive(Component, Debug, Clone, Copy)]
@@ -190,4 +211,49 @@ pub fn default_facing(team: TeamId) -> Vec2 {
 /// teleporting them onto the ball at place_kickoff.
 pub fn kickoff_facing(team: TeamId, _slot: PlayerId, _kickoff_team: TeamId) -> Vec2 {
     default_facing(team)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn held_ball_projects_onto_sideline_without_changing_facing() {
+        let params = SimParams::default();
+        let facing = Vec2::Y;
+        let player = Player {
+            team: TeamId::Home,
+            id: PlayerId(1),
+            pos: Vec2::new(0.0, params.z_max - 0.25),
+            vel: Vec2::ZERO,
+            facing,
+            stamina: 1.0,
+            stamina_regen_lock_left: 0.0,
+            shot_charge: 0.0,
+            charge_warmup_left: 0.0,
+        };
+        let desired = player.hold_pos(params.hold_offset);
+        let actual = player.hold_pos_playable(&params);
+        assert!(desired.y > params.z_max);
+        assert_eq!(actual.y, params.z_max);
+        assert_eq!(player.facing, facing);
+        // Offset compresses (Unity wall rub) — ball closer than full hold_offset.
+        assert!(actual.distance(player.pos) < params.hold_offset - 0.05);
+    }
+
+    #[test]
+    fn held_ball_may_enter_goal_mouth_past_endline() {
+        let params = SimParams::default();
+        let hold = Vec2::new(params.x_max + 2.0, 0.0);
+        assert_eq!(project_hold_into_playable(hold, &params), hold);
+    }
+
+    #[test]
+    fn held_ball_clamps_endline_outside_mouth() {
+        let params = SimParams::default();
+        let hold = Vec2::new(params.x_max + 2.0, params.goal_half_width + 1.0);
+        let actual = project_hold_into_playable(hold, &params);
+        assert_eq!(actual.x, params.x_max);
+        assert_eq!(actual.y, hold.y.clamp(params.z_min, params.z_max));
+    }
 }

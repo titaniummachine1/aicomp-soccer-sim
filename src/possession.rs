@@ -135,7 +135,7 @@ pub fn apply_interact(
     // Some(elapsed) in Kickoff: free-ball claim waits until ≈1.0s (Unity DB33).
     kickoff_elapsed_s: Option<f32>,
 ) -> InteractOutcome {
-    let hold = player.hold_pos(params.hold_offset);
+    let hold = player.hold_pos_playable(params);
     let is_carrier = matches!(
         poss.carrier,
         Some((t, id)) if t == player.team && id == player.id.0
@@ -396,15 +396,16 @@ pub fn sync_held_ball(
     ball: &mut Ball,
     players: &[Player],
     poss: &Possession,
-    hold_offset: f32,
-    rest_height: f32,
+    params: &SimParams,
 ) {
     if let Some((team, id)) = poss.carrier {
         if let Some(p) = players.iter().find(|p| p.team == team && p.id.0 == id) {
             ball.held = true;
-            ball.pos = p.hold_pos(hold_offset);
+            // Project hold into playable AABB (sidelines / solid endlines).
+            // Free yaw: facing is unchanged; offset may compress at walls.
+            ball.pos = p.hold_pos_playable(params);
             ball.vel = p.vel;
-            ball.height = rest_height;
+            ball.height = params.ball_rest_height;
             ball.vel_y = 0.0;
         }
     } else {
