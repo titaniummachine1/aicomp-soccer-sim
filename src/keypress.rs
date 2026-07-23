@@ -59,7 +59,13 @@ pub fn clear() {
 
 pub fn is_pressed(modifier: &str) -> bool {
     let g = PRESSED.read().unwrap_or_else(|e| e.into_inner());
-    g.contains(&normalize_key(modifier))
+    let mut n = normalize_key(modifier);
+    // Viewer: Space is pause/resume. Unity Controller graphs wire interact to
+    // Space — remap those reads to E so shoot/tackle doesn't pause the match.
+    if n == "Space" {
+        n = "E".into();
+    }
+    g.contains(&n)
 }
 
 pub fn is_pressed_id(id: u32) -> bool {

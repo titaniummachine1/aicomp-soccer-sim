@@ -18,6 +18,7 @@ use crate::graph_vm::{CachedProgram, RuntimeBrain};
 use crate::params::SimParams;
 use crate::probe_brains::{PerfectControllerBrain, Test1Brain, Test2Brain};
 use crate::train::TrainedBrain;
+use crate::titanium::TitaniumBrain;
 use crate::world::{MatchWorld, FIXED_DT};
 
 /// Leave one logical CPU free ("core 0" reservation for system/UI).
@@ -86,6 +87,7 @@ pub enum BrainInput {
     Test2,
     Perfect,
     Aia,
+    Titanium,
     Trained,
     Graph(PathBuf),
 }
@@ -103,9 +105,10 @@ impl BrainInput {
             "test2" => Ok(Self::Test2),
             "perfect" | "kb" | "keyboard" => Ok(Self::Perfect),
             "aia" => Ok(Self::Aia),
+            "titanium" | "ti" => Ok(Self::Titanium),
             "trained" => Ok(Self::Trained),
             other => Err(format!(
-                "unknown brain '{other}' (chase|idle|test1|test2|perfect|aia|trained|graph:<path>)"
+                "unknown brain '{other}' (chase|idle|test1|test2|perfect|aia|titanium|trained|graph:<path>)"
             )),
         }
     }
@@ -118,6 +121,7 @@ impl BrainInput {
             Self::Test2 => "test2".into(),
             Self::Perfect => "perfect".into(),
             Self::Aia => "aia".into(),
+            Self::Titanium => "titanium".into(),
             Self::Trained => "trained".into(),
             Self::Graph(p) => format!("graph:{}", p.display()),
         }
@@ -208,6 +212,7 @@ fn build_brain(
             let path = soccer_saves_dir().join("AIA.txt");
             build_graph_brain(&path, engine, cache)?
         }
+        BrainInput::Titanium => Box::new(TitaniumBrain::default()),
         BrainInput::Trained => Box::new(TrainedBrain::default()),
         BrainInput::Graph(path) => build_graph_brain(path, engine, cache)?,
     })

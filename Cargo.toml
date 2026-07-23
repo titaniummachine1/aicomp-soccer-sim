@@ -28,6 +28,10 @@ path = "src/bin/timeplot_until_goal.rs"
 name = "debug_tackle_test"
 path = "src/bin/debug_tackle_test.rs"
 
+[[bin]]
+name = "titanium_drill"
+path = "src/bin/titanium_drill.rs"
+
 [features]
 # Shareable/portable builds are the default (fully static).
 # For faster local edit→run only:

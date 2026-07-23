@@ -24,12 +24,12 @@ Editor / saves (workflow, not sim physics):
 
 ### Tackle (verbal engine rule)
 
-- **Where:** `ENGINE` · `AIA-TIP` · **LOCKED 2026-07-23** (user clarification)
+- **Where:** `ENGINE` · `AIA-TIP` · **LOCKED 2026-07-23** (equal-draw clarified 2026-07-23b)
 - **What:** On a contested tackle, subtract **`min(tackler, carrier)`** from
   **both** players. Whoever has stamina left keeps the ball. If both end at 0
-  (equal stam), the **tackler** takes the ball.
+  (equal stam), the **carrier** keeps the ball (no free steal).
 - **Examples:** T=0.3 C=0.8 → both −0.3 → C keeps (0.5). T=0.8 C=0.3 → both −0.3
-  → T keeps (0.5) + ball. T=C=0.5 → both 0 → tackler gets ball.
+  → T keeps (0.5) + ball. T=C=0.5 → both 0 → carrier keeps.
 
 ### Vector3 “directional” SoccerGets (clear / opp-goal / clear-mate, …)
 
@@ -297,15 +297,15 @@ Editor / saves (workflow, not sim physics):
   carry/kick origin (~0.9 m along facing); grab reach is still interact_r vs
   hold∪body.
 
-### 18. Tackle: both lose `min(stam)`; remaining keeps ball; equal → tackler
+### 18. Tackle: both lose `min(stam)`; remaining keeps ball; equal → carrier
 
-- **Where:** `ENGINE`/`SIM` · `LOCKED` (user 2026-07-23; supersedes “higher = no dump”)
+- **Where:** `ENGINE`/`SIM` · `LOCKED` (user 2026-07-23; equal-draw = carrier keeps)
 - **What:**
   - `drain = min(attacker.stam, carrier.stam)` applied to **both**.
   - After drain: remaining stam keeps the ball; if both **0** (were equal) →
-    **tackler** takes it.
-  - Exchange pickup lockout **0.25s** after win (**0.55s** if contest spent both
-    to 0). Frida `tackleRegenDelay=1.5s` not live.
+    **carrier** keeps (tackler must have strictly more remaining to steal).
+  - Exchange pickup lockout **0.25s** after win. Failed/equal contest → **0.40s**.
+    Frida `tackleRegenDelay=1.5s` not live.
   - Both already at 0 stam: **no** free flip (was oppose-stack tackle lock).
 
 ### 19. Shot charge: ~0.30s warmup after pickup, then ~0.38s to 1.0
@@ -465,7 +465,7 @@ timings are practically close — not bit-perfect.
 | Charge          | 0.30s warmup + 0.38s to full (#19)                                              |
 | Hold offset     | **1.67 m** prefab BallHoldLocation Z (#21); body capsule **0.762**              |
 | Kickoff / Away  | Kickoff-phase circle clamp; suppress Away team-side + P3-closest                |
-| Tackle          | both lose `min(stam)`; remainder keeps / tie→tackler; lockout 0.25s (#18/#22)   |
+| Tackle          | both lose `min(stam)`; remainder keeps / equal→carrier; lockout 0.25s (#18/#22) |
 | Pickup / loose  | Hot window 0.25s; no hang body-claim; settle `<2 m/s` (#23)                     |
 | Held-ball vel   | Carrier vel (#16)                                                               |
 | Early Ball      | **t<=2 X~~0.84 Z~~1.14** (DB35 Away); O1.Z~~0.41 after Clear-F face+capped lane |
@@ -519,8 +519,8 @@ regenerated smoothly at **0.05/s** (~20s full) — no snap. Drain while carrying
 >    **not** drop at stam≈0 (always-sprint TimePlot).
 > 7. Opening kickoff hold faces **world ±Z** (~1.67 m), not attack ±X; facing
 >    tracks Clear with sticky C→H during charge warmup.
-> 8. Tackle: both lose `min(stam)`; remaining keeps ball; equal→both 0→tackler
->    wins. Frida 1.5s tackle regen delay not live.
+> 8. Tackle: both lose `min(stam)`; remaining keeps ball; equal→both 0→carrier
+>    keeps. Frida 1.5s tackle regen delay not live.
 
 Update this file whenever a new confirmed quirk shows up.
 
@@ -531,7 +531,7 @@ Update this file whenever a new confirmed quirk shows up.
 What is still soft / optional:
 
 1. _(tackle min-drain rule locked 2026-07-23 — both lose min(stam); remainder
-   keeps / both 0 → tackler)_
+   keeps / both 0 → carrier)_
 
 ### Locked (no new capture needed)
 
@@ -553,7 +553,7 @@ What is still soft / optional:
 - Post-goal pause → kickoff reset **~4.9s** (TimePlot 17-37-34); Frida 1.0s is
   not that freeze.
 - Tackle: **both lose `min(stam)`**; remaining keeps ball; **equal → both 0 →
-  tackler** (user lock 2026-07-23). tackleRegenDelay Frida 1.5s **not live** →
+  carrier keeps** (user 2026-07-23b). tackleRegenDelay Frida 1.5s **not live** →
   wired 0.
 - **Is \* Player N Open** (AIA lock 2026-07-22): true iff **no opposing player**
   is within **`2 × Player Interact Radius`** of that player
