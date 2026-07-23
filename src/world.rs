@@ -26,7 +26,7 @@ use crate::possession::{
     apply_interact, reset_possession_for_kickoff, sync_held_ball, tick_possession_timers,
     Possession,
 };
-
+use bevy::log::info;
 /// Confirmed AIComp fixed step (~52.6 Hz). Independent of render FPS.
 pub const FIXED_DT: f32 = 0.019;
 
@@ -177,35 +177,42 @@ impl MatchWorld {
                     .find(|p| p.team == t && p.id.0 == cid)
                     .map(|p| p.shot_charge)
             });
-            let cmd = filter_kickoff(
-                &self.players[i],
-                raw,
-                &self.match_state,
-                &self.params,
-                self.ball.pos,
-            );
-            let cmd = project_move_outside_kickoff_circle(
-                &self.players[i],
-                cmd,
-                &self.match_state,
-                &self.params,
-            );
-            let cmd =
-                bias_receiving_defender_opening_hold(&self.players[i], cmd, &self.match_state);
+            let cmd = raw;
+            // NB: This whole section is extremely badly coded by the LLM. Nothing should ever mutate the commands from the player,
+            // unless it's input sanetization. Things like opening movement etc. should be done as part of the engine step,
+            // or part of a separate method called before simulating, so that it can be skipped in fast mode. That said, I
+            // don't know what functionality this was meant to fix, so I will leave the commands for now, but the command
+            // beneath is commented out specifically because it made movement different than in the simulation.
+
+            // let cmd = filter_kickoff(
+            //     &self.players[i],
+            //     cmd,
+            //     &self.match_state,
+            //     &self.params,
+            //     self.ball.pos,
+            // );
+            // let cmd = project_move_outside_kickoff_circle(
+            //     &self.players[i],
+            //     cmd,
+            //     &self.match_state,
+            //     &self.params,
+            // );
+            // let cmd = bias_receiving_defender_opening_hold(&self.players[i], cmd, &self.match_state);
+
             // Opening Away dump: keep carrier on Unity's mostly-west lane while
             // charge facing stays Clear F (face_aim bias). Raw Clear often falls
             // to A (+Z) and flips O1/Ball.Z vs DB35.
-            let cmd = bias_away_opening_carrier_dump_lane(&self.players[i], cmd, &self.possession);
+            // let cmd = bias_away_opening_carrier_dump_lane(&self.players[i], cmd, &self.possession);
             // DB33: Home T2 was tackling Away mid-charge (~1.8s) before the
             // opening dump. Unity lets Away finish Charge→release first; Home
             // then claims the loose ball. Strip receiving interact until the
             // first kick lands (live flag so same-tick post-kick reclaim works).
-            let cmd = bias_receiving_opening_no_tackle(
-                &self.players[i],
-                cmd,
-                &self.match_state,
-                self.possession.kickoff_touch_done,
-            );
+            // let cmd = bias_receiving_opening_no_tackle(
+            //     &self.players[i],
+            //     cmd,
+            //     &self.match_state,
+            //     self.possession.kickoff_touch_done,
+            // );
             let is_carrier = matches!(
                 self.possession.carrier,
                 Some((t, id)) if t == team && id == self.players[i].id.0
