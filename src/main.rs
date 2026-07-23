@@ -1976,18 +1976,39 @@ fn handle_ui_buttons(
     >,
     mut viewer: ResMut<ViewerWorld>,
     mut scripts: ResMut<TeamScripts>,
-    mut status_q: Query<&mut Text, (With<StatusText>, Without<ScenarioButtonText>)>,
+    mut status_q: Query<
+        &mut Text,
+        (
+            With<StatusText>,
+            Without<ScenarioButtonText>,
+            Without<DebugButtonText>,
+        ),
+    >,
     mut selection: ResMut<DebugSelection>,
     mut paused: ResMut<SimPaused>,
     mut fast: ResMut<SimFast>,
     mut show_debug: ResMut<SimDebugDraw>,
-    mut debug_label: Query<&mut Text, (With<DebugButtonText>, Without<StatusText>)>,
+    mut debug_label: Query<
+        &mut Text,
+        (
+            With<DebugButtonText>,
+            Without<StatusText>,
+            Without<ScenarioButtonText>,
+        ),
+    >,
     mut interp: ResMut<InterpState>,
     mut clock: ResMut<TickClock>,
     opening: Res<ViewerOpening>,
     mut one_v_one: ResMut<Titanium1v1Mode>,
     mut round: ResMut<Scenario1Round>,
-    mut scenario_q: Query<&mut Text, (With<ScenarioButtonText>, Without<StatusText>)>,
+    mut scenario_q: Query<
+        &mut Text,
+        (
+            With<ScenarioButtonText>,
+            Without<StatusText>,
+            Without<DebugButtonText>,
+        ),
+    >,
 ) {
     for (interaction, action, mut bg) in &mut interactions {
         let base = match action {

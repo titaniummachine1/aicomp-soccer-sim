@@ -22,7 +22,7 @@ use crate::params::SimParams;
 use crate::player::PlayerId;
 use crate::predict::{
     best_forward_pass_dir, best_long_clear_dir, best_shot_dir_evading, earliest_intercept,
-    gk_cover_press_target, gk_intercept_cover, predict_ball_path, predict_ball_path_until_intercept,
+    gk_cover_press_target, predict_ball_path, predict_ball_path_until_intercept,
     truncate_to_guaranteed_intercept, Candidate,
 };
 use crate::world::FIXED_DT;
@@ -513,8 +513,7 @@ impl TitaniumBrain {
         }
         self.flick_dir = None;
 
-        // Loose / in-motion ball: abandon cover — chase first touch on a path
-        // truncated at the earliest interceptor (any player).
+        // Loose / in-motion: drop cover — pure intercept race.
         if ball_loose || (!opp_has_ball && ball_vel.length_squared() > 0.25) {
             let ball_state = Ball {
                 pos: ball,
@@ -575,35 +574,18 @@ impl TitaniumBrain {
             };
         }
 
-        // Held by opponent: stand at deepest cover; tackle only if they enter reach.
-        let mut carrier = None;
-        if opp_has_ball {
-            for id in PlayerId::ALL {
-                let has = match id.0 {
-                    1 => api.get_bool("Opponent Player 1 Has Ball"),
-                    2 => api.get_bool("Opponent Player 2 Has Ball"),
-                    3 => api.get_bool("Opponent Player 3 Has Ball"),
-                    _ => api.get_bool("Opponent Player 4 Has Ball"),
-                }
-                .unwrap_or(false);
-                if has {
-                    carrier = api.get_transform(&format!("Opponent Player {}", id.0));
-                    break;
-                }
-            }
-        }
-        let threat = carrier.unwrap_or(ball);
-        let carrier_vel = if opp_has_ball { ball_vel } else { Vec2::ZERO };
+        // Held: closest safe stand vs legal scoring extremes from the ball
+        // (hold-offset). Never chase/circle the carrier off the safe set.
         let (move_to, try_tackle) = gk_cover_press_target(
             me,
-            threat,
-            carrier_vel,
+            ball,
+            ball,
             own_x,
             params.goal_half_width,
             params,
             SPRINT,
         );
-        self.emit_held_cover_debug(me, threat, move_to, own_x, params.goal_half_width, reach);
+        self.emit_held_cover_debug(me, ball, move_to, own_x, params.goal_half_width, reach);
         BrainCommand {
             move_to,
             sprint: me.distance(move_to) > 1.5 || try_tackle,
@@ -666,27 +648,51 @@ impl TitaniumBrain {
     fn emit_held_cover_debug(
         &self,
         me: Vec2,
-        threat: Vec2,
+        shot_origin: Vec2,
         press: Vec2,
         own_goal_x: f32,
         goal_half: f32,
         reach: f32,
     ) {
-        let left = Vec2::new(own_goal_x, goal_half);
-        let right = Vec2::new(own_goal_x, -goal_half);
-        let cover = gk_intercept_cover(threat, own_goal_x, goal_half, &self.params, SPRINT);
+        let mouth_l = Vec2::new(own_goal_x, goal_half);
+        let mouth_r = Vec2::new(own_goal_x, -goal_half);
+        let cover =
+            crate::predict::gk_closest_safe_stand(shot_origin, own_goal_x, goal_half, &self.params, SPRINT);
+        let deep_x = crate::predict::gk_cover_x(own_goal_x, reach);
+        let extremes =
+            crate::predict::gk_scoring_extremes(shot_origin, own_goal_x, goal_half, &self.params);
+
         debug_draw::disc(me, reach, 1.0, "Cyan");
-        debug_draw::line(threat, left, 2.0, "Yellow");
-        debug_draw::line(threat, right, 2.0, "Yellow");
-        debug_draw::line(left, right, 1.0, "Orange");
-        debug_draw::line(threat, cover, 1.0, "Green");
+        debug_draw::disc(shot_origin, 0.25, 1.0, "Yellow");
+        debug_draw::line(mouth_l, mouth_r, 1.0, "Orange");
+        // Legal scoring extremes (not raw geometric posts).
+        if extremes.is_empty() {
+            debug_draw::line(shot_origin, mouth_l, 1.0, "Gray");
+            debug_draw::line(shot_origin, mouth_r, 1.0, "Gray");
+        } else {
+            for (aim, path) in &extremes {
+                debug_draw::line(shot_origin, *aim, 2.0, "Yellow");
+                for w in path.windows(2) {
+                    debug_draw::line(w[0].pos, w[1].pos, 1.0, "Light Blue");
+                }
+            }
+        }
+        debug_draw::line(shot_origin, cover, 1.0, "Green");
         debug_draw::disc(cover, 0.3, 1.0, "Green");
         debug_draw::disc(cover, reach, 1.0, "Green");
+        // Max-advance line at closest safe depth.
+        let max_half = (goal_half * 2.2).max(10.0);
         debug_draw::line(
-            Vec2::new(cover.x, goal_half),
-            Vec2::new(cover.x, -goal_half),
+            Vec2::new(cover.x, max_half),
+            Vec2::new(cover.x, -max_half),
+            3.0,
+            "Magenta",
+        );
+        debug_draw::line(
+            Vec2::new(deep_x, goal_half),
+            Vec2::new(deep_x, -goal_half),
             1.0,
-            "Cyan",
+            "Orange",
         );
         debug_draw::line(me, press, 2.0, "Orange");
         debug_draw::disc(press, 0.35, 1.0, "Orange");

@@ -283,12 +283,12 @@ fn shot_cone_half_angle(attacker: Vec2, left: Vec2, right: Vec2) -> Option<f32> 
     Some((0.5 * theta).max(1e-4))
 }
 
-/// Closed-form deepest bisector cover under constant ball/GK speeds:
+/// Closed-form depth guess along the bisector (constant speeds).
 ///
 /// `d_max = r / (sin(α) − (v_g/v_b) cos(α))`
 ///
-/// Returns `None` when the denominator ≤ 0 (GK is fast enough that the
-/// constant-speed model places no forward limit — caller should sit deep).
+/// Returns `None` when the denominator ≤ 0 (model places no forward limit).
+/// This is only a **candidate seed** — callers must verify with real kick paths.
 pub fn gk_analytical_cover_depth(alpha: f32, reach: f32, vg: f32, vb: f32) -> Option<f32> {
     let vb = vb.max(1e-3);
     let vg = vg.max(0.0);
@@ -299,15 +299,99 @@ pub fn gk_analytical_cover_depth(alpha: f32, reach: f32, vg: f32, vb: f32) -> Op
     Some((reach.max(0.05) / denom).max(0.0))
 }
 
-/// Max-kick intercept cover along the shot-cone bisector.
+fn path_scores_goal(path: &[BallSample]) -> bool {
+    path.iter()
+        .any(|s| matches!(s.end, EndReason::GoalHome | EndReason::GoalAway))
+}
+
+fn path_goal_time(path: &[BallSample]) -> Option<f32> {
+    path.iter()
+        .find(|s| matches!(s.end, EndReason::GoalHome | EndReason::GoalAway))
+        .map(|s| s.t)
+}
+
+/// True if GK at `gk` can touch the ball on `path` before it goals.
+fn gk_can_intercept_scoring_path(
+    gk: Vec2,
+    path: &[BallSample],
+    gk_speed: f32,
+    reach: f32,
+) -> bool {
+    if !path_scores_goal(path) {
+        // Not a legal scoring threat — nothing to seal.
+        return true;
+    }
+    let Some(goal_t) = path_goal_time(path) else {
+        return true;
+    };
+    match earliest_intercept(gk, gk_speed, path, reach) {
+        Some(hit) => hit.t <= goal_t + 1e-4,
+        None => false,
+    }
+}
+
+/// Legal scoring extremes from `shot_origin` (reachable max-kick aims that
+/// still enter the goal under real friction). Empty if nothing scores.
+pub fn gk_scoring_extremes(
+    shot_origin: Vec2,
+    own_goal_x: f32,
+    goal_half_width: f32,
+    params: &SimParams,
+) -> Vec<(Vec2, Vec<BallSample>)> {
+    let (aim_l, aim_r) = reachable_post_aims(shot_origin, own_goal_x, goal_half_width, params);
+    let mut out = Vec::with_capacity(2);
+    for aim in [aim_l, aim_r] {
+        let path = max_kick_path(shot_origin, aim, params);
+        if path_scores_goal(&path) {
+            out.push((aim, path));
+        }
+    }
+    out
+}
+
+/// Can GK at `gk` intercept every legal extreme scoring shot from `shot_origin`?
+pub fn gk_stand_seals_scoring_extremes(
+    gk: Vec2,
+    shot_origin: Vec2,
+    own_goal_x: f32,
+    goal_half_width: f32,
+    params: &SimParams,
+    gk_speed: f32,
+) -> bool {
+    let reach = params.interact_radius;
+    let threats = gk_scoring_extremes(shot_origin, own_goal_x, goal_half_width, params);
+    if threats.is_empty() {
+        return true;
+    }
+    threats
+        .iter()
+        .all(|(_, path)| gk_can_intercept_scoring_path(gk, path, gk_speed, reach))
+}
+
+fn gk_axis_toward_goal(
+    shot_origin: Vec2,
+    own_goal_x: f32,
+    goal_half_width: f32,
+) -> Option<Vec2> {
+    goal_bisector(shot_origin, own_goal_x, goal_half_width).or_else(|| {
+        let mouth = Vec2::new(
+            own_goal_x,
+            shot_origin.y.clamp(-goal_half_width, goal_half_width),
+        );
+        let d = mouth - shot_origin;
+        let len = d.length();
+        (len > 1e-4).then(|| d / len)
+    })
+}
+
+/// Closest stand to the ball along the attacker→goal axis that still seals
+/// every legal extreme scoring shot (verified with real kick paths).
 ///
-/// Uses the analytical constant-speed model
-/// `d ≤ r / (sin α − (v_g/v_b) cos α)` with `v_b` = max planar kick launch
-/// and `α` = half the (possibly shrunk) post cone. Clamped to own half / deep
-/// goal line. This is the deepest stand that can still beat worst-case L/R
-/// edge shots when the GK only needs lateral travel `d sin α`.
-pub fn gk_intercept_cover(
-    attacker: Vec2,
+/// Binary-searches depth: advance toward the ball until the first failure,
+/// then sit on the safe side of that boundary. Analytical depth is only a
+/// search seed — physics decides.
+pub fn gk_closest_safe_stand(
+    shot_origin: Vec2,
     own_goal_x: f32,
     goal_half_width: f32,
     params: &SimParams,
@@ -315,72 +399,137 @@ pub fn gk_intercept_cover(
 ) -> Vec2 {
     let reach = params.interact_radius;
     let deep_x = gk_cover_x(own_goal_x, reach);
-    let fallback = Vec2::new(deep_x, attacker.y.clamp(-goal_half_width, goal_half_width));
+    let fallback = Vec2::new(
+        deep_x,
+        shot_origin.y.clamp(-goal_half_width, goal_half_width),
+    );
 
-    let Some(b) = goal_bisector(attacker, own_goal_x, goal_half_width) else {
+    let Some(axis) = gk_axis_toward_goal(shot_origin, own_goal_x, goal_half_width) else {
         return fallback;
     };
-    let to_goal = (own_goal_x - attacker.x).signum();
-    if b.x * to_goal <= 0.0 {
+    let to_goal = (own_goal_x - shot_origin.x).signum();
+    if axis.x * to_goal <= 0.0 {
         return fallback;
     }
 
-    let (aim_l, aim_r) = reachable_post_aims(attacker, own_goal_x, goal_half_width, params);
-    let Some(alpha) = shot_cone_half_angle(attacker, aim_l, aim_r) else {
-        return fallback;
+    let d_deep = if axis.x.abs() > 1e-4 {
+        ((deep_x - shot_origin.x) / axis.x).max(0.0)
+    } else {
+        shot_origin.distance(Vec2::new(deep_x, shot_origin.y))
+    };
+    // Closest candidate: just outside Interact of the hold point.
+    let d_near = (reach * 0.35).clamp(0.05, 1.0).min(d_deep);
+
+    let point = |d: f32| {
+        let mut g = shot_origin + axis * d;
+        g.x = clamp_own_half_x(g.x, own_goal_x);
+        if own_goal_x > 0.0 {
+            g.x = g.x.min(deep_x);
+        } else {
+            g.x = g.x.max(deep_x);
+        }
+        g
     };
 
+    let seals = |d: f32| {
+        gk_stand_seals_scoring_extremes(
+            point(d),
+            shot_origin,
+            own_goal_x,
+            goal_half_width,
+            params,
+            gk_speed,
+        )
+    };
+
+    if !seals(d_deep) {
+        // Even the deep line fails (rare / degenerate) — sit deep anyway.
+        return fallback;
+    }
+    if seals(d_near) {
+        return point(d_near);
+    }
+
+    // Seed with analytical guess when available, then binary-search the
+    // unsafe→safe boundary (smallest safe depth = closest to ball).
+    let (aim_l, aim_r) = reachable_post_aims(shot_origin, own_goal_x, goal_half_width, params);
     let (vb, _) = kick_launch_speeds(1.0, params);
-    let vg = gk_speed.max(0.1);
-    let d_deep = if b.x.abs() > 1e-4 {
-        ((deep_x - attacker.x) / b.x).max(0.0)
-    } else {
-        attacker.distance(Vec2::new(deep_x, attacker.y))
-    };
+    let d_seed = shot_cone_half_angle(shot_origin, aim_l, aim_r)
+        .and_then(|a| gk_analytical_cover_depth(a, reach, gk_speed, vb))
+        .map(|d| d.clamp(d_near, d_deep))
+        .unwrap_or((d_near + d_deep) * 0.5);
 
-    let d = match gk_analytical_cover_depth(alpha, reach, vg, vb) {
-        Some(d_max) => d_max.min(d_deep),
-        // Denom ≤ 0 → constant-speed model says "arbitrarily deep" is fine.
-        None => d_deep,
-    };
-
-    let mut g = attacker + b * d;
-    g.x = clamp_own_half_x(g.x, own_goal_x);
-    if own_goal_x > 0.0 {
-        g.x = g.x.min(deep_x);
+    let mut lo = d_near; // often unsafe (too close)
+    let mut hi = d_deep; // known safe
+    if seals(d_seed) {
+        hi = d_seed;
     } else {
-        g.x = g.x.max(deep_x);
+        lo = d_seed;
     }
-    g
+    for _ in 0..14 {
+        let mid = 0.5 * (lo + hi);
+        if seals(mid) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    point(hi)
 }
 
-/// Deepest safe cover stand + tackle when the carrier enters reach.
+/// Scenario 1 cover stand: closest verified-safe position to the shot origin.
 ///
-/// Never steps past the analytical cover point just to hunt a tackle.
-/// If the carrier **breaches** past the cover line (closer to goal than the
-/// cover stand), chase them — the seal is already broken.
+/// Prefer this over pure geometry — it verifies L/R legal scoring paths with
+/// real friction + [`earliest_intercept`].
+pub fn gk_intercept_cover(
+    attacker: Vec2,
+    own_goal_x: f32,
+    goal_half_width: f32,
+    params: &SimParams,
+    gk_speed: f32,
+) -> Vec2 {
+    gk_closest_safe_stand(attacker, own_goal_x, goal_half_width, params, gk_speed)
+}
+
+/// Whether `x` is on the goal side of (or on) the max-advance cover plane.
+#[inline]
+pub fn gk_on_or_behind_cover(x: f32, cover_x: f32, own_goal_x: f32) -> bool {
+    if own_goal_x > 0.0 {
+        x + 1e-3 >= cover_x
+    } else {
+        x - 1e-3 <= cover_x
+    }
+}
+
+/// Clamp a desired stand onto / behind the max-advance cover plane.
+#[inline]
+pub fn gk_clamp_to_cover_plane(mut p: Vec2, cover_x: f32, own_goal_x: f32) -> Vec2 {
+    if own_goal_x > 0.0 {
+        p.x = p.x.max(cover_x);
+    } else {
+        p.x = p.x.min(cover_x);
+    }
+    p.x = clamp_own_half_x(p.x, own_goal_x);
+    p
+}
+
+/// Held-ball press: stand at closest safe cover; tackle when the ball is in
+/// Interact range. MoveTo stays on the safe set — do not gate Interact on the
+/// cover-plane check (that blocked steals when slightly past cover.x).
 ///
 /// Returns `(move_to, try_interact)`.
 pub fn gk_cover_press_target(
     me: Vec2,
-    carrier: Vec2,
-    _carrier_vel: Vec2,
+    shot_origin: Vec2,
+    tackle_at: Vec2,
     own_goal_x: f32,
     goal_half_width: f32,
     params: &SimParams,
     gk_speed: f32,
 ) -> (Vec2, bool) {
     let reach = params.interact_radius;
-    let cover = gk_intercept_cover(carrier, own_goal_x, goal_half_width, params, gk_speed);
-
-    // Carrier already past the GK toward the goal → emergency chase.
-    let breached = closer_to_own_goal(carrier, me, own_goal_x);
-    if breached {
-        let try_tackle = me.distance(carrier) <= reach * 1.25;
-        return (carrier, try_tackle);
-    }
-
-    let try_tackle = me.distance(carrier) <= reach * 1.2;
+    let cover = gk_closest_safe_stand(shot_origin, own_goal_x, goal_half_width, params, gk_speed);
+    let try_tackle = me.distance(tackle_at) <= reach * 1.2;
     (cover, try_tackle)
 }
 
@@ -819,28 +968,30 @@ mod tests {
     }
 
     #[test]
-    fn gk_intercept_cover_not_glued_to_midfield_attacker() {
+    fn gk_intercept_cover_seals_midfield_threat() {
         let params = SimParams::default();
         let a = Vec2::new(0.0, 3.0);
         let g = gk_intercept_cover(a, 39.5, 6.0, &params, 8.0);
-        assert!(g.y > 0.0, "pull toward threat Z");
+        assert!(g.x >= 0.0 && g.x < 39.5);
         assert!(
-            g.x > a.x + 6.0,
-            "cover must sit well behind midfield attacker, got g={g:?}"
+            gk_stand_seals_scoring_extremes(g, a, 39.5, 6.0, &params, 8.0),
+            "midfield cover must seal, g={g:?}"
         );
-        assert!(g.x < 39.5);
+        // Closest-safe may sit near the ball when that still seals.
+        assert!(g.distance(a) >= 0.05);
     }
 
     #[test]
-    fn gk_intercept_cover_deeper_than_geometric_near_box() {
+    fn gk_intercept_cover_seals_near_box() {
         let params = SimParams::default();
         let a = Vec2::new(28.0, 2.0);
-        let geometric = gk_cone_bisector_cover(a, 39.5, 6.0, params.interact_radius);
         let intercept = gk_intercept_cover(a, 39.5, 6.0, &params, 8.0);
         assert!(
-            intercept.distance(a) > 2.5,
-            "must not glue to attacker geometric={geometric:?} intercept={intercept:?}"
+            gk_stand_seals_scoring_extremes(intercept, a, 39.5, 6.0, &params, 8.0),
+            "box cover must seal, intercept={intercept:?}"
         );
+        assert!(intercept.x > a.x - 1e-2);
+        assert!(intercept.x < 39.5);
     }
 
     #[test]
@@ -860,53 +1011,49 @@ mod tests {
     }
 
     #[test]
-    fn gk_cover_press_stays_at_cover_not_past_it() {
+    fn gk_closest_safe_seals_extremes_and_does_not_chase() {
         let params = SimParams::default();
-        let carrier = Vec2::new(10.0, 2.0);
+        let shot = Vec2::new(10.0, 2.0);
         let me = Vec2::new(30.0, 0.0);
-        let cover = gk_intercept_cover(carrier, 39.5, 6.0, &params, 8.0);
-        let (target, try_tackle) = gk_cover_press_target(
-            me,
-            carrier,
-            Vec2::new(6.0, 0.0),
-            39.5,
-            6.0,
-            &params,
-            8.0,
-        );
+        let cover = gk_closest_safe_stand(shot, 39.5, 6.0, &params, 8.0);
         assert!(
-            (target - cover).length() < 1e-3,
-            "must stand at cover, got target={target:?} cover={cover:?}"
+            gk_stand_seals_scoring_extremes(cover, shot, 39.5, 6.0, &params, 8.0),
+            "cover must seal legal extremes, cover={cover:?}"
         );
-        assert!(!try_tackle, "carrier far — no tackle yet");
-        assert!(target.x >= 0.0);
-        // Carrier past GK toward goal → chase.
-        let gk_deep = Vec2::new(30.0, 0.0);
+        // One step closer to the ball along the axis should be unsafe (or equal
+        // at the near clamp).
+        if let Some(axis) = goal_bisector(shot, 39.5, 6.0) {
+            let closer = shot + axis * ((cover - shot).length() - 1.5).max(0.2);
+            if (closer - shot).length() + 0.5 < (cover - shot).length() {
+                assert!(
+                    !gk_stand_seals_scoring_extremes(closer, shot, 39.5, 6.0, &params, 8.0)
+                        || (cover - shot).length() < 2.0,
+                    "expected a closer stand to open a post, closer={closer:?} cover={cover:?}"
+                );
+            }
+        }
+        let (target, try_tackle) =
+            gk_cover_press_target(me, shot, shot, 39.5, 6.0, &params, 8.0);
+        assert!((target - cover).length() < 1e-3);
+        assert!(!try_tackle);
+        // Ball past GK → retarget cover, never walk onto the ball.
         let past = Vec2::new(36.0, 2.0);
-        let (chase, _) = gk_cover_press_target(
-            gk_deep,
-            past,
-            Vec2::ZERO,
-            39.5,
-            6.0,
-            &params,
-            8.0,
-        );
-        assert!(
-            (chase - past).length() < 1e-3,
-            "carrier past GK must be chased, got {chase:?}"
-        );
-        let near_me = cover;
+        let recover = gk_closest_safe_stand(past, 39.5, 6.0, &params, 8.0);
+        let (stand, _) =
+            gk_cover_press_target(Vec2::new(30.0, 0.0), past, past, 39.5, 6.0, &params, 8.0);
+        assert!((stand - recover).length() < 1e-3);
+        assert!((stand - past).length() > 0.5);
+        let near = cover;
         let (_, tackle_near) = gk_cover_press_target(
-            near_me,
-            near_me + Vec2::new(-1.0, 0.0),
-            Vec2::ZERO,
+            near,
+            near + Vec2::new(-1.0, 0.0),
+            near + Vec2::new(-1.0, 0.0),
             39.5,
             6.0,
             &params,
             8.0,
         );
-        assert!(tackle_near, "carrier inside reach → tackle");
+        assert!(tackle_near);
     }
 
     #[test]
