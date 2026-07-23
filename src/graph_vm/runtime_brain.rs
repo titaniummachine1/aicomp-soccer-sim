@@ -81,6 +81,14 @@ impl RuntimeBrain {
     pub fn take_trace(&mut self) -> Option<ObservableTrace> {
         self.trace.take()
     }
+
+    pub fn reset_state(&mut self) {
+        self.persistent_vars.fill(VmValue::Null);
+
+        if self.trace.is_some() {
+            self.trace = Some(ObservableTrace::empty());
+        }
+    }
 }
 
 impl TeamBrain for RuntimeBrain {

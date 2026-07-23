@@ -508,6 +508,12 @@ impl ActiveBrain {
             ActiveBrain::Trained(_) => "trained",
         }
     }
+
+    fn reset_state(&mut self) {
+        if let ActiveBrain::Runtime(brain) = self {
+            brain.reset_state();
+        }
+    }
 }
 
 impl TeamBrain for ActiveBrain {
@@ -1948,6 +1954,10 @@ fn restart_match(
     } else {
         *round = Scenario1Round::default();
     }
+
+    viewer.home.reset_state();
+    viewer.away.reset_state();
+    
     viewer.last_home = BrainOutput::default();
     viewer.last_away = BrainOutput::default();
     interp.reset_from(&viewer.world);
