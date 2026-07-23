@@ -82,6 +82,8 @@ pub struct TeamGraph {
     pub controllers: [Option<String>; 4],
     /// Root-level SetVariable node sIDs (owner empty).
     pub set_variables: Vec<String>,
+    /// Root-level DebugDrawLine / DebugDrawDisc sinks (owner empty).
+    pub debug_draws: Vec<String>,
     /// Function name → CreateFunction definition.
     pub create_functions: HashMap<String, CreateFunctionDef>,
     pub path: String,
@@ -98,6 +100,7 @@ pub fn index_graph(raw: RawGraph, path: String) -> TeamGraph {
     let mut ports = HashMap::new();
     let mut controllers: [Option<String>; 4] = [None, None, None, None];
     let mut set_variables = Vec::new();
+    let mut debug_draws = Vec::new();
     let mut create_functions = HashMap::new();
 
     for n in raw.nodes {
@@ -107,6 +110,11 @@ pub fn index_graph(raw: RawGraph, path: String) -> TeamGraph {
         }
         if n.id == "SetVariable" && n.owner_function_sid.is_empty() {
             set_variables.push(n.sid.clone());
+        }
+        if (n.id == "DebugDrawLine" || n.id == "DebugDrawDisc")
+            && n.owner_function_sid.is_empty()
+        {
+            debug_draws.push(n.sid.clone());
         }
         if n.id == "CreateFunction" {
             create_functions.insert(
@@ -161,6 +169,7 @@ pub fn index_graph(raw: RawGraph, path: String) -> TeamGraph {
         input_source,
         controllers,
         set_variables,
+        debug_draws,
         create_functions,
         path,
     }

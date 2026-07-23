@@ -10,6 +10,7 @@ pub mod api;
 pub mod ball;
 pub mod batch;
 pub mod brain;
+pub mod debug_draw;
 pub mod graph;
 pub mod graph_vm;
 pub mod keypress;

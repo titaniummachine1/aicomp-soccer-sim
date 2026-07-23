@@ -17,11 +17,12 @@ use bevy::prelude::Vec2;
 use crate::api::TeamApi;
 use crate::ball::Ball;
 use crate::brain::{BrainCommand, BrainOutput, TeamBrain, TeamId};
+use crate::debug_draw;
 use crate::params::SimParams;
 use crate::player::PlayerId;
 use crate::predict::{
     best_forward_pass_dir, best_long_clear_dir, best_shot_dir_evading, earliest_intercept,
-    gk_cover_press_target, predict_ball_path, predict_ball_path_until_intercept,
+    gk_cover_press_target, gk_intercept_cover, predict_ball_path, predict_ball_path_until_intercept,
     truncate_to_guaranteed_intercept, Candidate,
 };
 use crate::world::FIXED_DT;
@@ -527,7 +528,6 @@ impl TitaniumBrain {
                 pos: me,
                 speed: SPRINT,
             });
-            // Teammates (P1–3) as interceptors so we don't sim past their touch.
             for id in 1u8..=3 {
                 if let Some(p) = api.get_transform(&format!("Team Player {id}")) {
                     cands.push(Candidate {
@@ -536,6 +536,17 @@ impl TitaniumBrain {
                     });
                 }
             }
+            let full = predict_ball_path(&ball_state, params, FIXED_DT, 4.0);
+            self.emit_loose_ball_debug(
+                me,
+                ball,
+                ball_vel,
+                own_x,
+                params.goal_half_width,
+                reach,
+                &full,
+                &cands,
+            );
             let (path, first) = predict_ball_path_until_intercept(
                 &ball_state,
                 params,
@@ -544,7 +555,6 @@ impl TitaniumBrain {
                 &cands,
                 reach,
             );
-            // Prefer our own earliest on the (possibly truncated) path.
             if let Some(hit) = earliest_intercept(me, SPRINT, &path, reach) {
                 let cut_x = if own_x > 0.0 {
                     hit.pos.x.max(0.0)
@@ -593,11 +603,93 @@ impl TitaniumBrain {
             params,
             SPRINT,
         );
+        self.emit_held_cover_debug(me, threat, move_to, own_x, params.goal_half_width, reach);
         BrainCommand {
             move_to,
             sprint: me.distance(move_to) > 1.5 || try_tackle,
             interact: try_tackle,
         }
+    }
+
+    /// Same DebugDrawLine / DebugDrawDisc channel AIA graphs use.
+    fn emit_loose_ball_debug(
+        &self,
+        me: Vec2,
+        ball: Vec2,
+        _ball_vel: Vec2,
+        own_goal_x: f32,
+        goal_half: f32,
+        reach: f32,
+        full: &[crate::predict::BallSample],
+        cands: &[Candidate],
+    ) {
+        let left = Vec2::new(own_goal_x, goal_half);
+        let right = Vec2::new(own_goal_x, -goal_half);
+        debug_draw::disc(me, reach, 1.0, "Cyan");
+        for w in full.windows(2) {
+            debug_draw::line(w[0].pos, w[1].pos, 1.0, "Light Blue");
+        }
+        if let Some(stop) = full.last() {
+            debug_draw::disc(stop.pos, 0.35, 1.0, "Yellow");
+        }
+        let mut best: Option<(usize, crate::predict::Intercept)> = None;
+        for (i, c) in cands.iter().enumerate() {
+            if let Some(hit) = earliest_intercept(c.pos, c.speed, full, reach) {
+                best = Some(match best {
+                    Some((bi, bh)) if bh.t <= hit.t => (bi, bh),
+                    _ => (i, hit),
+                });
+            }
+        }
+        let gk_idx = cands.iter().position(|c| (c.pos - me).length_squared() < 1e-4);
+        if let Some((ci, hit)) = best {
+            let col = if gk_idx == Some(ci) {
+                "Purple"
+            } else {
+                "Orange"
+            };
+            debug_draw::line(me, hit.pos, 2.0, col);
+            debug_draw::disc(hit.pos, 0.4, 1.0, col);
+            if gk_idx == Some(ci) {
+                for w in full.windows(2) {
+                    if w[1].t > hit.t + 1e-6 {
+                        break;
+                    }
+                    debug_draw::line(w[0].pos, w[1].pos, 2.0, "Purple");
+                }
+            }
+        }
+        debug_draw::line(ball, left, 1.0, "Yellow");
+        debug_draw::line(ball, right, 1.0, "Yellow");
+    }
+
+    fn emit_held_cover_debug(
+        &self,
+        me: Vec2,
+        threat: Vec2,
+        press: Vec2,
+        own_goal_x: f32,
+        goal_half: f32,
+        reach: f32,
+    ) {
+        let left = Vec2::new(own_goal_x, goal_half);
+        let right = Vec2::new(own_goal_x, -goal_half);
+        let cover = gk_intercept_cover(threat, own_goal_x, goal_half, &self.params, SPRINT);
+        debug_draw::disc(me, reach, 1.0, "Cyan");
+        debug_draw::line(threat, left, 2.0, "Yellow");
+        debug_draw::line(threat, right, 2.0, "Yellow");
+        debug_draw::line(left, right, 1.0, "Orange");
+        debug_draw::line(threat, cover, 1.0, "Green");
+        debug_draw::disc(cover, 0.3, 1.0, "Green");
+        debug_draw::disc(cover, reach, 1.0, "Green");
+        debug_draw::line(
+            Vec2::new(cover.x, goal_half),
+            Vec2::new(cover.x, -goal_half),
+            1.0,
+            "Cyan",
+        );
+        debug_draw::line(me, press, 2.0, "Orange");
+        debug_draw::disc(press, 0.35, 1.0, "Orange");
     }
 }
 

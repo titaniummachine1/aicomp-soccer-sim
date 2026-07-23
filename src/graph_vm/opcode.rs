@@ -58,6 +58,10 @@ pub enum OpCode {
     ScaleAddVec,
     /// Runtime Keypress(modifier) — not const-folded (viewer keyboard / headless false).
     Keypress,
+    /// DebugDrawLine(a, b, width) + rgba immediates.
+    DebugDrawLine,
+    /// DebugDrawDisc(center, radius, width) + rgba immediates.
+    DebugDrawDisc,
 }
 
 /// Effect class for CSE / fusion / movement barriers.
@@ -90,7 +94,9 @@ impl OpCode {
             LoadApi | LoadVar | Keypress => OpEffect::ReadOnly,
             StoreVar => OpEffect::Write,
             Call | Return => OpEffect::Write,
-            EmitController | Debug | TimePlot | OpaqueEffect => OpEffect::External,
+            EmitController | Debug | TimePlot | OpaqueEffect | DebugDrawLine | DebugDrawDisc => {
+                OpEffect::External
+            }
         }
     }
 }

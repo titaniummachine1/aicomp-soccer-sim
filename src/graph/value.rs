@@ -52,4 +52,11 @@ impl GraphValue {
             _ => Vec2::ZERO,
         }
     }
+
+    pub fn as_string(&self) -> String {
+        match self {
+            GraphValue::String(s) => s.clone(),
+            _ => String::new(),
+        }
+    }
 }

@@ -32,7 +32,7 @@ Reading them as values yields Null (correct).
 | ---- | ------ |
 | **Color** | **Wired** as non-null constant (modifier name). Feeds TimePlot/DebugDraw. |
 | **Region** | No ports — org-only; Null OK. |
-| **Debug / DebugDraw*** / **TimePlot** | Side effects only (no outs). Null as values OK. Debug = “Displays the real-time value of the output connection” (Any1). TimePlot: name/color/icon/value + optional min/max; F1. |
+| **Debug / DebugDraw*** / **TimePlot** | **DebugDrawLine / DebugDrawDisc wired** — side effects into viewer frame buffer (GraphBrain + RuntimeBrain). TimePlot / Debug watch still Null as values. |
 | **Custom Function** | Calls Construct Custom Function **by name** (up to 4 Any params → Return). Sim already resolves CreateFunction by modifier name at compile. |
 
 ---

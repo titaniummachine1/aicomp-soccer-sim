@@ -48,6 +48,7 @@ impl TeamBrain for GraphBrain {
     fn think(&mut self, api: &TeamApi) -> BrainOutput {
         let set_vars = self.graph.set_variables.clone();
         let controllers = self.graph.controllers.clone();
+        let debug_draws = self.graph.debug_draws.clone();
         let tracing = self.trace.is_some();
 
         let mut ctx = EvalCtx {
@@ -75,6 +76,11 @@ impl TeamBrain for GraphBrain {
         }
         // Controller eval may still hit SetVariable sinks; do not TRACE those.
         ctx.current_pass = None;
+
+        // Force-eval DebugDraw sinks (Unity runs them every tick even if unread).
+        for sid in &debug_draws {
+            ctx.exec_debug_draw(sid);
+        }
 
         let mut out = BrainOutput::default();
         for (i, ctrl_sid) in controllers.iter().enumerate() {
@@ -158,6 +164,58 @@ impl<'a> EvalCtx<'a> {
             sprint,
             interact,
         }
+    }
+
+    fn exec_debug_draw(&mut self, node_sid: &str) {
+        let Some(node) = self.graph.nodes.get(node_sid).cloned() else {
+            return;
+        };
+        match node.id.as_str() {
+            "DebugDrawLine" => {
+                let a = self
+                    .input_named(node_sid, "Vector31")
+                    .map(|v| v.as_vec())
+                    .unwrap_or(Vec2::ZERO);
+                let b = self
+                    .input_named(node_sid, "Vector32")
+                    .map(|v| v.as_vec())
+                    .unwrap_or(Vec2::ZERO);
+                let width = self
+                    .input_named(node_sid, "Float1")
+                    .map(|v| v.as_float())
+                    .unwrap_or(1.0);
+                let color = self.color_name(node_sid, "Color1");
+                crate::debug_draw::line(a, b, width, &color);
+            }
+            "DebugDrawDisc" => {
+                let center = self
+                    .input_named(node_sid, "Vector31")
+                    .map(|v| v.as_vec())
+                    .unwrap_or(Vec2::ZERO);
+                let radius = self
+                    .input_named(node_sid, "Float1")
+                    .map(|v| v.as_float())
+                    .unwrap_or(1.0);
+                let width = self
+                    .input_named(node_sid, "Float2")
+                    .map(|v| v.as_float())
+                    .unwrap_or(1.0);
+                let color = self.color_name(node_sid, "Color1");
+                crate::debug_draw::disc(center, radius, width, &color);
+            }
+            _ => {}
+        }
+    }
+
+    fn color_name(&mut self, node_sid: &str, port: &str) -> String {
+        if let Some(v) = self.input_named(node_sid, port) {
+            let s = v.as_string();
+            if !s.is_empty() {
+                return s;
+            }
+        }
+        // Color constant may be wired; fall back to White.
+        "White".into()
     }
 
     fn input_named(&mut self, node_sid: &str, port_name: &str) -> Option<GraphValue> {
@@ -536,7 +594,8 @@ impl<'a> EvalCtx<'a> {
             // Color constant for DebugDraw / TimePlot inputs (modifier = name).
             "Color" => GraphValue::String(node.modifier.clone()),
 
-            // Visual-only / side-effect sinks — no readable value.
+            // Visual-only / side-effect sinks — executed via exec_debug_draw when
+            // listed as root sinks; reading them as values yields Null.
             "Debug"
             | "DebugDrawDisc"
             | "DebugDrawLine"

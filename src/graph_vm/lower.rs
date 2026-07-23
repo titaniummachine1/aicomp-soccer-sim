@@ -159,6 +159,11 @@ impl Lowerer {
         let settle = lowerer.take_ir();
 
         lowerer.port_regs.clear();
+        // DebugDraw sinks once per think (controllers phase — settle runs 8×).
+        let debug_draw_sids = lowerer.graph.debug_draws.clone();
+        for sid in &debug_draw_sids {
+            lowerer.lower_debug_draw(sid);
+        }
         let controllers_by_slot = lowerer.graph.controllers.clone();
         for (i, ctrl_sid) in controllers_by_slot.iter().enumerate() {
             if let Some(sid) = ctrl_sid {
@@ -239,6 +244,80 @@ impl Lowerer {
             source_sid: node_sid.to_string(),
             source_port: "controller".to_string(),
         });
+    }
+
+    fn lower_debug_draw(&mut self, node_sid: &str) {
+        let Some(node) = self.graph.nodes.get(node_sid).cloned() else {
+            return;
+        };
+        let rgba = self.resolve_color_rgba(node_sid, "Color1");
+        let imm = vec![
+            rgba[0].to_bits(),
+            rgba[1].to_bits(),
+            rgba[2].to_bits(),
+            rgba[3].to_bits(),
+        ];
+        match node.id.as_str() {
+            "DebugDrawLine" => {
+                let a = self
+                    .lower_input(node_sid, "Vector31")
+                    .unwrap_or_else(|| self.emit_const_vec2(node_sid, "Vector31", Vec2::ZERO));
+                let b = self
+                    .lower_input(node_sid, "Vector32")
+                    .unwrap_or_else(|| self.emit_const_vec2(node_sid, "Vector32", Vec2::ZERO));
+                let w = self
+                    .lower_input(node_sid, "Float1")
+                    .unwrap_or_else(|| self.emit_const_float(node_sid, "Float1", 1.0));
+                self.ir.push(IrInst {
+                    dest: None,
+                    kind: RegisterKind::Null,
+                    op: OpCode::DebugDrawLine,
+                    args: vec![a, b, w],
+                    immediates: imm,
+                    source_sid: node_sid.to_string(),
+                    source_port: "DebugDrawLine".to_string(),
+                });
+            }
+            "DebugDrawDisc" => {
+                let center = self
+                    .lower_input(node_sid, "Vector31")
+                    .unwrap_or_else(|| self.emit_const_vec2(node_sid, "Vector31", Vec2::ZERO));
+                let radius = self
+                    .lower_input(node_sid, "Float1")
+                    .unwrap_or_else(|| self.emit_const_float(node_sid, "Float1", 1.0));
+                let width = self
+                    .lower_input(node_sid, "Float2")
+                    .unwrap_or_else(|| self.emit_const_float(node_sid, "Float2", 1.0));
+                self.ir.push(IrInst {
+                    dest: None,
+                    kind: RegisterKind::Null,
+                    op: OpCode::DebugDrawDisc,
+                    args: vec![center, radius, width],
+                    immediates: imm,
+                    source_sid: node_sid.to_string(),
+                    source_port: "DebugDrawDisc".to_string(),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    fn resolve_color_rgba(&self, node_sid: &str, port_name: &str) -> [f32; 4] {
+        let Some(in_sid) = self.graph.input_port_sid(node_sid, port_name) else {
+            return crate::debug_draw::named_rgba("White");
+        };
+        let Some(src_out) = self.graph.input_source.get(&in_sid) else {
+            return crate::debug_draw::named_rgba("White");
+        };
+        let Some(pref) = self.graph.ports.get(src_out) else {
+            return crate::debug_draw::named_rgba("White");
+        };
+        if let Some(src_node) = self.graph.nodes.get(&pref.node_sid) {
+            if src_node.id == "Color" {
+                return crate::debug_draw::named_rgba(&src_node.modifier);
+            }
+        }
+        crate::debug_draw::named_rgba("White")
     }
 
     fn lower_input(&mut self, node_sid: &str, port_name: &str) -> Option<Reg> {

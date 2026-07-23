@@ -290,6 +290,34 @@ fn run_inst(inst: &Instruction, ctx: &mut ExecutionContext) {
                 }
             }
         }
+        OpCode::DebugDrawLine => {
+            if ops.len() >= 7 {
+                let a = reg_v(ctx, ops[0] as usize);
+                let b = reg_v(ctx, ops[1] as usize);
+                let w = reg_f(ctx, ops[2] as usize);
+                let rgba = [
+                    f32::from_bits(ops[3]),
+                    f32::from_bits(ops[4]),
+                    f32::from_bits(ops[5]),
+                    f32::from_bits(ops[6]),
+                ];
+                crate::debug_draw::line_rgba(a, b, w, rgba);
+            }
+        }
+        OpCode::DebugDrawDisc => {
+            if ops.len() >= 7 {
+                let c = reg_v(ctx, ops[0] as usize);
+                let r = reg_f(ctx, ops[1] as usize);
+                let w = reg_f(ctx, ops[2] as usize);
+                let rgba = [
+                    f32::from_bits(ops[3]),
+                    f32::from_bits(ops[4]),
+                    f32::from_bits(ops[5]),
+                    f32::from_bits(ops[6]),
+                ];
+                crate::debug_draw::disc_rgba(c, r, w, rgba);
+            }
+        }
         _ => {}
     }
 }

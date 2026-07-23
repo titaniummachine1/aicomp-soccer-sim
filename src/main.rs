@@ -415,6 +415,7 @@ fn main() {
                 away: away_brain,
                 last_home: BrainOutput::default(),
                 last_away: BrainOutput::default(),
+                debug_draw: Default::default(),
             }
         })
         .insert_resource(TeamScripts {
@@ -429,6 +430,7 @@ fn main() {
         .insert_resource(DebugSelection::default())
         .insert_resource(SimPaused(false))
         .insert_resource(SimFast(args.fast))
+        .insert_resource(SimDebugDraw(true))
         .insert_resource(SimTimeScale(args.speed_t))
         .insert_resource(TimeScaleDragging(false))
         .insert_resource(TickClock::default())
@@ -477,6 +479,8 @@ struct ViewerWorld {
     away: ActiveBrain,
     last_home: BrainOutput,
     last_away: BrainOutput,
+    /// Last tick's DebugDrawLine / DebugDrawDisc submissions.
+    debug_draw: aicomp_soccer_sim::debug_draw::DebugDrawFrame,
 }
 
 /// Built-in brain or compiled Graph VM (O1). Graph load failure → chase fallback.
@@ -597,6 +601,16 @@ struct SimPaused(bool);
 /// Tick lock still waits for both brains before each step.
 #[derive(Resource, Default)]
 struct SimFast(bool);
+
+/// When true, render Unity DebugDrawLine / DebugDrawDisc submissions.
+#[derive(Resource)]
+struct SimDebugDraw(bool);
+
+impl Default for SimDebugDraw {
+    fn default() -> Self {
+        Self(true)
+    }
+}
 
 /// Scrubber t∈[0,1]: left=1 tick/s wall idle, right=zero idle (process ASAP).
 /// Fast button forces zero idle regardless of scrubber.
@@ -817,6 +831,7 @@ enum UiAction {
     CycleScenario,
     TogglePause,
     ToggleFast,
+    ToggleDebug,
 }
 
 #[derive(Component)]
@@ -827,6 +842,9 @@ struct PauseButtonText;
 
 #[derive(Component)]
 struct FastButtonText;
+
+#[derive(Component)]
+struct DebugButtonText;
 
 #[derive(Component)]
 struct ScenarioButtonText;
@@ -1344,6 +1362,43 @@ fn setup_ui(
             ));
         });
 
+    // Top-right: DebugDraw visibility toggle.
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(12.0),
+                right: Val::Px(12.0),
+                ..default()
+            },
+            ZIndex(20),
+        ))
+        .with_children(|parent| {
+            parent
+                .spawn((
+                    Button,
+                    UiAction::ToggleDebug,
+                    Node {
+                        padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
+                        min_width: Val::Px(110.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border_radius: BorderRadius::all(Val::Px(6.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.18, 0.42, 0.28)),
+                ))
+                .with_children(|b| {
+                    b.spawn((
+                        DebugButtonText,
+                        Text::new("Debug ☑"),
+                        TextFont::from_font_size(14.0),
+                        TextColor(Color::WHITE),
+                        TextLayout::new(Justify::Center, LineBreak::NoWrap),
+                    ));
+                });
+        });
+
     // Bottom-left: timescale scrubber (click / drag).
     commands
         .spawn((
@@ -1580,16 +1635,19 @@ fn step_locked_tick(
     one_v_one: Titanium1v1Mode,
 ) -> f32 {
     let tick0 = std::time::Instant::now();
+    aicomp_soccer_sim::debug_draw::begin_frame();
     let ViewerWorld {
         world,
         home,
         away,
         last_home,
         last_away,
+        debug_draw,
     } = viewer;
     let (home_api, away_api) = world.build_apis();
     // Tick lock: both brains must finish before physics.
     let (mut home_out, mut away_out, timings) = think_barrier(home, away, home_api, away_api);
+    *debug_draw = aicomp_soccer_sim::debug_draw::snapshot();
     if one_v_one.enabled() {
         apply_1v1_freeze(&mut home_out, &mut away_out, world, one_v_one.attack_home);
     }
@@ -1922,6 +1980,8 @@ fn handle_ui_buttons(
     mut selection: ResMut<DebugSelection>,
     mut paused: ResMut<SimPaused>,
     mut fast: ResMut<SimFast>,
+    mut show_debug: ResMut<SimDebugDraw>,
+    mut debug_label: Query<&mut Text, (With<DebugButtonText>, Without<StatusText>)>,
     mut interp: ResMut<InterpState>,
     mut clock: ResMut<TickClock>,
     opening: Res<ViewerOpening>,
@@ -1934,6 +1994,8 @@ fn handle_ui_buttons(
             UiAction::LoadHome => Color::srgb(0.18, 0.32, 0.55),
             UiAction::LoadAway => Color::srgb(0.55, 0.22, 0.18),
             UiAction::ToggleFast if fast.0 => Color::srgb(0.55, 0.40, 0.12),
+            UiAction::ToggleDebug if show_debug.0 => Color::srgb(0.18, 0.42, 0.28),
+            UiAction::ToggleDebug => Color::srgb(0.22, 0.22, 0.30),
             _ => Color::srgb(0.22, 0.22, 0.30),
         };
         match *interaction {
@@ -1997,6 +2059,16 @@ fn handle_ui_buttons(
                     }
                     UiAction::TogglePause => toggle_pause(&mut paused),
                     UiAction::ToggleFast => toggle_fast(&mut fast, &mut clock),
+                    UiAction::ToggleDebug => {
+                        show_debug.0 = !show_debug.0;
+                        if let Ok(mut text) = debug_label.single_mut() {
+                            *text = Text::new(if show_debug.0 {
+                                "Debug ☑"
+                            } else {
+                                "Debug ☐"
+                            });
+                        }
+                    }
                     UiAction::LoadHome => {
                         if let Some(path) = pick_team_script("Load Left team") {
                             viewer.home = load_graph_brain(&path);
@@ -2304,14 +2376,29 @@ fn draw_debug(
     mut gizmos: Gizmos,
     viewer: Res<ViewerWorld>,
     selection: Res<DebugSelection>,
-    one_v_one: Res<Titanium1v1Mode>,
+    show_debug: Res<SimDebugDraw>,
 ) {
+    // Unity DebugDrawLine / DebugDrawDisc — gated by top-right Debug checkbox.
+    if show_debug.0 {
+        for line in &viewer.debug_draw.lines {
+            let a = Vec2::new(line.a.x * PPM, line.a.y * PPM);
+            let b = Vec2::new(line.b.x * PPM, line.b.y * PPM);
+            let [r, g, bch, a_ch] = line.rgba;
+            gizmos.line_2d(a, b, Color::srgba(r, g, bch, a_ch));
+        }
+        for disc in &viewer.debug_draw.discs {
+            let c = Vec2::new(disc.center.x * PPM, disc.center.y * PPM);
+            let [r, g, bch, a_ch] = disc.rgba;
+            gizmos.circle_2d(
+                c,
+                disc.radius.max(0.05) * PPM,
+                Color::srgba(r, g, bch, a_ch),
+            );
+        }
+    }
+
     let w = &viewer.world;
     let params = &w.params;
-
-    if one_v_one.enabled() {
-        draw_scenario1_cone(&mut gizmos, w, one_v_one.attack_home);
-    }
 
     let Some((team, id)) = selection.selected else {
         return;
@@ -2338,7 +2425,7 @@ fn draw_debug(
     let hold_px = Vec2::new(hold.x * PPM, hold.y * PPM);
     gizmos.circle_2d(
         hold_px,
-        params.hold_marker_radius * PPM,
+        4.0,
         Color::srgb(1.0, 0.6, 0.1),
     );
     gizmos.line_2d(c, hold_px, Color::srgb(1.0, 0.6, 0.1));
@@ -2346,163 +2433,4 @@ fn draw_debug(
     // Facing
     let tip = c + p.facing * (params.interact_radius * PPM + 8.0);
     gizmos.line_2d(c, tip, Color::srgb(0.2, 1.0, 1.0));
-}
-
-/// Scenario 1 GK geometry: loose-ball path/stop always; purple when GK is first.
-fn draw_scenario1_cone(gizmos: &mut Gizmos, w: &MatchWorld, attack_home: bool) {
-    use aicomp_soccer_sim::predict::{
-        gk_intercept_cover, predict_ball_path, predict_ball_path_until_intercept, Candidate,
-    };
-
-    let params = &w.params;
-    let (atk_team, gk_team) = if attack_home {
-        (TeamId::Home, TeamId::Away)
-    } else {
-        (TeamId::Away, TeamId::Home)
-    };
-    let Some(atk) = w
-        .players
-        .iter()
-        .find(|p| p.team == atk_team && p.id == PlayerId(1))
-    else {
-        return;
-    };
-    let Some(gk) = w
-        .players
-        .iter()
-        .find(|p| p.team == gk_team && p.id == PlayerId(4))
-    else {
-        return;
-    };
-
-    let own_goal_x = if attack_home {
-        params.goal_line_x.abs()
-    } else {
-        -params.goal_line_x.abs()
-    };
-    let half = params.goal_half_width;
-    let reach = params.interact_radius;
-    let left = Vec2::new(own_goal_x, half);
-    let right = Vec2::new(own_goal_x, -half);
-
-    let l_px = Vec2::new(left.x * PPM, left.y * PPM);
-    let r_px = Vec2::new(right.x * PPM, right.y * PPM);
-    let gk_px = Vec2::new(gk.pos.x * PPM, gk.pos.y * PPM);
-    let reach_px = reach * PPM;
-
-    gizmos.circle_2d(gk_px, reach_px, Color::srgb(0.35, 0.75, 1.0));
-
-    if !w.ball.held {
-        let ball_state = aicomp_soccer_sim::ball::Ball {
-            pos: w.ball.pos,
-            vel: w.ball.vel,
-            height: w.ball.height,
-            vel_y: w.ball.vel_y,
-            held: false,
-        };
-        // Full path → resting stop (always visible while loose).
-        let full = predict_ball_path(&ball_state, params, FIXED_DT, 4.0);
-        let traj = Color::srgba(0.85, 0.9, 1.0, 0.75);
-        for w_pair in full.windows(2) {
-            let a = Vec2::new(w_pair[0].pos.x * PPM, w_pair[0].pos.y * PPM);
-            let b = Vec2::new(w_pair[1].pos.x * PPM, w_pair[1].pos.y * PPM);
-            gizmos.line_2d(a, b, traj);
-        }
-        if let Some(stop) = full.last() {
-            let s_px = Vec2::new(stop.pos.x * PPM, stop.pos.y * PPM);
-            gizmos.circle_2d(s_px, 6.0, Color::srgb(1.0, 1.0, 0.35));
-            gizmos.circle_2d(s_px, 3.0, Color::srgb(1.0, 0.95, 0.2));
-        }
-
-        // First touch among all on-pitch players (sprint). Purple iff GK wins.
-        const SPRINT: f32 = 8.0;
-        let mut cands: Vec<Candidate> = Vec::with_capacity(8);
-        let mut gk_idx = None;
-        for p in &w.players {
-            if p.pos.length() > 80.0 {
-                continue; // parked Scenario-1 extras
-            }
-            if p.team == gk_team && p.id == PlayerId(4) {
-                gk_idx = Some(cands.len());
-            }
-            cands.push(Candidate {
-                pos: p.pos,
-                speed: SPRINT,
-            });
-        }
-        let (_cut, first) = predict_ball_path_until_intercept(
-            &ball_state,
-            params,
-            FIXED_DT,
-            4.0,
-            &cands,
-            reach,
-        );
-        if let Some((ci, hit)) = first {
-            let hit_px = Vec2::new(hit.pos.x * PPM, hit.pos.y * PPM);
-            let gk_first = gk_idx == Some(ci);
-            let col = if gk_first {
-                Color::srgb(0.72, 0.25, 1.0) // purple — guaranteed GK
-            } else {
-                Color::srgb(1.0, 0.55, 0.2)
-            };
-            let line = if gk_first {
-                Color::srgba(0.72, 0.25, 1.0, 0.9)
-            } else {
-                Color::srgba(1.0, 0.55, 0.2, 0.9)
-            };
-            gizmos.line_2d(gk_px, hit_px, line);
-            gizmos.circle_2d(hit_px, 5.5, col);
-            if gk_first {
-                // Highlight path from ball to GK touch in purple.
-                let mut prev = Vec2::new(w.ball.pos.x * PPM, w.ball.pos.y * PPM);
-                for s in full.iter().skip(1) {
-                    if s.t > hit.t + 1e-6 {
-                        break;
-                    }
-                    let cur = Vec2::new(s.pos.x * PPM, s.pos.y * PPM);
-                    gizmos.line_2d(prev, cur, Color::srgba(0.72, 0.25, 1.0, 0.95));
-                    prev = cur;
-                }
-            }
-        }
-
-        let b_px = Vec2::new(w.ball.pos.x * PPM, w.ball.pos.y * PPM);
-        gizmos.line_2d(b_px, l_px, Color::srgba(1.0, 0.85, 0.15, 0.45));
-        gizmos.line_2d(b_px, r_px, Color::srgba(1.0, 0.85, 0.15, 0.45));
-        return;
-    }
-
-    let threat = atk.pos;
-    let ideal = gk_intercept_cover(threat, own_goal_x, half, params, 8.0);
-    let (press, _) = aicomp_soccer_sim::predict::gk_cover_press_target(
-        gk.pos,
-        threat,
-        if w.ball.held { w.ball.vel } else { Vec2::ZERO },
-        own_goal_x,
-        half,
-        params,
-        8.0,
-    );
-    let t_px = Vec2::new(threat.x * PPM, threat.y * PPM);
-    let ideal_px = Vec2::new(ideal.x * PPM, ideal.y * PPM);
-    let press_px = Vec2::new(press.x * PPM, press.y * PPM);
-
-    let cone = Color::srgba(1.0, 0.85, 0.15, 0.95);
-    gizmos.line_2d(t_px, l_px, cone);
-    gizmos.line_2d(t_px, r_px, cone);
-    gizmos.line_2d(l_px, r_px, Color::srgba(1.0, 0.4, 0.2, 0.8));
-
-    gizmos.circle_2d(ideal_px, 4.0, Color::srgb(0.3, 1.0, 0.45));
-    gizmos.line_2d(t_px, ideal_px, Color::srgba(0.3, 1.0, 0.45, 0.55));
-    gizmos.circle_2d(ideal_px, reach_px, Color::srgba(0.3, 1.0, 0.45, 0.35));
-    let line_half = half * PPM;
-    gizmos.line_2d(
-        Vec2::new(ideal_px.x, line_half),
-        Vec2::new(ideal_px.x, -line_half),
-        Color::srgba(0.2, 0.95, 1.0, 0.75),
-    );
-    // Cover stand (= press target under rule 4).
-    gizmos.circle_2d(press_px, 5.0, Color::srgb(1.0, 0.45, 0.15));
-    gizmos.line_2d(gk_px, press_px, Color::srgba(1.0, 0.45, 0.15, 0.85));
 }
