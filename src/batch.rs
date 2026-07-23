@@ -241,6 +241,10 @@ pub fn run_match_job(
     let mut home = build_brain(&job.home, job.engine, cache)?;
     let mut away = build_brain(&job.away, job.engine, cache)?;
     let mut world = MatchWorld::new_kickoff_opening(job.params.clone(), job.opening);
+    // Batch / headless parity: never inherit a viewer-zeroed GoalPause.
+    if world.params.kickoff_delay_s < 1.0 {
+        world.params.kickoff_delay_s = 4.9;
+    }
 
     if !quiet {
         let eng = match job.engine {
@@ -248,12 +252,13 @@ pub fn run_match_job(
             GraphEngine::Runtime => "runtime",
         };
         eprintln!(
-            "match_job home={} away={} opening={} secs={} until_goal={} engine={eng} FIXED_DT={FIXED_DT} (max-speed)",
+            "match_job home={} away={} opening={} secs={} until_goal={} engine={eng} FIXED_DT={FIXED_DT} kickoff_delay_s={:.2} (max-speed)",
             job.home.label(),
             job.away.label(),
             opening_str(job.opening),
             job.secs,
-            job.until_goal
+            job.until_goal,
+            world.params.kickoff_delay_s
         );
     }
 

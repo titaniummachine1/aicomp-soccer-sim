@@ -112,12 +112,7 @@ impl MatchState {
     }
 
     /// Accumulate possession / attacking clocks during Play.
-    pub fn tick_match_stats(
-        &mut self,
-        dt: f32,
-        carrier: Option<(TeamId, u8)>,
-        ball_x: f32,
-    ) {
+    pub fn tick_match_stats(&mut self, dt: f32, carrier: Option<(TeamId, u8)>, ball_x: f32) {
         if self.phase != MatchPhase::Play {
             return;
         }
@@ -169,6 +164,13 @@ fn random_opening_kickoff() -> TeamId {
     }
 }
 
+/// Reset pitch for a kickoff. This is **always-on** match behavior (viewer,
+/// headless, TimePlot) — not a parity-only path.
+///
+/// Key events that must stay even when `kickoff_delay_s` is stripped to 0:
+/// free ball at center, wing faceoffs, Kickoff phase / circle lock, walk-in
+/// pickup, hold, charge warmup, first kick. `kickoff_delay_s` only gates the
+/// cosmetic GoalPause wait before this reset runs after a goal/whistle.
 pub fn place_kickoff(
     ball: &mut Ball,
     players: &mut [Player],
@@ -179,6 +181,8 @@ pub fn place_kickoff(
     ball.vel = Vec2::ZERO;
     ball.height = rest_height;
     ball.vel_y = 0.0;
+    // Free ball — kicking striker walks in via graph MoveTo(0,0) then picks up.
+    // Auto-hold on (0,0) skipped the Unity first-second path (DB33).
     ball.held = false;
     for p in players.iter_mut() {
         // Positions / facing / charge reset. Stamina intentionally persists
@@ -188,15 +192,6 @@ pub fn place_kickoff(
         p.facing = kickoff_facing(p.team, p.id, kickoff_team);
         p.shot_charge = 0.0;
         p.charge_warmup_left = 0.0;
-    }
-    // Kicking striker starts with the ball (avoids body-bump launch at overlap).
-    if let Some(p) = players
-        .iter()
-        .find(|p| p.team == kickoff_team && p.id.0 == 1)
-    {
-        let hold = p.pos + p.facing * 1.557;
-        ball.pos = hold;
-        ball.held = true;
     }
 }
 
@@ -209,14 +204,15 @@ pub fn receiving_team_circle_locked(match_state: &MatchState) -> bool {
 
 pub fn kickoff_control_allowed(
     team: TeamId,
-    _player_pos: Vec2,
+    player_id: crate::player::PlayerId,
     match_state: &MatchState,
     _params: &SimParams,
 ) -> bool {
     match match_state.phase {
         MatchPhase::Play => true,
         MatchPhase::GoalPause => false,
-        // Only the kicking-off team gets graph control until first touch / Play.
-        MatchPhase::Kickoff => team == match_state.kickoff_team,
+        // Only the kicking-off *striker* walks in (AIA StrikerKickoffPos→0).
+        // P2–P4 on the kicking team stay on faceoff until Play / first touch.
+        MatchPhase::Kickoff => team == match_state.kickoff_team && player_id.0 == 1,
     }
 }

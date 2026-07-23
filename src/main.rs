@@ -245,7 +245,8 @@ fn main() {
         .insert_resource({
             let mut world = MatchWorld::new_kickoff(params);
             // Viewer: no post-goal freeze (looks like lag on stream/demo).
-            // Headless keeps Unity ~4.9s kickoff_delay for parity.
+            // Strip cosmetic GoalPause wait for playable viewer. Kickoff-phase
+            // events (free ball, faceoff walk-in, hold, first kick) still run.
             world.params.kickoff_delay_s = 0.0;
             ViewerWorld {
                 world,
@@ -415,13 +416,19 @@ struct DebugSelection {
 #[derive(Resource, Default)]
 struct SimPaused(bool);
 
-/// Fast = skip **idle wait** after tick lock (FIXED_DT / timescale pacing).
-/// Tick lock still always waits for both brains before a step.
+/// Fast = skip **wall-clock idle** between ticks (process ASAP).
+///
+/// Invariant (do not break): Fast / speed scrubber must be unobservable from
+/// inside the sim — same paradox as slowing real-world time 50% with no clock
+/// that can see it. Always step with [`FIXED_DT`]; never scale `dt`, match
+/// clocks, charge, stamina, or SoccerGet `Delta Time` / `Fixed Delta Time`.
+/// Tick lock still waits for both brains before each step.
 #[derive(Resource, Default)]
 struct SimFast(bool);
 
-/// Scrubber t∈[0,1]: left=1 tick/s idle, right=zero idle (process ASAP).
+/// Scrubber t∈[0,1]: left=1 tick/s wall idle, right=zero idle (process ASAP).
 /// Fast button forces zero idle regardless of scrubber.
+/// Same unobservability invariant as [`SimFast`] — wall pacing only.
 #[derive(Resource)]
 struct SimTimeScale(f32);
 
@@ -1358,7 +1365,10 @@ fn file_stem(path: &Path) -> String {
         .to_string()
 }
 
-/// One locked tick: both brains finish, then physics. Returns wall ms for the whole tick.
+/// One locked tick: both brains finish, then physics.
+/// Always advances sim by [`FIXED_DT`] — Fast/scrubber only change how often
+/// this is called in wall time, never the dt passed into physics/brains.
+/// Returns wall ms for the whole tick (HUD only).
 fn step_locked_tick(
     viewer: &mut ViewerWorld,
     clock: &mut TickClock,

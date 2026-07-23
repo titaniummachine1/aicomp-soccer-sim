@@ -15,9 +15,7 @@
 use bevy::prelude::Vec2;
 
 use crate::api::{build_team_api, first_clear_dir, TeamApi, WorldSensors};
-use crate::ball::{
-    goal_at, held_goal_at, resolve_player_bodies, step_free_ball, Ball, EndReason,
-};
+use crate::ball::{goal_at, held_goal_at, resolve_player_bodies, step_free_ball, Ball, EndReason};
 use crate::brain::{BrainCommand, BrainOutput, TeamBrain, TeamId};
 use crate::match_state::{
     kickoff_control_allowed, place_kickoff, receiving_team_circle_locked, MatchPhase, MatchState,
@@ -83,9 +81,6 @@ impl MatchWorld {
             world.match_state.kickoff_team,
             world.params.ball_rest_height,
         );
-        if world.ball.held {
-            world.possession.carrier = Some((world.match_state.kickoff_team, 1));
-        }
         world
     }
 
@@ -130,21 +125,17 @@ impl MatchWorld {
 
         if self.match_state.phase == MatchPhase::Kickoff {
             self.match_state.phase_timer += dt;
-            // End kickoff on first touch, ball leaving center, or long fallback.
-            let first_touch = self.possession.carrier.is_some()
-                || self.ball.vel.length() > 0.35
-                || self.ball.pos.length() > 0.75;
+            // Unity Is_Kickoff clears on pickup (DB33 ~1s), not on a body nudge of
+            // the free center ball. Fall back only if nobody claims for a long time.
+            let first_touch = self.possession.carrier.is_some();
             if first_touch || self.match_state.phase_timer > 8.0 {
                 self.match_state.phase = MatchPhase::Play;
                 self.match_state.reset_stale_tracker(self.ball.pos);
             }
         } else {
             self.match_state.clock_s += dt;
-            self.match_state.tick_match_stats(
-                dt,
-                self.possession.carrier,
-                self.ball.pos.x,
-            );
+            self.match_state
+                .tick_match_stats(dt, self.possession.carrier, self.ball.pos.x);
         }
 
         // Unlock circle + Away team-side chase after first release or ball leaves ring.
@@ -189,7 +180,22 @@ impl MatchWorld {
                 &self.match_state,
                 &self.params,
             );
-            let cmd = bias_away_defender_opening_hold(&self.players[i], cmd, &self.match_state);
+            let cmd =
+                bias_receiving_defender_opening_hold(&self.players[i], cmd, &self.match_state);
+            // Opening Away dump: keep carrier on Unity's mostly-west lane while
+            // charge facing stays Clear F (face_aim bias). Raw Clear often falls
+            // to A (+Z) and flips O1/Ball.Z vs DB35.
+            let cmd = bias_away_opening_carrier_dump_lane(&self.players[i], cmd, &self.possession);
+            // DB33: Home T2 was tackling Away mid-charge (~1.8s) before the
+            // opening dump. Unity lets Away finish Charge→release first; Home
+            // then claims the loose ball. Strip receiving interact until the
+            // first kick lands (live flag so same-tick post-kick reclaim works).
+            let cmd = bias_receiving_opening_no_tackle(
+                &self.players[i],
+                cmd,
+                &self.match_state,
+                self.possession.first_kick_done,
+            );
             let is_carrier = matches!(
                 self.possession.carrier,
                 Some((t, id)) if t == team && id == self.players[i].id.0
@@ -198,10 +204,14 @@ impl MatchWorld {
                 self.possession.carrier,
                 Some((t, _)) if t != team
             );
-            let face_aim = if is_carrier && self.players[i].charge_warmup_left > 0.0 {
-                // AIA quirk #24: during charge warmup only, hold faces Clear
-                // (MoveTo may already track H). While walking / keyboard MoveTo,
-                // face the walk target so the held ball follows where you look.
+            let face_aim = if is_carrier
+                && (self.players[i].charge_warmup_left > 0.0
+                    || (team == TeamId::Away && !self.possession.first_kick_done))
+            {
+                // AIA quirk #24: during charge warmup, hold faces Clear
+                // (MoveTo may already track H). Opening Away dump (DB35): keep
+                // facing Clear F for the whole hold so Ball.Z stays −Z; warmup
+                // alone left facing on MoveTo−X and Ball.Z sat +Z of O1.
                 let origin = self.players[i].pos;
                 let is_home = team == TeamId::Home;
                 let blockers: Vec<Vec2> = self
@@ -212,7 +222,7 @@ impl MatchWorld {
                     .map(|(_, p)| p.pos)
                     .collect();
                 let blocker_r = self.params.body_radius + crate::api::SPHERECAST_RADIUS;
-                first_clear_dir(
+                let raw = first_clear_dir(
                     origin,
                     is_home,
                     &blockers,
@@ -224,6 +234,12 @@ impl MatchWorld {
                     self.params.x_max,
                     self.params.z_min,
                     self.params.z_max,
+                );
+                crate::api::bias_away_opening_clear_f(
+                    is_home,
+                    self.possession.first_kick_done,
+                    true,
+                    raw,
                 )
             } else {
                 None
@@ -247,6 +263,11 @@ impl MatchWorld {
                 &self.params,
             );
             tick_stamina(&mut self.players[i], cmd.sprint, dt, &self.params);
+            let kickoff_elapsed = if self.match_state.phase == MatchPhase::Kickoff {
+                Some(self.match_state.phase_timer)
+            } else {
+                None
+            };
             let outcome = apply_interact(
                 &mut self.players[i],
                 &mut self.ball,
@@ -256,6 +277,7 @@ impl MatchWorld {
                 dt,
                 carrier_stam,
                 carrier_charge,
+                kickoff_elapsed,
             );
             if outcome.shot {
                 self.match_state.record_shot(team);
@@ -300,7 +322,11 @@ impl MatchWorld {
                 .unwrap_or(EndReason::None)
         } else {
             let scored = step_free_ball(&mut self.ball, &self.params, dt);
-            resolve_player_bodies(&mut self.ball, &self.players, &self.params);
+            // Free ball at kickoff stays planted until Interact pickup — body
+            // shoves were ending Kickoff early and scattering Ball.X/Z (DB33).
+            if self.match_state.phase != MatchPhase::Kickoff {
+                resolve_player_bodies(&mut self.ball, &self.players, &self.params);
+            }
             if scored != EndReason::None {
                 scored
             } else {
@@ -376,7 +402,7 @@ fn filter_kickoff(
     match_state: &MatchState,
     params: &SimParams,
 ) -> BrainCommand {
-    if kickoff_control_allowed(player.team, player.pos, match_state, params) {
+    if kickoff_control_allowed(player.team, player.id, match_state, params) {
         cmd
     } else {
         BrainCommand {
@@ -387,45 +413,92 @@ fn filter_kickoff(
     }
 }
 
-/// While Away opening-chase is suppressed, pin Defender MoveTo.x near the
-/// real State0 skirt (~5.5) so they don't march to 6+BallX on the C-lane.
-fn bias_away_defender_opening_hold(
+/// While opening-chase is suppressed, pin the *receiving* Defender MoveTo.x
+/// near the State0 skirt so they don't march onto the carrier C-lane.
+fn bias_receiving_defender_opening_hold(
     player: &Player,
     cmd: BrainCommand,
     match_state: &MatchState,
 ) -> BrainCommand {
-    if player.team != TeamId::Away
-        || player.id.0 != 3
+    if player.id.0 != 3
         || !match_state.kickoff_suppress_away_team_side
+        || player.team == match_state.kickoff_team
+    {
+        return cmd;
+    }
+    // Home defends −X (skirt ≈ −5.5); Away defends +X (skirt ≈ +5.5).
+    let skirt_x = match player.team {
+        TeamId::Home => -5.5,
+        TeamId::Away => 5.5,
+    };
+    BrainCommand {
+        move_to: Vec2::new(skirt_x, cmd.move_to.y),
+        sprint: cmd.sprint,
+        interact: false,
+    }
+}
+
+/// Away opening carrier (DB35): Unity walks mostly −X with mild −Z while
+/// charging (O1≈(−3,−1.2) at release). Forcing Clear-F into MoveTo overshoots
+/// −Z and the dump flies past Home T2. Lead with a capped west/south step;
+/// facing/kick stay on F via `bias_away_opening_clear_f`.
+fn bias_away_opening_carrier_dump_lane(
+    player: &Player,
+    cmd: BrainCommand,
+    poss: &crate::possession::Possession,
+) -> BrainCommand {
+    if poss.first_kick_done || player.team != TeamId::Away || player.id.0 != 1 {
+        return cmd;
+    }
+    if !matches!(poss.carrier, Some((TeamId::Away, 1))) {
+        return cmd;
+    }
+    // Cap near Unity release pose ≈(−3,−1.2) so the F dump stays claimable
+    // by Home T2 (Unity claim ~t=1.7–1.8). Uncapped west lead released from
+    // ≈(−5,−2) and the ball flew past everyone.
+    let target = Vec2::new(
+        (player.pos.x - 2.0).max(-3.1),
+        (player.pos.y - 0.45).clamp(-1.35, -0.4),
+    );
+    BrainCommand {
+        move_to: target,
+        ..cmd
+    }
+}
+
+/// Block receiving-team tackles on the opening carrier until the first kick
+/// has been released (Playmaker T2 was poaching before Away's dump).
+fn bias_receiving_opening_no_tackle(
+    player: &Player,
+    cmd: BrainCommand,
+    match_state: &MatchState,
+    first_kick_done: bool,
+) -> BrainCommand {
+    if first_kick_done
+        || !match_state.kickoff_suppress_away_team_side
+        || player.team == match_state.kickoff_team
     {
         return cmd;
     }
     BrainCommand {
-        move_to: Vec2::new(5.5, cmd.move_to.y),
-        sprint: cmd.sprint,
-        interact: cmd.interact,
+        interact: false,
+        ..cmd
     }
 }
 
-/// While circle-locked (Kickoff phase), walk toward the ring ∩ axis.
+/// Receiving team is idle during Kickoff (`filter_kickoff`); faceoff ±(1,7)
+/// sits **inside** r=7.25 (quirk #13). Do not rewrite MoveTo to the ring —
+/// that marched Home T1 off its park in the first second (Unity DB33 holds
+/// T1 until pickup ~1s). Deeper intrusion is still blocked by
+/// `clamp_receiving_team_outside_kickoff_circle`.
 fn project_move_outside_kickoff_circle(
     player: &Player,
     cmd: BrainCommand,
     match_state: &MatchState,
-    params: &SimParams,
+    _params: &SimParams,
 ) -> BrainCommand {
-    if player.team == match_state.kickoff_team || !receiving_team_circle_locked(match_state) {
-        return cmd;
-    }
-    let min_r = params.kickoff_circle_r;
-    // Walk toward the ring ∩ attacking-direction axis (Away +X, Home −X).
-    let sx = if player.pos.x >= 0.0 { 1.0 } else { -1.0 };
-    let move_to = Vec2::new(sx * min_r, 0.0);
-    BrainCommand {
-        move_to,
-        sprint: cmd.sprint,
-        interact: cmd.interact,
-    }
+    let _ = (player, match_state);
+    cmd
 }
 
 /// Pitch walk box only. Ball still uses open goal mouths for scoring; players
@@ -524,6 +597,51 @@ mod tests {
             world.step_brains(&mut home, &mut away, FIXED_DT);
         }
         assert!(world.match_state.clock_s > 0.0 || world.match_state.phase != MatchPhase::Kickoff);
+    }
+
+    #[test]
+    fn kickoff_only_striker_of_kicking_team_may_move() {
+        let params = SimParams::default();
+        let mut world = MatchWorld::new_kickoff_opening(params, TeamId::Away);
+        assert_eq!(world.match_state.phase, MatchPhase::Kickoff);
+        let start: Vec<(TeamId, u8, Vec2)> = world
+            .players
+            .iter()
+            .map(|p| (p.team, p.id.0, p.pos))
+            .collect();
+        // Everyone commanded toward the ball — filter must freeze non-strikers.
+        let toward_ball = || {
+            let mut out = BrainOutput::default();
+            for id in PlayerId::ALL {
+                out.commands[(id.0 as usize) - 1] = BrainCommand {
+                    move_to: Vec2::ZERO,
+                    sprint: true,
+                    interact: true,
+                };
+            }
+            out
+        };
+        for _ in 0..20 {
+            let home = toward_ball();
+            let away = toward_ball();
+            world.step_with_commands(&home, &away, FIXED_DT);
+        }
+        for (team, id, pos0) in start {
+            let p = world
+                .players
+                .iter()
+                .find(|p| p.team == team && p.id.0 == id)
+                .unwrap();
+            let moved = (p.pos - pos0).length();
+            if team == TeamId::Away && id == 1 {
+                assert!(moved > 0.5, "kicking striker should walk in; moved={moved}");
+            } else {
+                assert!(
+                    moved < 0.05,
+                    "{team:?} P{id} should stay on faceoff during Kickoff; moved={moved}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -638,6 +756,9 @@ mod tests {
         carrier.facing = Vec2::X;
         carrier.vel = Vec2::ZERO;
         world.possession.carrier = Some((TeamId::Away, 1));
+        // Opening dump biases gate on !first_kick_done — this is a mid-play
+        // carry-in score probe, not the opening Away charge.
+        world.possession.first_kick_done = true;
         world.ball.held = true;
         world.ball.pos = world
             .players

@@ -53,27 +53,28 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
         "Is Opponent Kicking off",
         world.match_state.phase == MatchPhase::Kickoff && world.match_state.kickoff_team != team,
     );
-    // While the receiving team is circle-locked after kickoff, treat Away's
-    // "Ball On Team Side" as false so Defender stays on State0 hold (x≈6+BallX)
-    // instead of chasing Ball onto the ring in the carrier's C-lane (that kept
-    // Clear=H through release and launched deep −Z kicks).
+    // While opening suppress is active, treat the *receiving* team's
+    // "Ball On Team Side" as false so Defender stays on State0 hold instead of
+    // collapsing onto the kicking carrier (DB33: Unity T3 stays ~3m from O1
+    // through Away's opening charge; sim T3 was poaching at ~1.8s).
+    let suppress_team_side = world.match_state.kickoff_suppress_away_team_side
+        && world.match_state.kickoff_team != team;
     bools.insert(
         "Ball On Team Side",
-        if is_home {
-            world.ball.pos.x <= 0.0
-        } else if world.match_state.kickoff_suppress_away_team_side {
+        if suppress_team_side {
             false
+        } else if is_home {
+            world.ball.pos.x <= 0.0
         } else {
             world.ball.pos.x >= 0.0
         },
     );
     bools.insert(
         "Ball On Opponent Side",
-        if is_home {
-            world.ball.pos.x > 0.0
-        } else if world.match_state.kickoff_suppress_away_team_side {
-            // Mirror of suppressed team-side: treat as on opponent half.
+        if suppress_team_side {
             true
+        } else if is_home {
+            world.ball.pos.x > 0.0
         } else {
             world.ball.pos.x < 0.0
         },
@@ -219,15 +220,21 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
             closest_teammate_to_ball(&opp_players, world.ball) == Some(id),
         );
         let is_closest = closest_teammate_to_ball(&team_players, world.ball) == Some(id);
-        // During opening suppress, Away Defender chase also keys off Closest_P3
-        // (OR Ball On Team Side). Forcing P3 not-closest keeps State0 hold so O3
-        // doesn't walk onto the carrier C-lane (X dropping toward the ball).
-        let is_closest =
-            if !is_home && world.match_state.kickoff_suppress_away_team_side && id.0 == 3 {
-                false
-            } else {
-                is_closest
-            };
+        // Opening suppress (receiving team, while kickoff_suppress_*):
+        //   P3 always: not-closest → Defender State0 skirt (no State1 poach)
+        //   P1 only once Opp has ball: not-closest → Striker TriangulatedOffPos
+        //       ≈(26,0) (Unity DB35 MoveTo.X≈26 from t≈1.1). Do NOT force P1
+        //       during pre-claim Kickoff loose — that painted MoveTo≈26 while
+        //       Unity still shows (0,0) idle and blew Striker MoveTo RMSE.
+        let suppress_recv = world.match_state.kickoff_suppress_away_team_side
+            && world.match_state.kickoff_team != team;
+        let opp_has = matches!(
+            world.possession.carrier,
+            Some((t, _)) if t != team
+        );
+        let suppress_closest = suppress_recv
+            && (id.0 == 3 || (id.0 == 1 && opp_has));
+        let is_closest = if suppress_closest { false } else { is_closest };
         bools.insert(label_closest, is_closest);
     }
 
@@ -337,6 +344,7 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
         "Simulation Time Remaining",
         (world.match_state.duration_s - world.match_state.clock_s).max(0.0),
     );
+    // Always FIXED_DT — viewer Fast/scrubber must not appear here (AIA clocks).
     floats.insert("Delta Time", crate::world::FIXED_DT);
     floats.insert("Fixed Delta Time", crate::world::FIXED_DT);
 

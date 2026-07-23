@@ -39,6 +39,7 @@ cargo run --release --bin soccer_headless -- --batch 16 --jobs 8 --secs 20 --hom
 
 Seeds are `base_seed + i` (base defaults to 0). Opening follows seed parity
 (even=home, odd=away). Each stdout line is one JSON match result.
+
 ## Scripted parity probes
 
 ```bat
@@ -62,3 +63,12 @@ Exit `0` = steal seen; `2` = failed assert.
 - Don't block on Unity for “does my brain score?” — use `soccer_headless`.
 - Don't invent Survival speeds (4.5/9). Soccer is walk **7** / sprint **8**.
 - Don't re-open locked quirks without a new TimePlot path from the user.
+- **Never compare Unity to a sim that started from a different state.** Freeze
+  the Unity snapshot (ball/players/vels/hold/timers/API-visible state), inject
+  it, then measure RMSE. Changing spawn/defaults while “matching” Unity is a
+  different simulation, not parity. One independent variable at a time: if you
+  calibrate a param from Unity, freeze it and rerun from the **same** initial
+  snapshot — never recalibrate and change initial conditions together.
+- Don't chase bit-perfect move/rotation while held — Unity held-ball vs walls
+  is buggy/noisy (see quirks #27). Practical first-~2s Ball/O1/T1/MoveTo is
+  the bar.

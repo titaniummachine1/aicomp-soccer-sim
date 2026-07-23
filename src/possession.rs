@@ -18,6 +18,9 @@ pub struct Possession {
     pub kick_exclude_left: f32,
     /// After the first kick of the match, opp-carrier chase is slowed.
     pub first_kick_done: bool,
+    /// True after the match's first charged release until the hang window ends.
+    /// Opening dump (DB33): ball must fly ~0.1s before Home can hot-claim.
+    pub opening_dump_hang: bool,
 }
 
 impl Default for Possession {
@@ -28,6 +31,7 @@ impl Default for Possession {
             kick_exclude_team: None,
             kick_exclude_left: 0.0,
             first_kick_done: false,
+            opening_dump_hang: false,
         }
     }
 }
@@ -37,6 +41,17 @@ pub fn tick_possession_timers(poss: &mut Possession, dt: f32) {
     poss.kick_exclude_left = (poss.kick_exclude_left - dt).max(0.0);
     if poss.kick_exclude_left <= 0.0 {
         poss.kick_exclude_team = None;
+    }
+    // Hang only for the first ~0.12s after the opening dump.
+    if poss.opening_dump_hang {
+        let since_kick = if poss.kick_exclude_left > 0.0 {
+            (2.5 - poss.kick_exclude_left).clamp(0.0, 2.5)
+        } else {
+            999.0
+        };
+        if since_kick >= 0.12 {
+            poss.opening_dump_hang = false;
+        }
     }
 }
 
@@ -66,6 +81,8 @@ pub fn apply_interact(
     dt: f32,
     carrier_stamina: Option<f32>,
     _carrier_shot_charge: Option<f32>,
+    // Some(elapsed) in Kickoff: free-ball claim waits until ≈1.0s (Unity DB33).
+    kickoff_elapsed_s: Option<f32>,
 ) -> InteractOutcome {
     let hold = player.hold_pos(params.hold_offset);
     let is_carrier = matches!(
@@ -107,16 +124,14 @@ pub fn apply_interact(
                 }
             };
             // Baseline Away long release is Clear F (−X,−Z) at ~full charge
-            // (v≈(−21,−21)). Clear order prefers D (−X), which leaves Ball.Z
-            // shallow; bias only hard Away kicks already aimed near −X.
-            if player.team == TeamId::Away
-                && poss.first_kick_done
-                && player.shot_charge >= 0.75
-                && player.pos.y < -1.0
-                && dir.x < -0.55
-                && dir.y > -0.45
-            {
-                dir = Vec2::new(-0.707, -0.707);
+            // (v≈(−21,−21)). Opening dump especially: AIA Clear often picks D
+            // (−X) and leaves a short Ball.X vs Unity DB33 (→ −8 by t=2).
+            if player.team == TeamId::Away && player.shot_charge >= 0.75 {
+                let opening = !poss.first_kick_done;
+                let near_west = dir.x < -0.55 && dir.y > -0.55;
+                if opening || near_west {
+                    dir = Vec2::new(-0.707, -0.707);
+                }
             }
             let (horiz, lift) = crate::ball::kick_launch_speeds(player.shot_charge, params);
             ball.held = false;
@@ -126,11 +141,14 @@ pub fn apply_interact(
             ball.pos = hold + dir * 0.15;
             player.shot_charge = 0.0;
             player.charge_warmup_left = 0.0;
+            let was_opening = !poss.first_kick_done;
             poss.carrier = None;
             poss.pickup_lockout = params.pickup_delay_s;
             poss.kick_exclude_team = Some(player.team);
             poss.kick_exclude_left = 2.5;
             poss.first_kick_done = true;
+            // DB33 Away opening: Ball.X keeps traveling ~0.1s before Home claims.
+            poss.opening_dump_hang = was_opening;
             return InteractOutcome {
                 drain: None,
                 shot: true,
@@ -209,9 +227,9 @@ pub fn apply_interact(
     // Outfield cannot snatch a full-power fly-by (real loose streaks last
     // seconds; sim was re-claiming after every 0.06s lockout). Goalies may
     // claim hotter balls; anyone may claim if closing relative speed is low.
-    let dist = (hold - ball.pos)
-        .length()
-        .min((player.pos - ball.pos).length());
+    let body_dist = (player.pos - ball.pos).length();
+    let hold_dist = (hold - ball.pos).length();
+    let dist = hold_dist.min(body_dist);
     if dist <= params.interact_radius {
         let ball_speed = ball.vel.length();
         // Claim paths:
@@ -225,10 +243,17 @@ pub fn apply_interact(
         } else {
             999.0
         };
-        let hot_opp_window = !excluded && since_kick < 0.25;
+        let hot_opp_window = !excluded && since_kick < 0.25 && !poss.opening_dump_hang;
         // Prefer real hang (hidden Y) over the old fixed 1s since_kick stand-in.
         let airborne = !ball.grounded(params);
-        let body_hit = dist < params.body_radius + params.ball_radius + 0.20;
+        // Capsule sum (no extra pad). During Kickoff, also wait until ~1.0s
+        // (Unity DB33 Opp pickup) — sim reaches range ~0.1s early at full walk.
+        let body_hit = body_dist < params.body_radius + params.ball_radius;
+        // Unity DB33 Away claim ~0.95–1.0s (Is_Kickoff already 0.37 by t=1.0).
+        // Gate was 1.0 and left sim ~0.1s late vs the reference plot.
+        let kickoff_claim_ok = kickoff_elapsed_s
+            .map(|t| t >= 0.95)
+            .unwrap_or(true);
         let can_claim = if player.id.0 == 4 {
             dist <= params.interact_radius
         } else if hot_opp_window {
@@ -240,10 +265,10 @@ pub fn apply_interact(
             // loose; hot_opp_window already covers the instant Away/Home reclaim.
             false
         } else if excluded {
-            ball_speed < 2.0 && body_hit
+            ball_speed < 2.0 && body_hit && kickoff_claim_ok
         } else {
             // After hang: nearly settled only.
-            ball_speed < 2.0 && body_hit
+            ball_speed < 2.0 && body_hit && kickoff_claim_ok
         };
         if can_claim {
             poss.carrier = Some((player.team, player.id.0));
@@ -252,6 +277,12 @@ pub fn apply_interact(
             ball.pos = hold;
             player.shot_charge = 0.0;
             player.charge_warmup_left = params.shot_charge_warmup_s;
+            // Grace so the kicker can't instantly re-tackle the reclaim
+            // (sim Away stole back ~0.13s after Home claimed the opening dump).
+            poss.pickup_lockout = params
+                .pickup_delay_after_exchange_s
+                .max(poss.pickup_lockout);
+            poss.opening_dump_hang = false;
             if !excluded {
                 poss.kick_exclude_team = None;
                 poss.kick_exclude_left = 0.0;
@@ -326,6 +357,7 @@ mod tests {
             0.019,
             Some(1.0),
             Some(0.0),
+            None,
         )
         .drain
         .expect("equal-stam tackle returns drain");
@@ -378,6 +410,7 @@ mod tests {
             0.019,
             Some(0.5),
             Some(0.0),
+            None,
         )
         .drain
         .expect("higher-stam tackle returns drain");
@@ -434,6 +467,7 @@ mod tests {
             0.019,
             Some(0.8),
             Some(0.0),
+            None,
         )
         .drain
         .expect("lower-stam tackle returns drain");

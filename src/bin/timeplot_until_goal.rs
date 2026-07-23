@@ -195,20 +195,21 @@ fn build_brain(input: &BrainInput) -> Result<Box<dyn TeamBrain>, String> {
 }
 
 fn print_aia_gap_banner(saves: &Path) {
-    let aia = saves.join("AIA.txt");
     eprintln!("parity gaps (AIA uses these; sim still soft/blank):");
-    eprintln!("  - Spherecast + SoccerPlayerSensors1..4 → Null (raw sensor path)");
-    eprintln!("  - SoccerGet clear-dir / opp-goal-dir → geometric approx (not live casts)");
-    eprintln!("  - ConstructSoccerProperties / Country → faceoff only");
+    eprintln!("  - Spherecast + SoccerPlayerSensors1..4 -> Null (raw Sensor.* not in sim plot)");
+    eprintln!("  - SoccerGet clear-dir / opp-goal-dir -> geometric approx (not live casts)");
+    eprintln!("  - ConstructSoccerProperties / Country -> faceoff only");
+    eprintln!("  - early Ball/T1 path (first 2s RMSE) still open");
     eprintln!("  run: python scripts/aia_gap_report.py");
+    eprintln!("  delays: kickoff_delay_s forced ~4.9s (cosmetic GoalPause only); viewer may use 0 — kickoff walk-in/hold/first-kick still run");
     if saves.join("AIA_Debug.txt").is_file() {
         eprintln!(
             "Unity: load AIA_Debug.txt for matching series names ({})",
             saves.join("AIA_Debug.txt").display()
         );
     }
-    if !aia.is_file() {
-        eprintln!("warn: missing {}", aia.display());
+    if !saves.join("AIA.txt").is_file() {
+        eprintln!("warn: missing {}", saves.join("AIA.txt").display());
     }
 }
 
@@ -223,10 +224,20 @@ fn main() -> ExitCode {
         }
     };
 
-    let params = SimParams::load_from_disk(&default_params_path()).unwrap_or_else(|e| {
+    let mut params = SimParams::load_from_disk(&default_params_path()).unwrap_or_else(|e| {
         eprintln!("params load failed ({e}); using fallbacks");
         SimParams::default()
     });
+    // Parity runs must keep Unity post-goal / whistle freeze (~4.9s).
+    // Viewer may zero this for demo; never do that here.
+    const UNITY_KICKOFF_DELAY_S: f32 = 4.9;
+    if (params.kickoff_delay_s - UNITY_KICKOFF_DELAY_S).abs() > 0.05 {
+        eprintln!(
+            "parity: kickoff_delay_s={:.3} -> {UNITY_KICKOFF_DELAY_S} (Unity GoalPause)",
+            params.kickoff_delay_s
+        );
+        params.kickoff_delay_s = UNITY_KICKOFF_DELAY_S;
+    }
     let saves = soccer_saves_dir();
     if !args.quiet {
         print_aia_gap_banner(&saves);
@@ -250,13 +261,14 @@ fn main() -> ExitCode {
     let mut world = MatchWorld::new_kickoff_opening(params, args.opening);
     if !args.quiet {
         eprintln!(
-            "timeplot home={} away={} opening={:?} secs={} until_goal={} goals={} FIXED_DT={FIXED_DT} engine=RuntimeBrain",
+            "timeplot home={} away={} opening={:?} secs={} until_goal={} goals={} FIXED_DT={FIXED_DT} kickoff_delay_s={:.2} engine=RuntimeBrain",
             args.home.label(),
             args.away.label(),
             args.opening,
             args.secs,
             args.until_goal,
-            args.goals
+            args.goals,
+            world.params.kickoff_delay_s
         );
     }
 

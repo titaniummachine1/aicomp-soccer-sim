@@ -32,6 +32,7 @@ struct PlotPrev {
     /// 0=loose, 1=home, 2=away
     poss: u8,
     home_has: bool,
+    /// Carrier shot charge (Home API "Ball Carrier Shot Charge" — either team).
     home_charge: f32,
     carrier: Option<(TeamId, u8)>,
 }
@@ -130,6 +131,41 @@ impl TimePlotRecorder {
             },
             t,
         );
+        // AIA_Debug aliases (Ctrl.P1.* / Ctrl.Charge).
+        let p1 = home_out.for_player(PlayerId(1));
+        push_xyz(self, "Ctrl.P1.MoveTo", "#00FF00", p1.move_to, t);
+        push_f(
+            self,
+            "Ctrl.P1.Sprint",
+            "#00FF00",
+            if p1.sprint { 1.0 } else { 0.0 },
+            t,
+        );
+        push_f(
+            self,
+            "Ctrl.P1.Interact",
+            "#00FF00",
+            if p1.interact { 1.0 } else { 0.0 },
+            t,
+        );
+        let charge = {
+            let t1_has = home_api
+                .get_bool("Team Player 1 Has Ball")
+                .unwrap_or(false);
+            if t1_has {
+                home_api
+                    .get_float("Teammate 1 Shot Charge")
+                    .unwrap_or(0.0)
+            } else {
+                // AIA_Debug Ctrl.Charge tracks the live carrier while Home T1
+                // is empty (Unity Away opening charge 1.4→1.7).
+                home_api
+                    .get_float("Ball Carrier Shot Charge")
+                    .or_else(|| home_api.get_float("Teammate 1 Shot Charge"))
+                    .unwrap_or(0.0)
+            }
+        };
+        push_f(self, "Ctrl.Charge", "#FF00FF", charge, t);
         push_f(
             self,
             "Ctrl.Defender.Sprint",
@@ -182,45 +218,62 @@ impl TimePlotRecorder {
             );
             push_aim_vec(
                 self,
-                &format!("Clear.T{n}"),
+                &format!("Aim.Clear.T{n}"),
                 home_api.get_vector3(&format!("Clear direction from Teammate {n}")),
                 t,
             );
         }
     push_aim_vec(
         self,
-        "Clear.Carrier",
+        "Aim.Clear.Carrier",
         home_api.get_vector3("Clear direction from team carrier"),
         t,
     );
     push_aim_vec(
         self,
-        "Clear.CarrierAvoidAll",
+        "Aim.Clear.Carrier.AllWalls",
         home_api.get_vector3("Clear direction from team carrier (avoid all walls)"),
         t,
     );
     push_aim_vec(
         self,
-        "Clear.CarrierAvoidGoals",
+        "Aim.Clear.Carrier.Goals",
         home_api.get_vector3("Clear direction from team carrier (avoid goal lines)"),
         t,
     );
     push_aim_vec(
         self,
-        "Clear.CarrierAvoidSides",
+        "Aim.Clear.Carrier.Sides",
         home_api.get_vector3("Clear direction from team carrier (avoid sidelines)"),
         t,
     );
     push_aim_vec(
         self,
-        "Clear.CarrierBack",
+        "Aim.Clear.Carrier.Back",
         home_api.get_vector3("Backwards clear direction from team carrier"),
         t,
     );
 
-        // Timing / score mirrors.
+        // Timing / score mirrors (Unity AIA_Debug Meta.* / Event.*Score names).
+        push_f(self, "Meta.DebugBuild", "#E5E5E5", 33.0, t);
+        push_f(self, "Meta.SimTime", "#808080", world.match_state.clock_s, t);
+        push_f(self, "Meta.FixedDt", "#808080", dt, t);
         push_f(self, "SimTime", "#808080", t, t);
         push_f(self, "FixedDt", "#808080", dt, t);
+        push_f(
+            self,
+            "Event.Team_Score",
+            "#00FF00",
+            world.match_state.score_home as f32,
+            t,
+        );
+        push_f(
+            self,
+            "Event.Opp_Score",
+            "#FF0000",
+            world.match_state.score_away as f32,
+            t,
+        );
         push_f(
             self,
             "TeamScore",
@@ -305,8 +358,12 @@ impl TimePlotRecorder {
                     _ => poss_loose = 1.0,
                 }
             }
-            // Kick release: team held ball with charge, then lost possession.
-            if prev.home_has && !home_has && prev.home_charge >= 0.15 {
+            // Kick release: charged carrier loses the ball to loose (Home or Away).
+            // Prev used home_has only, so Away opening dumps never pulsed.
+            if prev.carrier.is_some()
+                && carrier.is_none()
+                && prev.home_charge >= 0.15
+            {
                 kick_rel = 1.0;
             }
             // Steal: carrier team flips without a charged release this tick.

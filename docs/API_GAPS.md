@@ -86,15 +86,25 @@ Searched Survival (Aya / public writeups + Frida catalog) for Soccer sensor trut
 
 AIA usage scan: `python scripts/aia_gap_report.py`
 
-Headless parity capture:
+Headless parity capture (**keeps Unity `kickoff_delay_s≈4.9` GoalPause**; viewer may use 0 for demo):
 
 ```bat
-cargo run --release --bin timeplot_until_goal -- --secs 30 --home aia --away idle
+cargo run --release --bin timeplot_until_goal -- --secs 40 --home graph:%USERPROFILE%\AppData\LocalLow\Unicorn One\AIComp\Saves\Soccer\AIA_Debug.txt --away aia --opening home
+python scripts/compare_timeplots.py <unity.json> <sim.json>
 ```
 
 Unity: load `AIA_Debug.txt` (stock **AIA** play + TimePlot probes, DebugBuild=33 —
 rebuild with `python worldcupteams/probes/build_aia_debug.py`), same opening/length,
 export TimePlot → compare series.
+
+**Remaining for AIA↔sim parity (priority):**
+1. First ~2s Ball / T1 / Striker MoveTo path (kickoff hold ±Z, first release).
+2. Live Spherecast→Sensors→HitInfo (or better clear-dir / OppGoal-dir from casts).
+3. Carrier facing vs Unity while walking with ball (Clear sticky only in warmup).
+4. Sensor.* TimePlot channels (Unity only until sensors are wired).
+5. Held-ball wall clamp / walk-through kick bug (observed, not sim-locked).
+
+Fast/slow scrubber only changes wall pacing — FIXED_DT / match clocks unchanged.
 
 ---
 

@@ -89,16 +89,18 @@ Editor / saves (workflow, not sim physics):
 - **Note:** Stock `AIA.txt` has **0** nested `Function` calls — this quirk
   breaks _other_ graphs that nest helpers, not AIA itself.
 
-### 2. Kicking striker spawn = `**(0,0)` on the ball\*\*
+### 2. Kicking striker **MoveTo (0,0)** — engine spawn stays wing faceoff
 
-- **Where:** `BOT` + `ENGINE` · `CONFIRMED`
-- **What:** AIA sets `StrikerKickoffPos = Vector3Zero` when `Is Team Kicking off`.
-  Real sample0 with Home kicking: **T1 = (0, 0)** (on the ball). Kickoff flag
-  clears by **t≈0.08s**. Instant pickup / first touch.
-- **Why weird:** Faceoff docs / other slots use ±(1,7) style; Zero reads like a
-  “default” but actually places the kicker on the ball.
-- **Ask:** Confirm intended. If not, use a circle-edge faceoff (e.g. (0, ±r) or
-  ±(1,7)) when kicking off.
+- **Where:** `BOT` + `ENGINE` · `CONFIRMED` (updated DB33 2026-07-23)
+- **What:** AIA sets `StrikerKickoffPos = Vector3Zero` when `Is Team Kicking off`
+  as a **MoveTo target**, not engine teleport. Engine faceoff places **both**
+  strikers at ±(1,7) wing spots with **free ball at origin**. Kicker walks in
+  (~1s Away open in DB33); `Is_Kickoff` clears on pickup. Older sample0 T1=(0,0)
+  / instant clear was mid-pickup, not spawn.
+- **Sim:** `place_kickoff` always wing spawn + free ball (no auto-hold). Always-on
+  match behavior — not parity-runner-only. `kickoff_delay_s` only strips GoalPause
+  wait; walk-in / hold / first kick still happen.
+- **Ask:** Document Zero as walk-in target vs spawn.
 
 ### 3. `StrikerState1 = ClearDir × 2` (no `+ playerPos`)
 
@@ -359,12 +361,18 @@ Editor / saves (workflow, not sim physics):
 - **What:** Home closing on Away carrier ≈0.45× max (contest without sitting on
   Away −Z Clear). Away closing on Home ≈0.95× (reclaims / steals on schedule).
 
-### 26. Away full-charge kick bias toward Clear F
+### 26. Away opening Clear / kick bias toward Clear F
 
 - **Where:** `SIM` (parity lever)
-- **What:** Baseline Away long release is v≈(−21,−21) = Clear F. Away Clear
-  order prefers D (−X), so sim releases were v≈(−21,−11). When Away
-  `shot_charge≥0.75`, `pos.y < -1`, and facing near −X, snap kick dir to F.
+- **What:** Baseline Away opening **faces/releases** Clear **F** (−X,−Z). Away
+  order is D→F→A…; with sim `blocker_r=body+spherecast`, Home T3 on the
+  (−5,−7) skirt blocks F so order falls to **A** (+Z) — O1.Z/Ball.Z flip vs
+  Unity DB35 (Unity parks T3 there too; spherecast geometry differs). Lever:
+  while Away holds before `first_kick_done`, force **charge facing** + full
+  charge **kick dir** to F. Do **not** force Clear-F into MoveTo (that
+  overshoots −Z and the dump flies past Home T2). Instead bias Away opening
+  carrier MoveTo to a mostly-west lead `pos+(-2,-0.55)` matching Unity's
+  charge track (O1≈(−3,−1.2) at release).
 
 ### 27. Held ball vs walls — clamp rotation / rub / walk-through bug
 
@@ -395,10 +403,50 @@ Editor / saves (workflow, not sim physics):
 
 - **Sim:** Not mirrored yet; keep this as an upstream observation until
   hold-bounds and out-of-bounds held-kick rejection are measured.
+- **Parity bar (2026-07-23):** Do **not** chase bit-perfect player move speed /
+  rotation vs Unity while held. The wall rub / walk-through / path-dependent
+  clamp injects **small unpredictable** residuals. Aim for **practical**
+  trajectory parity (Ball / O1 / T1 / MoveTo shape and timing); treat leftover
+  sub-meter jitter near walls as Unity noise, not a sim bug to overfit.
 
 ---
 
 ## Sim parity checklist (ours — not upstream)
+
+### Parity invariant (critical)
+
+**Never compare Unity against a simulation that starts from a different state.**
+
+Parity is **not**: read Unity ball/player at some tick, then let the sim use a
+“better” spawn, recomputed equivalent, or current defaults and call the RMSE a
+match. That measures two different simulations.
+
+Instead:
+
+1. Take the Unity reference TimePlot / freeze **exact** observable state.
+2. Inject that identical state into the sim.
+3. Run forward.
+4. Compare trajectories (e.g. `scripts/first2s_rmse.py`).
+
+Frozen state includes **everything observable that affects AIA**, not just
+positions: ball pos/vel, holder/held flags, player positions (and velocities if
+available), facing/rotation if exposed, stamina/charge, possession, kickoff,
+match/phase timers, cooldowns/lockouts, RNG seed / randomized decisions, and
+every API value visible to the graph.
+
+**One independent variable at a time:** when a parameter is calibrated from
+Unity (friction, restitution, delay, threshold, …), freeze it and rerun parity
+from the **same** initial snapshot. Never recalibrate while also changing the
+initial state — an RMSE improvement then cannot be attributed to either change.
+
+Also: do not change `FIXED_DT` / AIA clocks for fast scrubber (wall idle only);
+cosmetic GoalPause delay may be stripped, but kickoff/hold/first kick/MoveTo
+stay always-on.
+
+**Practical bar:** Unity held-ball can still collide with board walls (quirk
+#27) in a path-dependent / buggy way, so tiny move/rotation residuals are
+expected. Stop chasing once Ball / O1 / T1 / MoveTo first-~2s shapes and
+timings are practically close — not bit-perfect.
 
 | Item            | Notes                                                                           |
 | --------------- | ------------------------------------------------------------------------------- |
@@ -410,10 +458,10 @@ Editor / saves (workflow, not sim physics):
 | Charge          | 0.30s warmup + 0.38s to full (#19)                                              |
 | Hold offset     | **1.67 m** prefab BallHoldLocation Z (#21); body capsule **0.762**              |
 | Kickoff / Away  | Kickoff-phase circle clamp; suppress Away team-side + P3-closest                |
-| Tackle          | both lose `min(stam)`; remainder keeps / tie→tackler; lockout 0.25s (#18/#22) |
+| Tackle          | both lose `min(stam)`; remainder keeps / tie→tackler; lockout 0.25s (#18/#22)   |
 | Pickup / loose  | Hot window 0.25s; no hang body-claim; settle `<2 m/s` (#23)                     |
 | Held-ball vel   | Carrier vel (#16)                                                               |
-| Early Ball      | **t<=2 X~~0.77 Z~~1.22**; Zt2[-5.2,2.1] vs[-4.5,1.9]; t<=3 ~0.9/2.0             |
+| Early Ball      | **t<=2 X~~0.84 Z~~1.14** (DB35 Away); O1.Z~~0.41 after Clear-F face+capped lane |
 | Loose / OppHas  | early/mid match good; full-match averages shift after late goals                |
 | Chase           | Home 0.45× / Away 0.95× (#25); Away full kick → F (#26)                         |
 | Mid Ball        | t<=5 X~~5.7 Z~~8.3; t=5 Ball≈(−17,−20) vs (−22,−22) — close                     |
@@ -450,8 +498,8 @@ regenerated smoothly at **0.05/s** (~20s full) — no snap. Drain while carrying
 >    only returns an 8-way dir when a lane into the goal mouth is clear—not a
 >    raw vector to goal center. `Set First Direction` therefore usually uses
 >    clear-dir instead. Please document or rename.
-> 2. `StrikerKickoffPos = 0` when kicking off places the striker **on the ball**
->    at (0,0). Is that intended?
+> 2. `StrikerKickoffPos = 0` when kicking off is a **MoveTo** walk-in target;
+>    engine spawn keeps both strikers on ±(1,7) wings with free ball at center.
 > 3. `StrikerState1 = ClearDir * 2` omits adding player position (unlike
 >    Playmaker). Likely a graph bug.
 > 4. `StrikerSprint` never true while chasing a loose ball (all branches need

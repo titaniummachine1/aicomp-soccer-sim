@@ -109,7 +109,11 @@ pub fn step_mover(
         .filter(|d| d.length_squared() > 1e-8)
         .map(|d| d.normalize())
         .unwrap_or(want_move);
-    let sticky = is_carrier && player.charge_warmup_left > 0.0;
+    let sticky = is_carrier
+        && player.charge_warmup_left > 0.0
+        // Away opening must be allowed to yaw from walk-in +Z onto Clear F;
+        // the generic sticky reject of ~90° flips blocked exactly that turn.
+        && !(player.team == TeamId::Away && !first_kick_done);
     let allow_turn = !(sticky && want_face.dot(player.facing) < 0.25);
     if allow_turn {
         let max_rad = angular_speed_deg.to_radians() * dt;
@@ -143,16 +147,21 @@ pub fn step_mover(
 
 /// AIA kickoff bases before `TeamMultiplier` (world XZ → our xy).
 /// Home uses tm=-1, Away tm=+1.
-/// Real DebugBuild=2 (Home kicking): T1 sample0 = (0,0) — AIA's Vector3Zero
-/// when `Is Team Kicking off`. Non-kicking striker uses ±(1,7) faceoff.
+///
+/// Engine spawn is always the wing faceoff for strikers. AIA's
+/// `StrikerKickoffPos = Vector3Zero` when kicking off is a **MoveTo target**,
+/// not spawn — TimePlot DB33 (Away open): O1 starts ~(1,-7) and walks ~1s to
+/// the free ball at origin; Home T1 parks ~(-1.1, 7.67) **outside** r=7.25.
+/// Older T1=(0,0) samples are post-walk / mid-pickup, not engine teleport.
 fn aia_kickoff_base(slot: PlayerId, kicking_off: bool) -> Vec2 {
     match slot.0 {
-        // Striker: Zero when kicking off (walk to ball from center).
+        // Striker: kicker walks in from inner wing; receiver parks outside circle
+        // (DB33 Home T1 ≈ (-1.096, 7.672) → base (1.096, -7.672)).
         1 => {
             if kicking_off {
-                Vec2::ZERO
-            } else {
                 Vec2::new(1.0, -7.0)
+            } else {
+                Vec2::new(1.096, -7.672)
             }
         }
         // Playmaker
@@ -183,15 +192,9 @@ pub fn default_facing(team: TeamId) -> Vec2 {
     }
 }
 
-/// Kickoff facing. Kicking striker starts looking along ±Z so the first hold
-/// places the ball at ~(0, ±1.65) like the baseline (not along attack +X).
-pub fn kickoff_facing(team: TeamId, slot: PlayerId, kickoff_team: TeamId) -> Vec2 {
-    if slot.0 == 1 && team == kickoff_team {
-        match team {
-            TeamId::Home => Vec2::Y,
-            TeamId::Away => -Vec2::Y,
-        }
-    } else {
-        default_facing(team)
-    }
+/// Kickoff facing at spawn (wing faceoff). Opening hold ±Z is applied when the
+/// kicker actually picks up at center (possession / charge path), not by
+/// teleporting them onto the ball at place_kickoff.
+pub fn kickoff_facing(team: TeamId, _slot: PlayerId, _kickoff_team: TeamId) -> Vec2 {
+    default_facing(team)
 }

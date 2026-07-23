@@ -84,7 +84,9 @@ pub struct SimParams {
     pub stale_ball_distance_threshold_m: f32,
     /// Kickoff spawn circle margin — reserved.
     pub kickoff_spawn_circle_margin_m: f32,
-    /// Kickoff delay before play — reserved.
+    /// Cosmetic GoalPause wait after goal/whistle before `place_kickoff` (~4.9s
+    /// Unity). Viewer/quick tests may set 0 — does **not** remove Kickoff-phase
+    /// events (free ball, faceoff, walk-in hold, first kick).
     pub kickoff_delay_s: f32,
     /// Mover minimumMoveDelta — reserved.
     pub minimum_move_delta_m: f32,

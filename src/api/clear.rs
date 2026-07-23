@@ -128,6 +128,22 @@ pub fn first_clear_dir(
     None
 }
 
+/// Opening Away dump (DB35): Unity walks/releases Clear **F** (−X,−Z).
+/// Sim `blocker_r = body+spherecast` treats Home T3 on the (−5,−7) skirt as
+/// blocking F, so Away order falls D→F→**A** (+Z) and O1/Ball.Z flip sign.
+/// Force F for Away while they still hold before the first kick.
+pub fn bias_away_opening_clear_f(
+    team_is_home: bool,
+    first_kick_done: bool,
+    team_has_ball: bool,
+    computed: Option<Vec2>,
+) -> Option<Vec2> {
+    if team_is_home || first_kick_done || !team_has_ball {
+        return computed;
+    }
+    Some(SensorDir::F.unit())
+}
+
 /// "Direction of opponent/team goal from Teammate N" — **not** raw aim at the
 /// center. Real TimePlots show these are usually null; when present they are
 /// 8-way unit dirs whose ray reaches the goal mouth unobstructed.
@@ -375,5 +391,25 @@ mod tests {
         let mates = [Vec2::new(1.0, 0.0)];
         let d = clear_dir_toward_teammate(Vec2::ZERO, &mates, &[], 1.0);
         assert!(d.is_none(), "expected null for cling-distance mate, got {d:?}");
+    }
+
+    #[test]
+    fn away_opening_clear_forces_f() {
+        let a = SensorDir::A.unit();
+        let f = bias_away_opening_clear_f(false, false, true, Some(a)).unwrap();
+        assert!((f - SensorDir::F.unit()).length() < 1e-4);
+        // Home / post-kick / no ball: leave computed alone.
+        assert_eq!(
+            bias_away_opening_clear_f(true, false, true, Some(a)),
+            Some(a)
+        );
+        assert_eq!(
+            bias_away_opening_clear_f(false, true, true, Some(a)),
+            Some(a)
+        );
+        assert_eq!(
+            bias_away_opening_clear_f(false, false, false, Some(a)),
+            Some(a)
+        );
     }
 }
