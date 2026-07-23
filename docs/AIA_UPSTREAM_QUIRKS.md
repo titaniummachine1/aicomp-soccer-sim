@@ -89,18 +89,20 @@ Editor / saves (workflow, not sim physics):
 - **Note:** Stock `AIA.txt` has **0** nested `Function` calls — this quirk
   breaks _other_ graphs that nest helpers, not AIA itself.
 
-### 2. Kicking striker **MoveTo (0,0)** — engine spawn stays wing faceoff
+### 2. Kickoff walk-in is **engine-scripted** (graph control locked)
 
-- **Where:** `BOT` + `ENGINE` · `CONFIRMED` (updated DB33 2026-07-23)
-- **What:** AIA sets `StrikerKickoffPos = Vector3Zero` when `Is Team Kicking off`
-  as a **MoveTo target**, not engine teleport. Engine faceoff places **both**
-  strikers at ±(1,7) wing spots with **free ball at origin**. Kicker walks in
-  (~1s Away open in DB33); `Is_Kickoff` clears on pickup. Older sample0 T1=(0,0)
-  / instant clear was mid-pickup, not spawn.
-- **Sim:** `place_kickoff` always wing spawn + free ball (no auto-hold). Always-on
-  match behavior — not parity-runner-only. `kickoff_delay_s` only strips GoalPause
-  wait; walk-in / hold / first kick still happen.
-- **Ask:** Document Zero as walk-in target vs spawn.
+- **Where:** `ENGINE` · `CONFIRMED` (user 2026-07-23 + empty `XD.txt`)
+- **What:** During `Is Kickoff`, players **cannot** be graph-/keyboard-controlled
+  until Play (or after pickup). The kicking **striker alone** is walked to the
+  free ball at origin by the engine — even a near-empty team save (`XD.txt`)
+  still walks in. Faceoff keeps both strikers on ±(1,7) wings; ball free at
+  center. `Is_Kickoff` clears on pickup (~1s Away open in DB33/35).
+- **AIA note:** `StrikerKickoffPos = Vector3Zero` when kicking off coincides
+  with the engine walk target, but is **not** what drives the walk (empty
+  graphs still move).
+- **Sim:** `filter_kickoff` freezes all graph cmds in Kickoff; injects
+  engine walk-in (`MoveTo=ball`, walk, Interact) for kicking P1 only.
+- **Ask:** Document kickoff control lock + engine walk-in vs graph MoveTo.
 
 ### 3. `StrikerState1 = ClearDir × 2` (no `+ playerPos`)
 
@@ -336,13 +338,15 @@ Editor / saves (workflow, not sim physics):
 - **What:** Always `drain = min(T,C)` on both. Remaining stam keeps ball; both
   0 → tackler. Post-steal exchange lockout **0.25s**.
 
-### 23. Post-kick reclaim: hot window only, no hang body-snatch
+### 23. Post-kick reclaim: hot window **opening only**; mid-game = ball lockout
 
-- **Where:** `SIM` (2D stand-in for ~1s hang)
-- **What:** Kicking team excluded ~2.5s. Opponents get ~0.25s fat interact
-  (+1.0 m) for instant reclaim (Away O2 after Home release). **No** body-claim
-  during hang — long flights (real t≈3.5–10) stay loose. After hang: body claim
-  only if `ball_speed < 2`. Hot balls (>8 m/s) skip player-body bounce.
+- **Where:** `SIM` · fixed 2026-07-23 (user: cooldown is on the **ball**)
+- **What:** Opening dump: hang ~0.12s then opponent fat hot-reclaim (~0.25s).
+  Mid-game full kicks must **fly** — same-tick opponent snatch looked like
+  “max charge then ball barely moves / instant steal” (not seen in Unity).
+  Kick/exchange `pickup_lockout` is **ball-global**, not per-player.
+- **Sim:** `opening_hot_reclaim` gates the hot window; otherwise settled
+  body-claim only (`ball_speed < 2`). Hot balls (>8 m/s) skip player-body bounce.
 
 ### 24. Kickoff facing ±Z + sticky Clear facing while charging
 

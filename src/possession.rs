@@ -1,11 +1,27 @@
 //! Possession: interact at hold spot, held ball follows BallHoldLocation, kick + delay.
 
+use std::cell::Cell;
+
 use bevy::prelude::*;
 
 use crate::ball::Ball;
 use crate::brain::{BrainCommand, TeamId};
 use crate::params::SimParams;
 use crate::player::Player;
+
+/// When set (`Some(t)`), `apply_interact` prints which branch ran that tick.
+/// Used by `debug_tick_trace` — leave `None` in normal runs.
+thread_local! {
+    pub static TRACE_T: Cell<Option<f32>> = const { Cell::new(None) };
+}
+
+fn trace(msg: impl std::fmt::Display) {
+    TRACE_T.with(|c| {
+        if let Some(t) = c.get() {
+            eprintln!("[t={t:.3}] {msg}");
+        }
+    });
+}
 
 #[derive(Resource, Debug, Clone)]
 pub struct Possession {
@@ -21,6 +37,9 @@ pub struct Possession {
     /// True after the match's first charged release until the hang window ends.
     /// Opening dump (DB33): ball must fly ~0.1s before Home can hot-claim.
     pub opening_dump_hang: bool,
+    /// Ball-side flag: only the opening dump allows the fat opponent hot-reclaim
+    /// window. Mid-game kicks keep the ball lockout (no same-tick snatch).
+    pub opening_hot_reclaim: bool,
 }
 
 impl Default for Possession {
@@ -32,6 +51,7 @@ impl Default for Possession {
             kick_exclude_left: 0.0,
             first_kick_done: false,
             opening_dump_hang: false,
+            opening_hot_reclaim: false,
         }
     }
 }
@@ -41,6 +61,7 @@ pub fn tick_possession_timers(poss: &mut Possession, dt: f32) {
     poss.kick_exclude_left = (poss.kick_exclude_left - dt).max(0.0);
     if poss.kick_exclude_left <= 0.0 {
         poss.kick_exclude_team = None;
+        poss.opening_hot_reclaim = false;
     }
     // Hang only for the first ~0.12s after the opening dump.
     if poss.opening_dump_hang {
@@ -51,6 +72,17 @@ pub fn tick_possession_timers(poss: &mut Possession, dt: f32) {
         };
         if since_kick >= 0.12 {
             poss.opening_dump_hang = false;
+        }
+    }
+    // Opening hot reclaim dies with the 0.25s post-kick window.
+    if poss.opening_hot_reclaim {
+        let since_kick = if poss.kick_exclude_left > 0.0 {
+            (2.5 - poss.kick_exclude_left).clamp(0.0, 2.5)
+        } else {
+            999.0
+        };
+        if since_kick >= 0.25 {
+            poss.opening_hot_reclaim = false;
         }
     }
 }
@@ -80,7 +112,7 @@ pub fn apply_interact(
     params: &SimParams,
     dt: f32,
     carrier_stamina: Option<f32>,
-    _carrier_shot_charge: Option<f32>,
+    carrier_shot_charge: Option<f32>,
     // Some(elapsed) in Kickoff: free-ball claim waits until ≈1.0s (Unity DB33).
     kickoff_elapsed_s: Option<f32>,
 ) -> InteractOutcome {
@@ -133,7 +165,8 @@ pub fn apply_interact(
                     dir = Vec2::new(-0.707, -0.707);
                 }
             }
-            let (horiz, lift) = crate::ball::kick_launch_speeds(player.shot_charge, params);
+            let charge = player.shot_charge;
+            let (horiz, lift) = crate::ball::kick_launch_speeds(charge, params);
             ball.held = false;
             ball.vel = dir * horiz;
             ball.height = params.ball_rest_height;
@@ -143,16 +176,34 @@ pub fn apply_interact(
             player.charge_warmup_left = 0.0;
             let was_opening = !poss.first_kick_done;
             poss.carrier = None;
+            // Ball lockout (not per-player): blocks tackle/pickup until expiry.
+            // Mid-game: no hot-opp bypass → kick must actually fly.
             poss.pickup_lockout = params.pickup_delay_s;
             poss.kick_exclude_team = Some(player.team);
             poss.kick_exclude_left = 2.5;
             poss.first_kick_done = true;
             // DB33 Away opening: Ball.X keeps traveling ~0.1s before Home claims.
             poss.opening_dump_hang = was_opening;
+            poss.opening_hot_reclaim = was_opening;
+            trace(format!(
+                "KICK {:?} P{} charge={charge:.2} horiz={horiz:.1} dir=({:.2},{:.2}) ball→({:.1},{:.1})",
+                player.team,
+                player.id.0,
+                dir.x,
+                dir.y,
+                ball.pos.x,
+                ball.pos.y
+            ));
             return InteractOutcome {
                 drain: None,
                 shot: true,
             };
+        }
+        if player.shot_charge > 0.0 {
+            trace(format!(
+                "CHARGE_CLEAR_NO_KICK {:?} P{} charge was {:.2} (Interact false, charge≤0.05)",
+                player.team, player.id.0, player.shot_charge
+            ));
         }
         player.shot_charge = 0.0;
         player.charge_warmup_left = 0.0;
@@ -163,8 +214,8 @@ pub fn apply_interact(
         return InteractOutcome::default();
     }
 
-    // Shared lockout after kick/steal — blocks tackle + loose pickup, except
-    // the post-kick opponent hot window (Home reclaim ~0.06s after Away release).
+    // Shared BALL lockout after kick/steal — not per-player. Blocks tackle +
+    // loose pickup. Opening dump alone may bypass via hot_opp (Home reclaim).
     if poss.pickup_lockout > 0.0 {
         let excluded = matches!(poss.kick_exclude_team, Some(t) if t == player.team);
         let since_kick = if poss.kick_exclude_left > 0.0 {
@@ -172,7 +223,10 @@ pub fn apply_interact(
         } else {
             999.0
         };
-        let hot_opp = !excluded && since_kick < 0.25;
+        let hot_opp = !excluded
+            && since_kick < 0.25
+            && poss.opening_hot_reclaim
+            && !poss.opening_dump_hang;
         if !hot_opp {
             return InteractOutcome::default();
         }
@@ -203,10 +257,23 @@ pub fn apply_interact(
                         poss.carrier = Some((player.team, player.id.0));
                         player.shot_charge = 0.0;
                         player.charge_warmup_left = params.shot_charge_warmup_s;
+                        // Ball exchange lockout (global), not a per-player gate.
                         poss.pickup_lockout = params.pickup_delay_after_exchange_s;
+                        trace(format!(
+                            "STEAL {:?} P{} from {:?} P{} drain={drain:.2} (carrier had charge={:.2})",
+                            player.team,
+                            player.id.0,
+                            ct,
+                            cid,
+                            carrier_shot_charge.unwrap_or(-1.0)
+                        ));
                     } else {
-                        // Failed contest still briefly locks re-tackle spam.
+                        // Failed contest still briefly locks the ball vs re-tackle spam.
                         poss.pickup_lockout = 0.40;
+                        trace(format!(
+                            "TACKLE_FAIL {:?} P{} on {:?} P{} drain={drain:.2}",
+                            player.team, player.id.0, ct, cid
+                        ));
                     }
                     return InteractOutcome {
                         drain: Some(CarrierStaminaDrain {
@@ -234,16 +301,19 @@ pub fn apply_interact(
         let ball_speed = ball.vel.length();
         // Claim paths:
         //   - goalie in interact
-        //   - ~0.25s post-kick opponent interact window (Away O2 reclaim)
-        //   - no body-snatch during ~1s hang (long flights stay loose)
-        //   - after hang: nearly settled body contact only
+        //   - opening dump only: ~0.25s post-kick opponent hot window
+        //   - no body-snatch while airborne (mid-game full kicks must fly)
+        //   - settled body contact only otherwise
         let excluded = matches!(poss.kick_exclude_team, Some(t) if t == player.team);
         let since_kick = if poss.kick_exclude_left > 0.0 {
             (2.5 - poss.kick_exclude_left).clamp(0.0, 2.5)
         } else {
             999.0
         };
-        let hot_opp_window = !excluded && since_kick < 0.25 && !poss.opening_dump_hang;
+        let hot_opp_window = !excluded
+            && since_kick < 0.25
+            && poss.opening_hot_reclaim
+            && !poss.opening_dump_hang;
         // Prefer real hang (hidden Y) over the old fixed 1s since_kick stand-in.
         let airborne = !ball.grounded(params);
         // Capsule sum (no extra pad). During Kickoff, also wait until ~1.0s
@@ -283,6 +353,7 @@ pub fn apply_interact(
                 .pickup_delay_after_exchange_s
                 .max(poss.pickup_lockout);
             poss.opening_dump_hang = false;
+            poss.opening_hot_reclaim = false;
             if !excluded {
                 poss.kick_exclude_team = None;
                 poss.kick_exclude_left = 0.0;

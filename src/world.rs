@@ -173,7 +173,13 @@ impl MatchWorld {
                     .find(|p| p.team == t && p.id.0 == cid)
                     .map(|p| p.shot_charge)
             });
-            let cmd = filter_kickoff(&self.players[i], raw, &self.match_state, &self.params);
+            let cmd = filter_kickoff(
+                &self.players[i],
+                raw,
+                &self.match_state,
+                &self.params,
+                self.ball.pos,
+            );
             let cmd = project_move_outside_kickoff_circle(
                 &self.players[i],
                 cmd,
@@ -401,15 +407,28 @@ fn filter_kickoff(
     cmd: BrainCommand,
     match_state: &MatchState,
     params: &SimParams,
+    ball_pos: Vec2,
 ) -> BrainCommand {
     if kickoff_control_allowed(player.team, player.id, match_state, params) {
-        cmd
-    } else {
-        BrainCommand {
-            move_to: player.pos,
+        return cmd;
+    }
+    // Engine-scripted kickoff walk-in (user 2026-07-23): empty team configs
+    // still send the kicking striker to the free ball; graph MoveTo is ignored
+    // until Play / pickup. Everyone else idles on faceoff.
+    if match_state.phase == MatchPhase::Kickoff
+        && player.team == match_state.kickoff_team
+        && player.id.0 == 1
+    {
+        return BrainCommand {
+            move_to: ball_pos,
             sprint: false,
-            interact: false,
-        }
+            interact: true,
+        };
+    }
+    BrainCommand {
+        move_to: player.pos,
+        sprint: false,
+        interact: false,
     }
 }
 
@@ -609,7 +628,8 @@ mod tests {
             .iter()
             .map(|p| (p.team, p.id.0, p.pos))
             .collect();
-        // Everyone commanded toward the ball — filter must freeze non-strikers.
+        // Everyone commanded toward the ball — graph cmds must be ignored;
+        // only engine walk-in moves kicking P1.
         let toward_ball = || {
             let mut out = BrainOutput::default();
             for id in PlayerId::ALL {
@@ -634,7 +654,10 @@ mod tests {
                 .unwrap();
             let moved = (p.pos - pos0).length();
             if team == TeamId::Away && id == 1 {
-                assert!(moved > 0.5, "kicking striker should walk in; moved={moved}");
+                assert!(
+                    moved > 0.5,
+                    "engine walk-in should move kicking striker; moved={moved}"
+                );
             } else {
                 assert!(
                     moved < 0.05,
@@ -642,6 +665,33 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn kickoff_engine_walk_in_even_when_brains_idle() {
+        // Mirrors empty Unity team (XD.txt): no useful MoveTo, striker still walks.
+        let params = SimParams::default();
+        let mut world = MatchWorld::new_kickoff_opening(params, TeamId::Home);
+        let idle = BrainOutput::default();
+        let start = world
+            .players
+            .iter()
+            .find(|p| p.team == TeamId::Home && p.id.0 == 1)
+            .unwrap()
+            .pos;
+        for _ in 0..20 {
+            world.step_with_commands(&idle, &idle, FIXED_DT);
+        }
+        let end = world
+            .players
+            .iter()
+            .find(|p| p.team == TeamId::Home && p.id.0 == 1)
+            .unwrap()
+            .pos;
+        assert!(
+            (end - start).length() > 0.5,
+            "idle brains must still get engine kickoff walk-in; start={start:?} end={end:?}"
+        );
     }
 
     #[test]

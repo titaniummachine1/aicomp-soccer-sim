@@ -203,16 +203,16 @@ pub fn receiving_team_circle_locked(match_state: &MatchState) -> bool {
 }
 
 pub fn kickoff_control_allowed(
-    team: TeamId,
-    player_id: crate::player::PlayerId,
+    _team: TeamId,
+    _player_id: crate::player::PlayerId,
     match_state: &MatchState,
     _params: &SimParams,
 ) -> bool {
     match match_state.phase {
         MatchPhase::Play => true,
         MatchPhase::GoalPause => false,
-        // Only the kicking-off *striker* walks in (AIA StrikerKickoffPos→0).
-        // P2–P4 on the kicking team stay on faceoff until Play / first touch.
-        MatchPhase::Kickoff => team == match_state.kickoff_team && player_id.0 == 1,
+        // Kickoff: no graph/keyboard control for anyone. Engine scripts the
+        // kicking striker walk-in (empty XD.txt still walks to the ball).
+        MatchPhase::Kickoff => false,
     }
 }
