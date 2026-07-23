@@ -96,7 +96,29 @@ impl BrainInput {
     pub fn parse(s: &str) -> Result<Self, String> {
         let t = s.trim();
         if let Some(rest) = t.strip_prefix("graph:") {
-            return Ok(Self::Graph(PathBuf::from(rest)));
+            let path = PathBuf::from(rest);
+
+            if path.exists() {
+                return Ok(Self::Graph(path));
+            }
+
+            let saves_dir = soccer_saves_dir();
+            let saves_path = saves_dir.join(&path);
+            if saves_path.exists() && saves_path.is_file() {
+                return Ok(Self::Graph(saves_path));
+            }
+
+            let txt_path = saves_dir.join(&path).with_extension("txt");
+            if txt_path.exists() && txt_path.is_file() {
+                return Ok(Self::Graph(txt_path));
+            }
+
+            return Err(format!(
+                "None of the following paths were valid:\n{}\n{}\n{}",
+                path.display(),
+                saves_path.display(),
+                txt_path.display()
+            ));
         }
         match t.to_ascii_lowercase().as_str() {
             "chase" => Ok(Self::Chase),
