@@ -175,12 +175,14 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
             // Fat nearby during post-kick opponent reclaim window so Interact
             // stays true out to the same reach as possession hot_opp_window.
             let since_kick = if world.possession.kick_exclude_left > 0.0 {
-                (2.5 - world.possession.kick_exclude_left).clamp(0.0, 2.5)
+                (3.0 - world.possession.kick_exclude_left).clamp(0.0, 3.0)
             } else {
                 999.0
             };
-            let hot_near = !matches!(world.possession.kick_exclude_team, Some(t) if t == team)
-                && since_kick < 0.25;
+            let hot_near = !matches!(
+                world.possession.kick_exclude_shooter,
+                Some((t, _)) if t == team
+            ) && since_kick < 0.25;
             let near_r = if hot_near {
                 params.interact_radius + 1.0
             } else {
@@ -199,12 +201,14 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
                 .length()
                 .min((p.pos - world.ball.pos).length());
             let since_kick = if world.possession.kick_exclude_left > 0.0 {
-                (2.5 - world.possession.kick_exclude_left).clamp(0.0, 2.5)
+                (3.0 - world.possession.kick_exclude_left).clamp(0.0, 3.0)
             } else {
                 999.0
             };
-            let hot_near = !matches!(world.possession.kick_exclude_team, Some(t) if t == opp)
-                && since_kick < 0.25;
+            let hot_near = !matches!(
+                world.possession.kick_exclude_shooter,
+                Some((t, _)) if t == opp
+            ) && since_kick < 0.25;
             let near_r = if hot_near {
                 params.interact_radius + 1.0
             } else {

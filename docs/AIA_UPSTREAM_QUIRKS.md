@@ -338,16 +338,16 @@ Editor / saves (workflow, not sim physics):
 - **What:** Always `drain = min(T,C)` on both. Remaining stam keeps ball; both
   0 → tackler. Post-steal exchange lockout **0.25s**.
 
-### 23. Post-kick reclaim: hot window **opening only**; mid-air Interact OK
+### 23. Post-kick reclaim: ball lockout + **shooter-alone** exclude
 
-- **Where:** `SIM` · fixed 2026-07-23 (user: cooldown is on the **ball**)
-- **What:** Opening dump: hang ~0.12s then opponent fat hot-reclaim (~0.25s).
-  Mid-game: ball `pickup_lockout` blocks same-tick snatch. After that, **Interact
-  is XZ-only** — lofted balls are catchable mid-air (height is bounce physics
-  only). Old `airborne⇒deny` + kicking-team `speed<2` gate made balls fly
-  through teammates.
-- **Sim:** `opening_hot_reclaim` gates opening hot window; else Interact + XZ
-  in radius. Hot balls (>8 m/s) still skip *body bounce*, not Interact claim.
+- **Where:** `ENGINE`/`SIM` · scrapes + fixed 2026-07-23
+- **What:** SoccerBall inspector: *“How long the **shooter alone** cannot
+  re-pickup/tackle after releasing a shot…”* (~**3.0s** float). Global after-shot
+  delay **0.125s** (ball lockout — nobody). Teammates/opponents may Interact
+  mid-air after that (XZ only). Opening dump still has hang + fat hot reclaim.
+- **Sim:** `pickup_lockout` = ball; `kick_exclude_shooter` = kicker only (not
+  whole team). Old team-wide exclude + mid-air allow let the kicker reclaim
+  instantly when Interact flipped back on.
 
 ### 24. Kickoff facing ±Z + sticky Clear facing while charging
 

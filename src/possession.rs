@@ -27,10 +27,10 @@ fn trace(msg: impl std::fmt::Display) {
 pub struct Possession {
     pub carrier: Option<(TeamId, u8)>,
     pub pickup_lockout: f32,
-    /// After a kick, this team cannot body-snatch the hot ball (only settled
-    /// pickups). Stops kick→0.06s lockout→same-team reclaim spam that crushed
-    /// loose %; opponents may still body-reclaim (Away O2 ~0.06s).
-    pub kick_exclude_team: Option<TeamId>,
+    /// After a kick, the **shooter alone** cannot re-pickup/tackle for a few
+    /// seconds (SoccerBall inspector: “shooter alone cannot re-pickup/tackle…”;
+    /// serialized ~3.0s). Teammates may still mid-air claim after ball lockout.
+    pub kick_exclude_shooter: Option<(TeamId, u8)>,
     pub kick_exclude_left: f32,
     /// After the first kick of the match, opp-carrier chase is slowed.
     pub first_kick_done: bool,
@@ -47,7 +47,7 @@ impl Default for Possession {
         Self {
             carrier: None,
             pickup_lockout: 0.0,
-            kick_exclude_team: None,
+            kick_exclude_shooter: None,
             kick_exclude_left: 0.0,
             first_kick_done: false,
             opening_dump_hang: false,
@@ -60,13 +60,13 @@ pub fn tick_possession_timers(poss: &mut Possession, dt: f32) {
     poss.pickup_lockout = (poss.pickup_lockout - dt).max(0.0);
     poss.kick_exclude_left = (poss.kick_exclude_left - dt).max(0.0);
     if poss.kick_exclude_left <= 0.0 {
-        poss.kick_exclude_team = None;
+        poss.kick_exclude_shooter = None;
         poss.opening_hot_reclaim = false;
     }
     // Hang only for the first ~0.12s after the opening dump.
     if poss.opening_dump_hang {
         let since_kick = if poss.kick_exclude_left > 0.0 {
-            (2.5 - poss.kick_exclude_left).clamp(0.0, 2.5)
+            (3.0 - poss.kick_exclude_left).clamp(0.0, 3.0)
         } else {
             999.0
         };
@@ -77,7 +77,7 @@ pub fn tick_possession_timers(poss: &mut Possession, dt: f32) {
     // Opening hot reclaim dies with the 0.25s post-kick window.
     if poss.opening_hot_reclaim {
         let since_kick = if poss.kick_exclude_left > 0.0 {
-            (2.5 - poss.kick_exclude_left).clamp(0.0, 2.5)
+            (3.0 - poss.kick_exclude_left).clamp(0.0, 3.0)
         } else {
             999.0
         };
@@ -176,11 +176,12 @@ pub fn apply_interact(
             player.charge_warmup_left = 0.0;
             let was_opening = !poss.first_kick_done;
             poss.carrier = None;
-            // Ball lockout (not per-player): blocks tackle/pickup until expiry.
-            // Mid-game: no hot-opp bypass → kick must actually fly.
+            // Ball lockout (global 0.125s): nobody grabs same-tick / instantly.
             poss.pickup_lockout = params.pickup_delay_s;
-            poss.kick_exclude_team = Some(player.team);
-            poss.kick_exclude_left = 2.5;
+            // Shooter alone (~3s from SoccerBall): cannot re-pickup/tackle.
+            // Teammates may mid-air claim after the ball lockout.
+            poss.kick_exclude_shooter = Some((player.team, player.id.0));
+            poss.kick_exclude_left = 3.0;
             poss.first_kick_done = true;
             // DB33 Away opening: Ball.X keeps traveling ~0.1s before Home claims.
             poss.opening_dump_hang = was_opening;
@@ -214,16 +215,26 @@ pub fn apply_interact(
         return InteractOutcome::default();
     }
 
-    // Shared BALL lockout after kick/steal — not per-player. Blocks tackle +
-    // loose pickup. Opening dump alone may bypass via hot_opp (Home reclaim).
+    let shooter_locked = matches!(
+        poss.kick_exclude_shooter,
+        Some((t, id)) if t == player.team && id == player.id.0
+    );
+    // SoccerBall: shooter alone cannot re-pickup/tackle after releasing a shot.
+    if shooter_locked {
+        return InteractOutcome::default();
+    }
+
+    let since_kick = if poss.kick_exclude_left > 0.0 {
+        (3.0 - poss.kick_exclude_left).clamp(0.0, 3.0)
+    } else {
+        999.0
+    };
+    let shooter_team = poss.kick_exclude_shooter.map(|(t, _)| t);
+
+    // Shared BALL lockout after kick/steal. Opening dump alone may bypass via
+    // hot_opp (opponent reclaim after hang).
     if poss.pickup_lockout > 0.0 {
-        let excluded = matches!(poss.kick_exclude_team, Some(t) if t == player.team);
-        let since_kick = if poss.kick_exclude_left > 0.0 {
-            (2.5 - poss.kick_exclude_left).clamp(0.0, 2.5)
-        } else {
-            999.0
-        };
-        let hot_opp = !excluded
+        let hot_opp = shooter_team.is_some_and(|t| t != player.team)
             && since_kick < 0.25
             && poss.opening_hot_reclaim
             && !poss.opening_dump_hang;
@@ -299,16 +310,9 @@ pub fn apply_interact(
         // Claim paths:
         //   - goalie in interact (always)
         //   - opening dump only: ~0.25s post-kick opponent hot window (fat)
-        //   - else: Interact + XZ in radius (mid-air OK). Ball lockout already
-        //     blocked same-tick snatch; do NOT require grounded / slow ball —
-        //     that made lofted balls fly through teammates.
-        let excluded = matches!(poss.kick_exclude_team, Some(t) if t == player.team);
-        let since_kick = if poss.kick_exclude_left > 0.0 {
-            (2.5 - poss.kick_exclude_left).clamp(0.0, 2.5)
-        } else {
-            999.0
-        };
-        let hot_opp_window = !excluded
+        //   - else: Interact + XZ in radius (mid-air OK). Shooter alone is
+        //     already blocked above; ball lockout blocked same-tick snatch.
+        let hot_opp_window = shooter_team.is_some_and(|t| t != player.team)
             && since_kick < 0.25
             && poss.opening_hot_reclaim
             && !poss.opening_dump_hang;
@@ -347,7 +351,7 @@ pub fn apply_interact(
                 .max(poss.pickup_lockout);
             poss.opening_dump_hang = false;
             poss.opening_hot_reclaim = false;
-            poss.kick_exclude_team = None;
+            poss.kick_exclude_shooter = None;
             poss.kick_exclude_left = 0.0;
             trace(format!(
                 "PICKUP {:?} P{} dist={dist:.2} was_speed={speed_before:.1} was_height={height_before:.2}",
@@ -563,7 +567,7 @@ mod tests {
             held: false,
         };
         let mut poss = Possession {
-            kick_exclude_team: Some(TeamId::Home),
+            kick_exclude_shooter: Some((TeamId::Home, 1)),
             kick_exclude_left: 2.0,
             first_kick_done: true,
             ..Default::default()
@@ -598,5 +602,53 @@ mod tests {
         assert_eq!(poss.carrier, Some((TeamId::Home, 2)));
         assert!(ball.held);
         assert!(ball.grounded(&params));
+    }
+
+    #[test]
+    fn shooter_cannot_repickup_while_exclude_active() {
+        // Prefab: “shooter alone cannot re-pickup/tackle after releasing a shot”.
+        let params = SimParams::default();
+        let mut ball = Ball {
+            pos: Vec2::new(0.5, 0.0),
+            vel: Vec2::new(15.0, 0.0),
+            height: params.ball_rest_height + 1.0,
+            vel_y: 2.0,
+            held: false,
+        };
+        let mut poss = Possession {
+            kick_exclude_shooter: Some((TeamId::Home, 1)),
+            kick_exclude_left: 2.5,
+            first_kick_done: true,
+            ..Default::default()
+        };
+        let mut shooter = Player {
+            team: TeamId::Home,
+            id: PlayerId(1),
+            pos: Vec2::ZERO,
+            vel: Vec2::ZERO,
+            facing: Vec2::X,
+            stamina: 1.0,
+            stamina_regen_lock_left: 0.0,
+            shot_charge: 0.0,
+            charge_warmup_left: 0.0,
+        };
+        let cmd = BrainCommand {
+            move_to: Vec2::X,
+            sprint: false,
+            interact: true,
+        };
+        apply_interact(
+            &mut shooter,
+            &mut ball,
+            &mut poss,
+            cmd,
+            &params,
+            0.019,
+            None,
+            None,
+            None,
+        );
+        assert!(poss.carrier.is_none());
+        assert!(!ball.held);
     }
 }
