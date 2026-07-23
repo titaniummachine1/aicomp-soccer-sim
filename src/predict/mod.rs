@@ -35,8 +35,7 @@ pub fn predict_ball_path(
     dt: f32,
     max_horizon_s: f32,
 ) -> Vec<BallSample> {
-    predict_ball_path_until_intercept(ball, params, dt, max_horizon_s, &[], 0.0)
-        .0
+    predict_ball_path_until_intercept(ball, params, dt, max_horizon_s, &[], 0.0).0
 }
 
 /// Advance the free ball until it stops/goals **or** the earliest player among
@@ -263,10 +262,7 @@ fn reachable_post_aims(
         }
         half = (half * 0.75).max(0.75);
     }
-    (
-        Vec2::new(own_goal_x, half),
-        Vec2::new(own_goal_x, -half),
-    )
+    (Vec2::new(own_goal_x, half), Vec2::new(own_goal_x, -half))
 }
 
 /// Half-angle α = θ/2 of the shot cone ∠LAR at the attacker.
@@ -311,12 +307,7 @@ fn path_goal_time(path: &[BallSample]) -> Option<f32> {
 }
 
 /// True if GK at `gk` can touch the ball on `path` before it goals.
-fn gk_can_intercept_scoring_path(
-    gk: Vec2,
-    path: &[BallSample],
-    gk_speed: f32,
-    reach: f32,
-) -> bool {
+fn gk_can_intercept_scoring_path(gk: Vec2, path: &[BallSample], gk_speed: f32, reach: f32) -> bool {
     if !path_scores_goal(path) {
         // Not a legal scoring threat — nothing to seal.
         return true;
@@ -368,11 +359,7 @@ pub fn gk_stand_seals_scoring_extremes(
         .all(|(_, path)| gk_can_intercept_scoring_path(gk, path, gk_speed, reach))
 }
 
-fn gk_axis_toward_goal(
-    shot_origin: Vec2,
-    own_goal_x: f32,
-    goal_half_width: f32,
-) -> Option<Vec2> {
+fn gk_axis_toward_goal(shot_origin: Vec2, own_goal_x: f32, goal_half_width: f32) -> Option<Vec2> {
     goal_bisector(shot_origin, own_goal_x, goal_half_width).or_else(|| {
         let mouth = Vec2::new(
             own_goal_x,
@@ -513,12 +500,68 @@ pub fn gk_clamp_to_cover_plane(mut p: Vec2, cover_x: f32, own_goal_x: f32) -> Ve
     p
 }
 
-/// Held-ball GK stand + tackle. Uses the **same** [`crate::possession::apply_interact`]
-/// contest as every other player (no Scenario-1 fork).
+/// Held-ball cover and press policy.
 ///
-/// - Out of Interact range: MoveTo closest safe cover.
-/// - In Interact range of the ball: MoveTo the ball and Interact — stam duel
-///   decides the steal (tackler with ≥ carrier stam always wins).
+/// `carrier` is the opponent body center and is the shot/seal origin.
+/// `ball` is only used for Unity's held-ball interaction reach.
+pub fn gk_held_cover_and_press(
+    me: Vec2,
+    carrier: Vec2,
+    carrier_vel: Vec2,
+    ball: Vec2,
+    own_goal_x: f32,
+    goal_half_width: f32,
+    params: &SimParams,
+    gk_speed: f32,
+) -> (Vec2, bool, Vec2) {
+    let cover = gk_closest_safe_stand(carrier, own_goal_x, goal_half_width, params, gk_speed);
+    let sealed_now = gk_stand_seals_scoring_extremes(
+        me,
+        carrier,
+        own_goal_x,
+        goal_half_width,
+        params,
+        gk_speed,
+    );
+    let on_plane = gk_on_or_behind_cover(me.x, cover.x, own_goal_x);
+    let in_reach = me.distance(ball) <= params.interact_radius;
+    if sealed_now && on_plane && in_reach {
+        let lead_t = (me.distance(carrier) / gk_speed.max(0.1)).clamp(0.0, 0.55);
+        let intercept = carrier + carrier_vel * lead_t;
+        let press = gk_clamp_to_cover_plane(intercept, cover.x, own_goal_x);
+        let move_to = if gk_stand_seals_scoring_extremes(
+            press,
+            carrier,
+            own_goal_x,
+            goal_half_width,
+            params,
+            gk_speed,
+        ) {
+            press
+        } else {
+            cover
+        };
+        return (move_to, true, cover);
+    }
+    (cover, false, cover)
+}
+
+/// Compatibility wrapper for callers that still use the old name.
+pub fn gk_held_lead_cover(
+    me: Vec2,
+    ball: Vec2,
+    _ball_vel: Vec2,
+    own_goal_x: f32,
+    goal_half_width: f32,
+    params: &SimParams,
+    gk_speed: f32,
+) -> (Vec2, Vec2) {
+    let cover = gk_closest_safe_stand(ball, own_goal_x, goal_half_width, params, gk_speed);
+    let _ = me;
+    (cover, ball)
+}
+
+/// Compatibility wrapper for the old press API.
 pub fn gk_cover_press_target(
     me: Vec2,
     shot_origin: Vec2,
@@ -528,14 +571,17 @@ pub fn gk_cover_press_target(
     params: &SimParams,
     gk_speed: f32,
 ) -> (Vec2, bool) {
-    let reach = params.interact_radius;
-    // Must match apply_interact's radius exactly (no 1.2× cheese band).
-    let in_reach = me.distance(tackle_at) <= reach;
-    if in_reach {
-        return (tackle_at, true);
-    }
-    let cover = gk_closest_safe_stand(shot_origin, own_goal_x, goal_half_width, params, gk_speed);
-    (cover, false)
+    let (move_to, try_tackle, _) = gk_held_cover_and_press(
+        me,
+        shot_origin,
+        Vec2::ZERO,
+        tackle_at,
+        own_goal_x,
+        goal_half_width,
+        params,
+        gk_speed,
+    );
+    (move_to, try_tackle)
 }
 
 /// Classic cone-bisector cover (O(1) geometric fallback).
@@ -727,8 +773,13 @@ pub fn best_long_clear_dir(
             held: false,
         };
         let path = predict_ball_path(&ball, params, FIXED_DT, 3.5);
-        let unsafe_near =
-            path_interceptable_near(&path, opponents, params.interact_radius, origin, safe_radius);
+        let unsafe_near = path_interceptable_near(
+            &path,
+            opponents,
+            params.interact_radius,
+            origin,
+            safe_radius,
+        );
         let mut score = 0.0;
         if let Some(last) = path.last() {
             score += (last.pos.x - origin.x) * attack_sign * 4.0;
@@ -802,7 +853,8 @@ pub fn best_safe_clear_dir(
             held: false,
         };
         let path = predict_ball_path(&ball, params, FIXED_DT, 2.0);
-        let unsafe_near = path_interceptable_near(&path, opponents, params.interact_radius, origin, safe_r);
+        let unsafe_near =
+            path_interceptable_near(&path, opponents, params.interact_radius, origin, safe_r);
         let mut min_sep = f32::MAX;
         for s in &path {
             for c in opponents {
@@ -1037,8 +1089,7 @@ mod tests {
                 );
             }
         }
-        let (target, try_tackle) =
-            gk_cover_press_target(me, shot, shot, 39.5, 6.0, &params, 8.0);
+        let (target, try_tackle) = gk_cover_press_target(me, shot, shot, 39.5, 6.0, &params, 8.0);
         assert!((target - cover).length() < 1e-3);
         assert!(!try_tackle);
         // Ball past GK → retarget cover, never walk onto the ball.
@@ -1050,19 +1101,16 @@ mod tests {
         assert!((stand - past).length() > 0.5);
         let near = cover;
         let ball_near = near + Vec2::new(-1.0, 0.0);
-        let (stand_near, tackle_near) = gk_cover_press_target(
-            near,
-            ball_near,
-            ball_near,
-            39.5,
-            6.0,
-            &params,
-            8.0,
-        );
-        assert!(tackle_near, "ball inside interact radius → Interact");
+        let seal = gk_closest_safe_stand(ball_near, 39.5, 6.0, &params, 8.0);
+        let (stand_near, tackle_near) =
+            gk_cover_press_target(seal, ball_near, ball_near, 39.5, 6.0, &params, 8.0);
         assert!(
-            (stand_near - ball_near).length() < 1e-3,
-            "in-range press MoveTo's the ball, got {stand_near:?}"
+            tackle_near,
+            "ball inside interact radius on seal → Interact"
+        );
+        assert!(
+            crate::predict::gk_on_or_behind_cover(stand_near.x, seal.x, 39.5),
+            "press must stay on/behind cover, stand={stand_near:?} seal={seal:?}"
         );
     }
 

@@ -513,27 +513,66 @@ impl TitaniumBrain {
         }
         self.flick_dir = None;
 
-        // Opponent holds the ball: go to the ball and Interact in range.
-        // Steal uses the global apply_interact stam duel (tackler ≥ carrier wins).
-        // No Scenario-1 fork — same path as any other player.
+        // Opponent holds: seal from the carrier body. The held ball is only
+        // the interaction point; ball velocity is the carrier lead velocity.
         if opp_has_ball {
-            let cover = gk_intercept_cover(
+            let carrier = Self::opp_carrier_pos(api).unwrap_or(ball);
+            let my_stam = api.get_float("Team Player 4 Stamina").unwrap_or(1.0);
+            let carrier_stam = api
+                .get_float("Ball Carrier Stamina")
+                .or_else(|| {
+                    for id in 1u8..=4 {
+                        let has_label = match id {
+                            1 => "Opponent Player 1 Has Ball",
+                            2 => "Opponent Player 2 Has Ball",
+                            3 => "Opponent Player 3 Has Ball",
+                            _ => "Opponent Player 4 Has Ball",
+                        };
+                        if api.get_bool(has_label).unwrap_or(false) {
+                            return api.get_float(&format!("Opponent Player {id} Stamina"));
+                        }
+                    }
+                    None
+                })
+                .unwrap_or(1.0);
+            let (move_to, try_tackle, _cover) = crate::predict::gk_held_cover_and_press(
+                me,
+                carrier,
+                ball_vel,
                 ball,
                 own_x,
                 params.goal_half_width,
                 params,
                 SPRINT,
             );
-            self.emit_held_cover_debug(me, ball, cover, own_x, params.goal_half_width, reach);
-            let in_reach = me.distance(ball) <= reach;
+            let stam_ok = my_stam > carrier_stam + 1e-4;
+            let try_tackle = try_tackle && stam_ok;
+            self.emit_held_cover_debug(
+                me,
+                carrier,
+                carrier,
+                move_to,
+                own_x,
+                params.goal_half_width,
+                reach,
+            );
+            let sealed = crate::predict::gk_stand_seals_scoring_extremes(
+                me,
+                carrier,
+                own_x,
+                params.goal_half_width,
+                params,
+                SPRINT,
+            );
+            let sprint = !sealed && !try_tackle && stam_ok;
             return BrainCommand {
-                move_to: ball,
-                sprint: true,
-                interact: in_reach,
+                move_to,
+                sprint,
+                interact: try_tackle,
             };
         }
 
-        // Loose / free ball: intercept race (still global predict, not a tackle duel).
+        // Loose / free ball: intercept race — sprint is necessary to win the race.
         if ball_loose || ball_vel.length_squared() > 0.25 {
             let ball_state = Ball {
                 pos: ball,
@@ -594,12 +633,30 @@ impl TitaniumBrain {
             };
         }
 
-        // Idle: sit deepest safe cover facing the ball.
-        let cover = gk_intercept_cover(ball, own_x, params.goal_half_width, params, SPRINT);
-        self.emit_held_cover_debug(me, ball, cover, own_x, params.goal_half_width, reach);
+        // Idle: move to deepest safe cover for the opponent carrier, not the
+        // held-ball offset.
+        let carrier = Self::opp_carrier_pos(api).unwrap_or(ball);
+        let cover = gk_intercept_cover(carrier, own_x, params.goal_half_width, params, SPRINT);
+        self.emit_held_cover_debug(
+            me,
+            carrier,
+            carrier,
+            cover,
+            own_x,
+            params.goal_half_width,
+            reach,
+        );
+        let sealed = crate::predict::gk_stand_seals_scoring_extremes(
+            me,
+            carrier,
+            own_x,
+            params.goal_half_width,
+            params,
+            SPRINT,
+        );
         BrainCommand {
             move_to: cover,
-            sprint: me.distance(cover) > 1.5,
+            sprint: !sealed && me.distance(cover) > 0.35,
             interact: false,
         }
     }
@@ -634,7 +691,9 @@ impl TitaniumBrain {
                 });
             }
         }
-        let gk_idx = cands.iter().position(|c| (c.pos - me).length_squared() < 1e-4);
+        let gk_idx = cands
+            .iter()
+            .position(|c| (c.pos - me).length_squared() < 1e-4);
         if let Some((ci, hit)) = best {
             let col = if gk_idx == Some(ci) {
                 "Purple"
@@ -656,9 +715,26 @@ impl TitaniumBrain {
         debug_draw::line(ball, right, 1.0, "Yellow");
     }
 
+    fn opp_carrier_pos(api: &TeamApi) -> Option<Vec2> {
+        for id in 1u8..=4 {
+            let has = match id {
+                1 => api.get_bool("Opponent Player 1 Has Ball"),
+                2 => api.get_bool("Opponent Player 2 Has Ball"),
+                3 => api.get_bool("Opponent Player 3 Has Ball"),
+                _ => api.get_bool("Opponent Player 4 Has Ball"),
+            }
+            .unwrap_or(false);
+            if has {
+                return api.get_transform(&format!("Opponent Player {id}"));
+            }
+        }
+        None
+    }
+
     fn emit_held_cover_debug(
         &self,
         me: Vec2,
+        carrier: Vec2,
         shot_origin: Vec2,
         press: Vec2,
         own_goal_x: f32,
@@ -667,14 +743,21 @@ impl TitaniumBrain {
     ) {
         let mouth_l = Vec2::new(own_goal_x, goal_half);
         let mouth_r = Vec2::new(own_goal_x, -goal_half);
-        let cover =
-            crate::predict::gk_closest_safe_stand(shot_origin, own_goal_x, goal_half, &self.params, SPRINT);
+        let cover = crate::predict::gk_closest_safe_stand(
+            shot_origin,
+            own_goal_x,
+            goal_half,
+            &self.params,
+            SPRINT,
+        );
         let deep_x = crate::predict::gk_cover_x(own_goal_x, reach);
         let extremes =
             crate::predict::gk_scoring_extremes(shot_origin, own_goal_x, goal_half, &self.params);
 
         debug_draw::disc(me, reach, 1.0, "Cyan");
-        debug_draw::disc(shot_origin, 0.25, 1.0, "Yellow");
+        debug_draw::disc(carrier, 0.35, 1.0, "Yellow");
+        debug_draw::disc(shot_origin, 0.25, 1.0, "Cyan");
+        // `shot_origin` is the carrier body center, never the held-ball offset.
         debug_draw::line(mouth_l, mouth_r, 1.0, "Orange");
         // Legal scoring extremes (not raw geometric posts).
         if extremes.is_empty() {
@@ -691,11 +774,11 @@ impl TitaniumBrain {
         debug_draw::line(shot_origin, cover, 1.0, "Green");
         debug_draw::disc(cover, 0.3, 1.0, "Green");
         debug_draw::disc(cover, reach, 1.0, "Green");
-        // Max-advance line at closest safe depth.
+        // Max-advance line at cover depth, centered on the carrier body.
         let max_half = (goal_half * 2.2).max(10.0);
         debug_draw::line(
-            Vec2::new(cover.x, max_half),
-            Vec2::new(cover.x, -max_half),
+            Vec2::new(cover.x, carrier.y + max_half),
+            Vec2::new(cover.x, carrier.y - max_half),
             3.0,
             "Magenta",
         );

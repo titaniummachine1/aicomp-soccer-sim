@@ -23,7 +23,8 @@ use crate::match_state::{
 use crate::params::SimParams;
 use crate::player::{faceoff_world, kickoff_facing, step_mover, Player, PlayerId, SimpleMover};
 use crate::possession::{
-    apply_interact, reset_possession_for_kickoff, sync_held_ball, tick_possession_timers, Possession,
+    apply_interact, reset_possession_for_kickoff, sync_held_ball, tick_possession_timers,
+    Possession,
 };
 
 /// Confirmed AIComp fixed step (~52.6 Hz). Independent of render FPS.
@@ -587,6 +588,85 @@ fn tick_stamina(player: &mut Player, sprint: bool, dt: f32, params: &SimParams) 
 mod tests {
     use super::*;
     use crate::brain::ChaseBallBrain;
+
+    #[test]
+    fn idle_carrier_stand_still_gk_steals_with_full_stam() {
+        use crate::brain::{BrainCommand, BrainOutput, TeamBrain};
+        use crate::player::PlayerId;
+        use crate::titanium::{
+            apply_1v1_freeze, repark_1v1_inactive, setup_1v1_harness, TitaniumBrain,
+        };
+
+        let params = SimParams::default();
+        let mut world = MatchWorld::new_kickoff_opening(params, TeamId::Home);
+        setup_1v1_harness(&mut world, true, 1.0);
+        for player in &mut world.players {
+            if player.team == TeamId::Home && player.id == PlayerId(1) {
+                player.stamina = 0.85;
+            } else if player.team == TeamId::Away && player.id == PlayerId(4) {
+                player.stamina = 1.0;
+            }
+        }
+
+        let mut gk = TitaniumBrain::new(false);
+
+        let mut stole = false;
+        let mut min_atk_stam = 1.0_f32;
+        let mut min_gk_stam = 1.0_f32;
+        let mut last_atk = 1.0_f32;
+        let mut last_gk = 1.0_f32;
+
+        for tick in 0..(25.0 / FIXED_DT) as u32 {
+            let (home_api, away_api) = world.build_apis();
+            let mut home_out = BrainOutput::default();
+            // Attacker stands still, holds ball (no Interact = no charge/kick).
+            for i in 0..4 {
+                let p = &world.players[i];
+                home_out.commands[i] = BrainCommand {
+                    move_to: p.pos,
+                    sprint: false,
+                    interact: false,
+                };
+            }
+            let mut away_out = gk.think(&away_api);
+            apply_1v1_freeze(&mut home_out, &mut away_out, &world, true);
+            world.step_with_commands(&home_out, &away_out, FIXED_DT);
+            repark_1v1_inactive(&mut world, true);
+
+            let atk = world
+                .players
+                .iter()
+                .find(|p| p.team == TeamId::Home && p.id == PlayerId(1))
+                .unwrap();
+            let gkp = world
+                .players
+                .iter()
+                .find(|p| p.team == TeamId::Away && p.id == PlayerId(4))
+                .unwrap();
+            last_atk = atk.stamina;
+            last_gk = gkp.stamina;
+            min_atk_stam = min_atk_stam.min(atk.stamina);
+            min_gk_stam = min_gk_stam.min(gkp.stamina);
+
+            if matches!(world.possession.carrier, Some((TeamId::Away, 4))) {
+                stole = true;
+                eprintln!(
+                    "STEAL at t={:.2}s atk_stam={:.3} gk_stam={:.3} dist={:.2}",
+                    tick as f32 * FIXED_DT,
+                    atk.stamina,
+                    gkp.stamina,
+                    atk.pos.distance(gkp.pos)
+                );
+                break;
+            }
+        }
+
+        assert!(
+            stole,
+            "standing carrier must be tackled by GK; last atk_stam={last_atk:.3} gk_stam={last_gk:.3} min_atk={min_atk_stam:.3} min_gk={min_gk_stam:.3} carrier={:?}",
+            world.possession.carrier
+        );
+    }
 
     #[test]
     fn equal_stam_walk_in_tackle_steals_and_drains_carrier() {
