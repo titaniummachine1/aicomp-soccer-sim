@@ -338,15 +338,16 @@ Editor / saves (workflow, not sim physics):
 - **What:** Always `drain = min(T,C)` on both. Remaining stam keeps ball; both
   0 → tackler. Post-steal exchange lockout **0.25s**.
 
-### 23. Post-kick reclaim: hot window **opening only**; mid-game = ball lockout
+### 23. Post-kick reclaim: hot window **opening only**; mid-air Interact OK
 
 - **Where:** `SIM` · fixed 2026-07-23 (user: cooldown is on the **ball**)
 - **What:** Opening dump: hang ~0.12s then opponent fat hot-reclaim (~0.25s).
-  Mid-game full kicks must **fly** — same-tick opponent snatch looked like
-  “max charge then ball barely moves / instant steal” (not seen in Unity).
-  Kick/exchange `pickup_lockout` is **ball-global**, not per-player.
-- **Sim:** `opening_hot_reclaim` gates the hot window; otherwise settled
-  body-claim only (`ball_speed < 2`). Hot balls (>8 m/s) skip player-body bounce.
+  Mid-game: ball `pickup_lockout` blocks same-tick snatch. After that, **Interact
+  is XZ-only** — lofted balls are catchable mid-air (height is bounce physics
+  only). Old `airborne⇒deny` + kicking-team `speed<2` gate made balls fly
+  through teammates.
+- **Sim:** `opening_hot_reclaim` gates opening hot window; else Interact + XZ
+  in radius. Hot balls (>8 m/s) still skip *body bounce*, not Interact claim.
 
 ### 24. Kickoff facing ±Z + sticky Clear facing while charging
 

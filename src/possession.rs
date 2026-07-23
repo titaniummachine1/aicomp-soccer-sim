@@ -290,20 +290,18 @@ pub fn apply_interact(
         return InteractOutcome::default();
     }
 
-    // Pickup: hold spot (or body) within interact radius of free ball.
-    // Outfield cannot snatch a full-power fly-by (real loose streaks last
-    // seconds; sim was re-claiming after every 0.06s lockout). Goalies may
-    // claim hotter balls; anyone may claim if closing relative speed is low.
+    // Pickup: XZ interact only — ball height is bounce physics, not a claim gate
+    // (Unity catch works mid-air; game is planar for Interact).
     let body_dist = (player.pos - ball.pos).length();
     let hold_dist = (hold - ball.pos).length();
     let dist = hold_dist.min(body_dist);
     if dist <= params.interact_radius {
-        let ball_speed = ball.vel.length();
         // Claim paths:
-        //   - goalie in interact
-        //   - opening dump only: ~0.25s post-kick opponent hot window
-        //   - no body-snatch while airborne (mid-game full kicks must fly)
-        //   - settled body contact only otherwise
+        //   - goalie in interact (always)
+        //   - opening dump only: ~0.25s post-kick opponent hot window (fat)
+        //   - else: Interact + XZ in radius (mid-air OK). Ball lockout already
+        //     blocked same-tick snatch; do NOT require grounded / slow ball —
+        //     that made lofted balls fly through teammates.
         let excluded = matches!(poss.kick_exclude_team, Some(t) if t == player.team);
         let since_kick = if poss.kick_exclude_left > 0.0 {
             (2.5 - poss.kick_exclude_left).clamp(0.0, 2.5)
@@ -314,36 +312,31 @@ pub fn apply_interact(
             && since_kick < 0.25
             && poss.opening_hot_reclaim
             && !poss.opening_dump_hang;
-        // Prefer real hang (hidden Y) over the old fixed 1s since_kick stand-in.
-        let airborne = !ball.grounded(params);
-        // Capsule sum (no extra pad). During Kickoff, also wait until ~1.0s
-        // (Unity DB33 Opp pickup) — sim reaches range ~0.1s early at full walk.
-        let body_hit = body_dist < params.body_radius + params.ball_radius;
         // Unity DB33 Away claim ~0.95–1.0s (Is_Kickoff already 0.37 by t=1.0).
-        // Gate was 1.0 and left sim ~0.1s late vs the reference plot.
         let kickoff_claim_ok = kickoff_elapsed_s
             .map(|t| t >= 0.95)
             .unwrap_or(true);
         let can_claim = if player.id.0 == 4 {
             dist <= params.interact_radius
         } else if hot_opp_window {
-            // Slightly fat reach for the post-kick window — Home is often ~2–2.5 m
-            // away when Away releases the opening charge (real reclaim is instant).
+            // Slightly fat reach for the opening post-kick window — Home is
+            // often ~2–2.5 m away when Away releases (real reclaim is instant).
             dist <= params.interact_radius + 1.0
-        } else if airborne {
-            // No body-snatch during hang — real long flights (t≈3.5–10) stay
-            // loose; hot_opp_window already covers the instant Away/Home reclaim.
+        } else if poss.opening_dump_hang {
+            // Opening dump must travel ~0.12s before anyone Interact-claims.
             false
-        } else if excluded {
-            ball_speed < 2.0 && body_hit && kickoff_claim_ok
         } else {
-            // After hang: nearly settled only.
-            ball_speed < 2.0 && body_hit && kickoff_claim_ok
+            // Mid-air OK: Interact is XZ-only; Y is bounce sim only.
+            kickoff_claim_ok
         };
         if can_claim {
+            let speed_before = ball.vel.length();
+            let height_before = ball.height;
             poss.carrier = Some((player.team, player.id.0));
             ball.held = true;
             ball.vel = Vec2::ZERO;
+            ball.vel_y = 0.0;
+            ball.height = params.ball_rest_height;
             ball.pos = hold;
             player.shot_charge = 0.0;
             player.charge_warmup_left = params.shot_charge_warmup_s;
@@ -354,10 +347,12 @@ pub fn apply_interact(
                 .max(poss.pickup_lockout);
             poss.opening_dump_hang = false;
             poss.opening_hot_reclaim = false;
-            if !excluded {
-                poss.kick_exclude_team = None;
-                poss.kick_exclude_left = 0.0;
-            }
+            poss.kick_exclude_team = None;
+            poss.kick_exclude_left = 0.0;
+            trace(format!(
+                "PICKUP {:?} P{} dist={dist:.2} was_speed={speed_before:.1} was_height={height_before:.2}",
+                player.team, player.id.0
+            ));
         }
     }
     InteractOutcome::default()
@@ -554,5 +549,54 @@ mod tests {
             "weaker tackler dumps to 0, got {}",
             attacker.stamina
         );
+    }
+
+    #[test]
+    fn midair_interact_claims_xz_ignores_height() {
+        // Height is bounce-only; Interact must catch lofted balls in XZ range.
+        let params = SimParams::default();
+        let mut ball = Ball {
+            pos: Vec2::new(1.0, 0.0),
+            vel: Vec2::new(20.0, 0.0),
+            height: params.ball_rest_height + 2.5,
+            vel_y: 4.0,
+            held: false,
+        };
+        let mut poss = Possession {
+            kick_exclude_team: Some(TeamId::Home),
+            kick_exclude_left: 2.0,
+            first_kick_done: true,
+            ..Default::default()
+        };
+        let mut mate = Player {
+            team: TeamId::Home,
+            id: PlayerId(2),
+            pos: Vec2::new(1.2, 0.1),
+            vel: Vec2::ZERO,
+            facing: Vec2::X,
+            stamina: 1.0,
+            stamina_regen_lock_left: 0.0,
+            shot_charge: 0.0,
+            charge_warmup_left: 0.0,
+        };
+        let cmd = BrainCommand {
+            move_to: mate.pos,
+            sprint: false,
+            interact: true,
+        };
+        apply_interact(
+            &mut mate,
+            &mut ball,
+            &mut poss,
+            cmd,
+            &params,
+            0.019,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(poss.carrier, Some((TeamId::Home, 2)));
+        assert!(ball.held);
+        assert!(ball.grounded(&params));
     }
 }
