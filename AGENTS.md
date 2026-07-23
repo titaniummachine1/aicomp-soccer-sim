@@ -17,6 +17,11 @@ Viewer only when you need eyes on a bug:
 cargo run --release
 ```
 
+`fast_link` is **default** — Bevy stays prepared. If something looks wrong:
+`scripts\rebuild_crate.bat` first (this crate only). Still broken:
+`scripts\rebuild_deep.bat` (full wipe including Bevy). Static portable:
+`cargo run-static`.
+
 ## Fishtest-style batch
 
 1. Pick brains (`chase`, `idle`, `test1`, `test2`, `perfect`, `aia`, `graph:<path>`).

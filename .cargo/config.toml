@@ -1,0 +1,21 @@
+# Build / rebuild layers (escalate only when something is wrong):
+#
+#   1) Normal (default) — incremental. Bevy + deps stay prepared.
+#        cargo run --release
+#
+#   2) Static — portable .exe, still keeps dep object cache when possible.
+#        cargo run-static
+#
+#   3) Crate-only rebuild — wipe THIS package only; Bevy/libs untouched.
+#      Use when the binary looks stale/wrong after an edit.
+#        scripts\rebuild_crate.bat
+#        cargo clean -p aicomp-soccer-sim && cargo build --release
+#
+#   4) DEEP — wipe target/ entirely (Bevy + all deps). Last resort.
+#        scripts\rebuild_deep.bat
+
+[alias]
+run-static = "run --release --no-default-features"
+build-static = "build --release --no-default-features"
+# Mid-layer: force recompile of this crate only (Bevy stays).
+clean-crate = "clean -p aicomp-soccer-sim"

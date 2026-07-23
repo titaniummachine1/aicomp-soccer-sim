@@ -15,9 +15,16 @@ Reference dumps: [`data/reference/`](data/reference/).
 | **Unit / parity tests**    | `cargo test --lib`                                    |
 | **Scripted tackle assert** | `cargo run --release --bin debug_tackle_test -- 45`   |
 
-First Bevy compile is slow; after that edit→run is fine. Use `--release` for
-batch / speed.
+**Compile / rebuild layers** (go one step deeper only if something is wrong):
 
+| Layer | When | Command |
+| ----- | ---- | ------- |
+| **1 Normal** | Everyday | `cargo run --release` — Bevy stays prepared |
+| **2 Static** | Shareable .exe | `cargo run-static` |
+| **3 Crate-only** | Stale/wrong binary | `scripts\rebuild_crate.bat` — cleans **this** crate only |
+| **4 DEEP** | Still broken | `scripts\rebuild_deep.bat` — wipes Bevy + all deps |
+
+Do **not** jump to layer 4 between small edits.
 ---
 
 ## Quick start
@@ -25,7 +32,6 @@ batch / speed.
 ```bat
 rustup update
 cd aicomp-soccer-sim
-cargo build --release
 cargo run --release
 cargo run --release --bin soccer_headless -- --secs 20 --home chase --away idle
 ```
@@ -33,6 +39,9 @@ cargo run --release --bin soccer_headless -- --secs 20 --home chase --away idle
 Or double-click / run:
 
 - [`scripts/run_viewer.bat`](scripts/run_viewer.bat)
+- [`scripts/run_viewer_static.bat`](scripts/run_viewer_static.bat) — layer 2 static
+- [`scripts/rebuild_crate.bat`](scripts/rebuild_crate.bat) — layer 3, Bevy kept
+- [`scripts/rebuild_deep.bat`](scripts/rebuild_deep.bat) — layer 4, wipe + Bevy
 - [`scripts/run_headless.bat`](scripts/run_headless.bat)
 
 ---

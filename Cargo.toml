@@ -33,10 +33,16 @@ name = "titanium_drill"
 path = "src/bin/titanium_drill.rs"
 
 [features]
-# Shareable/portable builds are the default (fully static).
-# For faster local edit→run only:
-#   cargo run --features fast_link
-default = []
+# Fast local edit→run is the DEFAULT (Bevy dynamic linking).
+#
+# Tier 1 — normal (default): only this crate rebuilds on src edits; prepared
+#          Bevy libraries / DLLs in target/ are left alone.
+# Tier 2 — static: portable .exe (`cargo run-static`). Keeps dep cache.
+# Tier 3 — crate-only: something looks wrong → `scripts\rebuild_crate.bat`
+#          (`cargo clean -p aicomp-soccer-sim`). Bevy untouched.
+# Tier 4 — DEEP: still wrong → `scripts\rebuild_deep.bat` (full `cargo clean`,
+#          recompiles Bevy). Never casual.
+default = ["fast_link"]
 fast_link = ["bevy/dynamic_linking"]
 
 [dependencies]
@@ -50,9 +56,17 @@ serde_json = "1"
 [dev-dependencies]
 approx = "0.5"
 
-# Fast edit→run: light opt on our code, full opt on deps.
+# Fast edit→run: light opt on our crate. Deps stay optimized once cached;
+# avoid `cargo clean` unless you truly need a from-scratch rebuild.
 [profile.dev]
 opt-level = 1
+incremental = true
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# Explicit slow/max-opt path when sharing a single static .exe (no Bevy DLLs).
+[profile.release-static]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
