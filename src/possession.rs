@@ -111,6 +111,7 @@ pub struct CarrierStaminaDrain {
     pub team: TeamId,
     pub id: u8,
     pub drain: f32,
+    /// True when the tackler (Interact without ball) wins and takes possession.
     pub attacker_wins: bool,
 }
 
@@ -262,12 +263,12 @@ pub fn apply_interact(
         }
     }
 
-    // Tackle: interact near held ball.
-    // Both lose drain = min(T, C). Winner by *pre-drain* stamina:
-    //   T > C  → tackler keeps excess, steals
-    //   T == C → both end at 0, tackler steals
-    //   T < C  → carrier keeps excess, tackler loses
-    // Already both empty → no free flip (oppose-stack ping-pong).
+    // Contested tackle (same rules in Scenario 1 and full match — one code path).
+    // `player` here is the tackler (person pressing Interact without the ball).
+    // Both lose drain = min(tackler, carrier). Pre-drain stamina decides:
+    //   tackler >= carrier → tackler steals (equal → both end at 0, tackler gets ball)
+    //   tackler <  carrier → carrier keeps the excess, tackler loses
+    // Both already ~0 → no free flip (oppose-stack ping-pong).
     if ball.held {
         if let Some((ct, cid)) = poss.carrier {
             if ct != player.team {
@@ -275,10 +276,10 @@ pub fn apply_interact(
                     .length()
                     .min((player.pos - ball.pos).length());
                 if dist <= params.interact_radius {
-                    let t0 = player.stamina;
-                    let c0 = carrier_stamina.unwrap_or(0.0);
+                    let tackler_stam = player.stamina;
+                    let carrier_stam = carrier_stamina.unwrap_or(0.0);
                     let eps = 1e-4;
-                    if t0 <= eps && c0 <= eps {
+                    if tackler_stam <= eps && carrier_stam <= eps {
                         poss.pickup_lockout = poss.pickup_lockout.max(0.40);
                         trace(format!(
                             "TACKLE_BOTH_EMPTY {:?} P{} on {:?} P{} (no flip)",
@@ -286,21 +287,15 @@ pub fn apply_interact(
                         ));
                         return InteractOutcome::default();
                     }
-                    let drain = t0.min(c0);
-                    player.stamina = (t0 - drain).max(0.0);
+                    let drain = tackler_stam.min(carrier_stam);
+                    player.stamina = (tackler_stam - drain).max(0.0);
                     player.stamina_regen_lock_left = params
                         .stamina_tackle_regen_delay_s
                         .max(player.stamina_regen_lock_left);
-                    let carrier_after = (c0 - drain).max(0.0);
-                    // Equal or greater pre-drain stamina → tackler takes the ball.
-                    let attacker_wins = t0 + eps >= c0;
-                    debug_assert!(
-                        attacker_wins
-                            == (player.stamina + eps >= carrier_after
-                                || (player.stamina <= eps && carrier_after <= eps && drain > eps)),
-                        "pre-drain win must match remainder rule"
-                    );
-                    if attacker_wins {
+                    let carrier_after = (carrier_stam - drain).max(0.0);
+                    // Equal or greater stamina → guaranteed steal.
+                    let tackler_wins = tackler_stam + eps >= carrier_stam;
+                    if tackler_wins {
                         poss.carrier = Some((player.team, player.id.0));
                         player.shot_charge = 0.0;
                         player.charge_warmup_left = params.shot_charge_warmup_s;
@@ -311,14 +306,13 @@ pub fn apply_interact(
                             params.pickup_delay_after_exchange_s
                         };
                         trace(format!(
-                            "STEAL {:?} P{} from {:?} P{} drain={drain:.2} t0={t0:.2} c0={c0:.2}",
+                            "STEAL {:?} P{} from {:?} P{} drain={drain:.2} tackler={tackler_stam:.2} carrier={carrier_stam:.2}",
                             player.team, player.id.0, ct, cid,
                         ));
                     } else {
-                        // Failed contest still briefly locks the ball vs re-tackle spam.
                         poss.pickup_lockout = 0.40;
                         trace(format!(
-                            "TACKLE_FAIL {:?} P{} on {:?} P{} drain={drain:.2} t0={t0:.2} c0={c0:.2}",
+                            "TACKLE_FAIL {:?} P{} on {:?} P{} drain={drain:.2} tackler={tackler_stam:.2} carrier={carrier_stam:.2}",
                             player.team, player.id.0, ct, cid,
                         ));
                     }
@@ -327,7 +321,7 @@ pub fn apply_interact(
                             team: ct,
                             id: cid,
                             drain,
-                            attacker_wins,
+                            attacker_wins: tackler_wins,
                         }),
                         shot: false,
                     };

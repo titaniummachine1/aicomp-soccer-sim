@@ -9,7 +9,6 @@ use crate::brain::{BrainCommand, BrainOutput, TeamId};
 use crate::match_state::MatchPhase;
 use crate::params::SimParams;
 use crate::player::PlayerId;
-use crate::predict::gk_intercept_cover;
 use crate::world::MatchWorld;
 
 fn park_off_pitch(team: TeamId, id: u8, params: &SimParams) -> Vec2 {
@@ -43,8 +42,9 @@ pub fn freeze_except(out: &mut BrainOutput, world: &MatchWorld, team: TeamId, ac
     }
 }
 
-/// Scenario 1: attacker P1 at center with ball; GK P4 on cone-bisector cover;
-/// other roster players are parked off-pitch.
+/// Scenario 1 layout only: attacker P1 at center with ball; GK P4 on the goal
+/// line center. No custom tackle rules — possession uses the global duel.
+/// Other roster players are parked off-pitch.
 pub fn setup_1v1_harness(world: &mut MatchWorld, attack_home: bool, z_bias: f32) {
     let params = world.params.clone();
     let (atk, gk_team) = if attack_home {
@@ -60,28 +60,8 @@ pub fn setup_1v1_harness(world: &mut MatchWorld, attack_home: bool, z_bias: f32)
     };
 
     let atk_pos = Vec2::new(0.0, z_bias * 3.0);
-    let mut cover = gk_intercept_cover(
-        atk_pos,
-        own_goal_x,
-        params.goal_half_width,
-        &params,
-        8.0,
-    );
-    cover.x = if own_goal_x > 0.0 {
-        cover.x.max(0.0).max(atk_pos.x + 8.0)
-    } else {
-        cover.x.min(0.0).min(atk_pos.x - 8.0)
-    };
-    let deep = if own_goal_x > 0.0 {
-        own_goal_x - 1.5
-    } else {
-        own_goal_x + 1.5
-    };
-    if own_goal_x > 0.0 {
-        cover.x = cover.x.min(deep);
-    } else {
-        cover.x = cover.x.max(deep);
-    }
+    // Middle of the goal mouth, slightly off the line into the pitch.
+    let gk_pos = Vec2::new(own_goal_x - sign * 1.5, 0.0);
 
     world.match_state.phase = MatchPhase::Play;
     world.match_state.phase_timer = 0.0;
@@ -100,7 +80,7 @@ pub fn setup_1v1_harness(world: &mut MatchWorld, attack_home: bool, z_bias: f32)
             p.charge_warmup_left = 0.0;
             p.stamina = 1.0;
         } else if p.team == gk_team && p.id == PlayerId(4) {
-            p.pos = cover;
+            p.pos = gk_pos;
             p.vel = Vec2::ZERO;
             p.facing = Vec2::new(-sign, 0.0);
             p.shot_charge = 0.0;
@@ -115,7 +95,7 @@ pub fn setup_1v1_harness(world: &mut MatchWorld, attack_home: bool, z_bias: f32)
         }
     }
 
-    world.ball.pos = atk_pos + Vec2::new(sign * 0.55, 0.0);
+    world.ball.pos = atk_pos + Vec2::new(sign * params.hold_offset, 0.0);
     world.ball.vel = Vec2::ZERO;
     world.ball.vel_y = 0.0;
     world.ball.height = params.ball_rest_height;

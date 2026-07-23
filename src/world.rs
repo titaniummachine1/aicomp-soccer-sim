@@ -589,6 +589,83 @@ mod tests {
     use crate::brain::ChaseBallBrain;
 
     #[test]
+    fn equal_stam_walk_in_tackle_steals_and_drains_carrier() {
+        use crate::brain::BrainOutput;
+        use crate::player::PlayerId;
+        use crate::titanium::setup_1v1_harness;
+
+        let params = SimParams::default();
+        let mut world = MatchWorld::new_kickoff_opening(params.clone(), TeamId::Home);
+        setup_1v1_harness(&mut world, true, 1.0);
+
+        // Put carrier on top of GK with equal stam — one Interact must steal.
+        let gk_pos = world
+            .players
+            .iter()
+            .find(|p| p.team == TeamId::Away && p.id == PlayerId(4))
+            .map(|p| p.pos)
+            .unwrap();
+        for p in &mut world.players {
+            if p.team == TeamId::Home && p.id == PlayerId(1) {
+                p.pos = gk_pos + Vec2::new(-0.5, 0.0);
+                p.facing = Vec2::X;
+                p.stamina = 1.0;
+                p.shot_charge = 0.0;
+            }
+            if p.team == TeamId::Away && p.id == PlayerId(4) {
+                p.stamina = 1.0;
+            }
+        }
+        world.ball.held = true;
+        world.ball.pos = gk_pos + Vec2::new(-0.5, 0.0) + Vec2::X * params.hold_offset;
+        world.possession.carrier = Some((TeamId::Home, 1));
+        world.possession.pickup_lockout = 0.0;
+
+        let mut home = BrainOutput::default();
+        let mut away = BrainOutput::default();
+        for i in 0..4 {
+            home.commands[i] = BrainCommand {
+                move_to: world.players[i].pos,
+                sprint: false,
+                interact: false,
+            };
+            away.commands[i] = BrainCommand {
+                move_to: world.ball.pos,
+                sprint: false,
+                interact: i + 1 == 4,
+            };
+        }
+
+        world.step_with_commands(&home, &away, FIXED_DT);
+
+        assert_eq!(
+            world.possession.carrier,
+            Some((TeamId::Away, 4)),
+            "equal-stam walk-in must steal for the tackler"
+        );
+        let carrier_stam = world
+            .players
+            .iter()
+            .find(|p| p.team == TeamId::Home && p.id == PlayerId(1))
+            .map(|p| p.stamina)
+            .unwrap();
+        assert!(
+            carrier_stam < 1e-4,
+            "carrier must drain to 0 on equal-stam steal, got {carrier_stam}"
+        );
+        let gk_stam = world
+            .players
+            .iter()
+            .find(|p| p.team == TeamId::Away && p.id == PlayerId(4))
+            .map(|p| p.stamina)
+            .unwrap();
+        assert!(
+            gk_stam < 1e-4,
+            "equal-stam tackler also drains to 0, got {gk_stam}"
+        );
+    }
+
+    #[test]
     fn scripted_test1_test2_steal_in_sim() {
         let params = SimParams::default();
         let mut world = MatchWorld::new_kickoff_opening(params, TeamId::Home);

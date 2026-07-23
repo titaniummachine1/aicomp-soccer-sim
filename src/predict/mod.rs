@@ -513,11 +513,12 @@ pub fn gk_clamp_to_cover_plane(mut p: Vec2, cover_x: f32, own_goal_x: f32) -> Ve
     p
 }
 
-/// Held-ball press: stand at closest safe cover; tackle when the ball is in
-/// Interact range. MoveTo stays on the safe set — do not gate Interact on the
-/// cover-plane check (that blocked steals when slightly past cover.x).
+/// Held-ball GK stand + tackle. Uses the **same** [`crate::possession::apply_interact`]
+/// contest as every other player (no Scenario-1 fork).
 ///
-/// Returns `(move_to, try_interact)`.
+/// - Out of Interact range: MoveTo closest safe cover.
+/// - In Interact range of the ball: MoveTo the ball and Interact — stam duel
+///   decides the steal (tackler with ≥ carrier stam always wins).
 pub fn gk_cover_press_target(
     me: Vec2,
     shot_origin: Vec2,
@@ -528,9 +529,13 @@ pub fn gk_cover_press_target(
     gk_speed: f32,
 ) -> (Vec2, bool) {
     let reach = params.interact_radius;
+    // Must match apply_interact's radius exactly (no 1.2× cheese band).
+    let in_reach = me.distance(tackle_at) <= reach;
+    if in_reach {
+        return (tackle_at, true);
+    }
     let cover = gk_closest_safe_stand(shot_origin, own_goal_x, goal_half_width, params, gk_speed);
-    let try_tackle = me.distance(tackle_at) <= reach * 1.2;
-    (cover, try_tackle)
+    (cover, false)
 }
 
 /// Classic cone-bisector cover (O(1) geometric fallback).
@@ -1044,16 +1049,21 @@ mod tests {
         assert!((stand - recover).length() < 1e-3);
         assert!((stand - past).length() > 0.5);
         let near = cover;
-        let (_, tackle_near) = gk_cover_press_target(
+        let ball_near = near + Vec2::new(-1.0, 0.0);
+        let (stand_near, tackle_near) = gk_cover_press_target(
             near,
-            near + Vec2::new(-1.0, 0.0),
-            near + Vec2::new(-1.0, 0.0),
+            ball_near,
+            ball_near,
             39.5,
             6.0,
             &params,
             8.0,
         );
-        assert!(tackle_near);
+        assert!(tackle_near, "ball inside interact radius → Interact");
+        assert!(
+            (stand_near - ball_near).length() < 1e-3,
+            "in-range press MoveTo's the ball, got {stand_near:?}"
+        );
     }
 
     #[test]

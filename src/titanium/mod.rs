@@ -22,7 +22,7 @@ use crate::params::SimParams;
 use crate::player::PlayerId;
 use crate::predict::{
     best_forward_pass_dir, best_long_clear_dir, best_shot_dir_evading, earliest_intercept,
-    gk_cover_press_target, predict_ball_path, predict_ball_path_until_intercept,
+    gk_intercept_cover, predict_ball_path, predict_ball_path_until_intercept,
     truncate_to_guaranteed_intercept, Candidate,
 };
 use crate::world::FIXED_DT;
@@ -513,8 +513,28 @@ impl TitaniumBrain {
         }
         self.flick_dir = None;
 
-        // Loose / in-motion: drop cover — pure intercept race.
-        if ball_loose || (!opp_has_ball && ball_vel.length_squared() > 0.25) {
+        // Opponent holds the ball: go to the ball and Interact in range.
+        // Steal uses the global apply_interact stam duel (tackler ≥ carrier wins).
+        // No Scenario-1 fork — same path as any other player.
+        if opp_has_ball {
+            let cover = gk_intercept_cover(
+                ball,
+                own_x,
+                params.goal_half_width,
+                params,
+                SPRINT,
+            );
+            self.emit_held_cover_debug(me, ball, cover, own_x, params.goal_half_width, reach);
+            let in_reach = me.distance(ball) <= reach;
+            return BrainCommand {
+                move_to: ball,
+                sprint: true,
+                interact: in_reach,
+            };
+        }
+
+        // Loose / free ball: intercept race (still global predict, not a tackle duel).
+        if ball_loose || ball_vel.length_squared() > 0.25 {
             let ball_state = Ball {
                 pos: ball,
                 vel: ball_vel,
@@ -563,33 +583,24 @@ impl TitaniumBrain {
                 return BrainCommand {
                     move_to: Vec2::new(cut_x, hit.pos.y),
                     sprint: true,
-                    interact: me.distance(hit.pos) <= reach * 1.2,
+                    interact: me.distance(hit.pos) <= reach,
                 };
             }
             let fallback = first.map(|(_, h)| h.pos).unwrap_or(ball);
             return BrainCommand {
                 move_to: fallback,
                 sprint: true,
-                interact: me.distance(ball) <= reach * 1.15,
+                interact: me.distance(ball) <= reach,
             };
         }
 
-        // Held: closest safe stand vs legal scoring extremes from the ball
-        // (hold-offset). Never chase/circle the carrier off the safe set.
-        let (move_to, try_tackle) = gk_cover_press_target(
-            me,
-            ball,
-            ball,
-            own_x,
-            params.goal_half_width,
-            params,
-            SPRINT,
-        );
-        self.emit_held_cover_debug(me, ball, move_to, own_x, params.goal_half_width, reach);
+        // Idle: sit deepest safe cover facing the ball.
+        let cover = gk_intercept_cover(ball, own_x, params.goal_half_width, params, SPRINT);
+        self.emit_held_cover_debug(me, ball, cover, own_x, params.goal_half_width, reach);
         BrainCommand {
-            move_to,
-            sprint: me.distance(move_to) > 1.5 || try_tackle,
-            interact: try_tackle,
+            move_to: cover,
+            sprint: me.distance(cover) > 1.5,
+            interact: false,
         }
     }
 
