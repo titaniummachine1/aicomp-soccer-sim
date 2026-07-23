@@ -356,9 +356,9 @@ pub fn gk_intercept_cover(
 
 /// Deepest safe cover stand + tackle when the carrier enters reach.
 ///
-/// Never steps past the analytical cover point just to attempt a tackle —
-/// maximum legal pressure is the cover itself; challenge only if the
-/// attacker walks into interact range.
+/// Never steps past the analytical cover point just to hunt a tackle.
+/// If the carrier **breaches** past the cover line (closer to goal than the
+/// cover stand), chase them — the seal is already broken.
 ///
 /// Returns `(move_to, try_interact)`.
 pub fn gk_cover_press_target(
@@ -372,6 +372,14 @@ pub fn gk_cover_press_target(
 ) -> (Vec2, bool) {
     let reach = params.interact_radius;
     let cover = gk_intercept_cover(carrier, own_goal_x, goal_half_width, params, gk_speed);
+
+    // Carrier already past the GK toward the goal → emergency chase.
+    let breached = closer_to_own_goal(carrier, me, own_goal_x);
+    if breached {
+        let try_tackle = me.distance(carrier) <= reach * 1.25;
+        return (carrier, try_tackle);
+    }
+
     let try_tackle = me.distance(carrier) <= reach * 1.2;
     (cover, try_tackle)
 }
@@ -872,6 +880,22 @@ mod tests {
         );
         assert!(!try_tackle, "carrier far — no tackle yet");
         assert!(target.x >= 0.0);
+        // Carrier past GK toward goal → chase.
+        let gk_deep = Vec2::new(30.0, 0.0);
+        let past = Vec2::new(36.0, 2.0);
+        let (chase, _) = gk_cover_press_target(
+            gk_deep,
+            past,
+            Vec2::ZERO,
+            39.5,
+            6.0,
+            &params,
+            8.0,
+        );
+        assert!(
+            (chase - past).length() < 1e-3,
+            "carrier past GK must be chased, got {chase:?}"
+        );
         let near_me = cover;
         let (_, tackle_near) = gk_cover_press_target(
             near_me,

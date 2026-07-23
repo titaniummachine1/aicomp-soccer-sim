@@ -129,49 +129,16 @@ pub fn step_free_ball(ball: &mut Ball, params: &SimParams, dt: f32) -> EndReason
     goal_at(ball.pos, params)
 }
 
-/// Loose-ball circle vs player bodies. Hot / airborne balls pass through.
+/// Player↔ball body collision — **disabled**.
 ///
-/// Always re-runs wall/post containment afterward — body push used to teleport
-/// the ball past sidelines / endlines (and into the mouth for free goals).
-pub fn resolve_player_bodies(ball: &mut Ball, players: &[crate::player::Player], params: &SimParams) {
-    if ball.held {
-        return;
-    }
-    if !ball.grounded(params) || ball.vel.length() > 8.0 {
-        return;
-    }
-    let contact_r = params.body_radius + params.ball_radius;
-    let e = params.wall_e;
-    let mu = params.wall_mu;
-    for p in players {
-        let delta = ball.pos - p.pos;
-        let dist = delta.length();
-        if dist >= contact_r || dist < 1e-8 {
-            continue;
-        }
-        let n = delta / dist;
-        ball.pos = p.pos + n * contact_r;
-        let v_rel = ball.vel - p.vel;
-        let vn = v_rel.dot(n);
-        if vn >= 0.0 {
-            continue;
-        }
-        let mut tangent = ball.vel - n * ball.vel.dot(n);
-        let into = -vn;
-        let reflected_n = n * (into * e);
-        let push = n * (p.vel.dot(n).max(0.0));
-        let t_speed = tangent.length();
-        let friction_budget = mu * (1.0 + e) * into;
-        if t_speed > 0.0 {
-            let kill = friction_budget.min(t_speed);
-            tangent *= (t_speed - kill) / t_speed;
-        }
-        ball.vel = tangent + reflected_n + push;
-    }
-    // Body separation can place the center outside the playable AABB. Walls
-    // must win — same as Unity colliders (ball cannot leave the stadium).
-    resolve_walls(ball, params);
-    resolve_posts(ball, params);
+/// Unity Soccer does not let players shove / bounce the free ball; possession
+/// is Interact-only (pickup / tackle). Kept as a no-op so call sites and the
+/// public API stay stable.
+pub fn resolve_player_bodies(
+    _ball: &mut Ball,
+    _players: &[crate::player::Player],
+    _params: &SimParams,
+) {
 }
 
 fn resolve_posts(ball: &mut Ball, params: &SimParams) {
@@ -451,10 +418,11 @@ mod tests {
     }
 
     #[test]
-    fn body_push_cannot_shove_ball_out_of_stadium() {
+    fn body_push_is_disabled_ball_stays_put() {
         let params = SimParams::default();
+        let start = Vec2::new(0.0, params.z_max - 0.1);
         let mut ball = Ball {
-            pos: Vec2::new(0.0, params.z_max - 0.1),
+            pos: start,
             vel: Vec2::ZERO,
             height: params.ball_rest_height,
             vel_y: 0.0,
@@ -472,16 +440,8 @@ mod tests {
             charge_warmup_left: 0.0,
         };
         resolve_player_bodies(&mut ball, &[pusher], &params);
-        assert!(
-            ball.pos.y <= params.z_max + 1e-4,
-            "body push left ball OOB: {:?}",
-            ball.pos
-        );
-        assert!(
-            ball.pos.x >= params.x_min - 1e-4 && ball.pos.x <= params.x_max + 1e-4,
-            "body push left ball past endline: {:?}",
-            ball.pos
-        );
+        assert_eq!(ball.pos, start);
+        assert_eq!(ball.vel, Vec2::ZERO);
     }
 
     #[test]

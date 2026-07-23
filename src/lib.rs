@@ -1,7 +1,7 @@
 //! Fully 2D AIComp Soccer close-copy.
 //!
-//! **Cheap core:** `world::MatchWorld` — fixed-dt, no navmesh, player↔ball
-//! body bounce when loose, pitch AABB walk clamp (no goal entry for now). Bevy
+//! **Cheap core:** `world::MatchWorld` — fixed-dt, no navmesh, no player↔ball
+//! body shove (Interact-only possession), pitch AABB walk clamp. Bevy
 //! viewer is optional; batch sims should call `MatchWorld::step_brains` only.
 //!
 //! Pitch `Vec2`: `.x` = world X (goals), `.y` = world Z (sidelines).

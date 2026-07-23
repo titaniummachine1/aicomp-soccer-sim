@@ -264,7 +264,7 @@ pub fn apply_interact(
 
     // Tackle: interact near held ball.
     // Drain = min(tackler, carrier) from BOTH. Whoever has stamina left keeps
-    // the ball. Equal stam → both end at 0 → carrier keeps (no free steal).
+    // the ball. Equal stam → both end at 0 → tackler takes it (one real contest).
     if ball.held {
         if let Some((ct, cid)) = poss.carrier {
             if ct != player.team {
@@ -291,13 +291,18 @@ pub fn apply_interact(
                         .stamina_tackle_regen_delay_s
                         .max(player.stamina_regen_lock_left);
                     let carrier_after = (carrier_stam - drain).max(0.0);
-                    // Strict remainder: equal (both 0) → carrier keeps.
-                    let attacker_wins = player.stamina > carrier_after + eps;
+                    // Remainder keeps ball; equal (both 0) → tackler wins.
+                    let attacker_wins = player.stamina + eps >= carrier_after;
                     if attacker_wins {
                         poss.carrier = Some((player.team, player.id.0));
                         player.shot_charge = 0.0;
                         player.charge_warmup_left = params.shot_charge_warmup_s;
-                        poss.pickup_lockout = params.pickup_delay_after_exchange_s;
+                        let both_spent = player.stamina <= eps && carrier_after <= eps;
+                        poss.pickup_lockout = if both_spent {
+                            0.55
+                        } else {
+                            params.pickup_delay_after_exchange_s
+                        };
                         trace(format!(
                             "STEAL {:?} P{} from {:?} P{} drain={drain:.2} (carrier had charge={:.2})",
                             player.team,
@@ -307,8 +312,7 @@ pub fn apply_interact(
                             carrier_shot_charge.unwrap_or(-1.0)
                         ));
                     } else {
-                        // Failed contest (incl. equal-stam draw) still briefly
-                        // locks the ball vs re-tackle spam.
+                        // Failed contest still briefly locks the ball vs re-tackle spam.
                         poss.pickup_lockout = 0.40;
                         trace(format!(
                             "TACKLE_FAIL {:?} P{} on {:?} P{} drain={drain:.2}",
@@ -418,7 +422,7 @@ mod tests {
     use crate::player::{Player, PlayerId};
 
     #[test]
-    fn equal_stamina_tackle_both_drain_carrier_keeps() {
+    fn equal_stamina_tackle_tackler_wins_both_drain() {
         let params = SimParams::default();
         let mut ball = Ball {
             pos: Vec2::ZERO,
@@ -460,9 +464,9 @@ mod tests {
         )
         .drain
         .expect("equal-stam tackle returns drain");
-        assert!(!drain.attacker_wins);
+        assert!(drain.attacker_wins);
         assert!((drain.drain - 1.0).abs() < 1e-5, "carrier drain={}", drain.drain);
-        assert_eq!(poss.carrier, Some((TeamId::Home, 1)));
+        assert_eq!(poss.carrier, Some((TeamId::Away, 1)));
         assert!(
             attacker.stamina.abs() < 1e-5,
             "equal stam must dump tackler stamina, got {}",

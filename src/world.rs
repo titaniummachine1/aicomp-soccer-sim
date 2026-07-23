@@ -1,8 +1,8 @@
-//! Cheap headless match world — no navmesh; loose ball bounces off player bodies.
+//! Cheap headless match world — no navmesh; no player↔ball body push.
 //!
 //! Design for 10⁵–10⁶ sims:
 //! - Fixed-dt step, plain structs (Bevy is only the interactive viewer)
-//! - Ball is the only sliding physics body (+ circle bounce vs players when loose)
+//! - Ball is the only sliding physics body (walls/posts only; no player shove)
 //! - Players = accel movers + axis-aligned walk limits (pitch AABB only)
 //! - Possession via interact radius only
 //! - Brains run inline on the sim thread (no per-match worker threads in batch)
@@ -15,7 +15,7 @@
 use bevy::prelude::Vec2;
 
 use crate::api::{build_team_api, first_clear_dir, TeamApi, WorldSensors};
-use crate::ball::{goal_at, held_goal_at, resolve_player_bodies, step_free_ball, Ball, EndReason};
+use crate::ball::{goal_at, held_goal_at, step_free_ball, Ball, EndReason};
 use crate::brain::{BrainCommand, BrainOutput, TeamBrain, TeamId};
 use crate::match_state::{
     kickoff_control_allowed, place_kickoff, receiving_team_circle_locked, MatchPhase, MatchState,
@@ -331,11 +331,7 @@ impl MatchWorld {
                 .unwrap_or(EndReason::None)
         } else {
             let scored = step_free_ball(&mut self.ball, &self.params, dt);
-            // Free ball at kickoff stays planted until Interact pickup — body
-            // shoves were ending Kickoff early and scattering Ball.X/Z (DB33).
-            if self.match_state.phase != MatchPhase::Kickoff {
-                resolve_player_bodies(&mut self.ball, &self.players, &self.params);
-            }
+            // No player↔ball body shove (Unity: Interact-only possession).
             if scored != EndReason::None {
                 scored
             } else {
