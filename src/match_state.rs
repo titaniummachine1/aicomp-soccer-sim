@@ -172,10 +172,13 @@ fn random_opening_kickoff() -> TeamId {
 /// pickup, hold, charge warmup, first kick. `kickoff_delay_s` only gates the
 /// cosmetic GoalPause wait before this reset runs after a goal/whistle.
 ///
-/// Stamina resets to full for every player here, unconditionally, on every
-/// kickoff — goal-scored or stale-ball whistle alike. This overrides an
-/// earlier "stamina persists across whistle and goal kickoffs" finding
-/// (TimePlot + Discord 2026-07-22): that was a bug, not real behavior.
+/// Stamina is deliberately NOT touched here. Confirmed directly with the
+/// real engine's author (2026-07-25): stamina is consumed/recharged only
+/// while the match clock is ticking, and restores to full only on an actual
+/// match start/end or an explicit reset button — a goal is NOT a match
+/// reset. `place_kickoff` runs on every whistle *and* goal restart, so
+/// resetting stamina here (as an earlier revision of this comment claimed
+/// was correct) would incorrectly refill it on every goal.
 pub fn place_kickoff(
     ball: &mut Ball,
     players: &mut [Player],
@@ -195,8 +198,6 @@ pub fn place_kickoff(
         p.facing = kickoff_facing(p.team, p.id, kickoff_team);
         p.shot_charge = 0.0;
         p.charge_warmup_left = 0.0;
-        p.stamina = 1.0;
-        p.stamina_regen_lock_left = 0.0;
     }
 }
 
