@@ -40,7 +40,7 @@ impl MatchScenario {
 pub enum Scenario1Outcome {
     /// Attacking side scored.
     AttackerGoal,
-    /// GK P4 holds / tackled / captured the ball.
+    /// GK P4 captured or tackled the ball.
     GkHold,
     /// Time budget expired (drill / optional viewer cap).
     GkTimeout,
@@ -50,7 +50,7 @@ impl Scenario1Outcome {
     pub fn label(self) -> &'static str {
         match self {
             Self::AttackerGoal => "ATK WIN (goal)",
-            Self::GkHold => "GK WIN (hold)",
+            Self::GkHold => "GK WIN (capture)",
             Self::GkTimeout => "GK WIN (timeout)",
         }
     }
@@ -82,7 +82,9 @@ pub fn evaluate_scenario1(
     } else {
         TeamId::Home
     };
-    if world.possession.carrier == Some((gk_team, 4)) && world.ball.held {
+    // Possession is authoritative for both a free-ball capture and a tackle
+    // steal; held-ball synchronization can happen later in the same tick.
+    if world.possession.carrier == Some((gk_team, 4)) {
         return Some(Scenario1Outcome::GkHold);
     }
     None
@@ -113,6 +115,18 @@ mod tests {
 
         world.possession.carrier = Some((TeamId::Away, 4));
         world.ball.held = true;
+        assert_eq!(
+            evaluate_scenario1(&world, true, 0, 0),
+            Some(Scenario1Outcome::GkHold)
+        );
+    }
+
+    #[test]
+    fn scenario1_gk_capture_is_terminal_before_hold_sync() {
+        let mut world = MatchWorld::new_kickoff_opening(SimParams::default(), TeamId::Home);
+        setup_1v1_harness(&mut world, true, 1.0);
+        world.possession.carrier = Some((TeamId::Away, 4));
+        world.ball.held = false;
         assert_eq!(
             evaluate_scenario1(&world, true, 0, 0),
             Some(Scenario1Outcome::GkHold)

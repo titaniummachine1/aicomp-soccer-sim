@@ -28,7 +28,9 @@ use aicomp_soccer_sim::params::{default_params_path, SimParams};
 use aicomp_soccer_sim::player::PlayerId;
 use aicomp_soccer_sim::probe_brains::{PerfectControllerBrain, Test1Brain, Test2Brain};
 use aicomp_soccer_sim::scenario::MatchScenario;
-use aicomp_soccer_sim::team_threads::{think_barrier, ThinkTimings};
+use aicomp_soccer_sim::team_threads::{
+    PersistentThinkBarrier, ResettableBrain, ThinkTimings,
+};
 use aicomp_soccer_sim::titanium::{
     apply_1v1_freeze, repark_1v1_inactive, setup_1v1_harness, TitaniumBrain,
 };
@@ -131,11 +133,11 @@ OPTIONS:
 BRAINS:
   chase | idle | test1 | test2 | perfect (kb|keyboard) | aia | aia3 | titanium | graph:<path>
 
-  Default (Full + GK duel): AIA3.txt (else AIA.txt) from AIComp Saves; if missing, random chase/idle.
-  Titanium / keyboard are opt-in only (--home / --away) — scenario UI never swaps brains.
+  Default Full: AIA3.txt (else AIA.txt) from AIComp Saves; if missing, random chase/idle.
+  GK duel: attacker = AIA default, GK side = Titanium.txt (override with --home/--away).
 
 GK DUEL:
-  Same brains as Full. Only rule change: GK P4 capture/tackle awards a goal to the GK side.
+  GK P4 capture/tackle awards a goal to the GK side.
   Layout: attacker P1 + GK P4 live; other six parked + frozen.
 
 TIMING:
@@ -158,6 +160,8 @@ fn parse_viewer_args() -> ViewerArgs {
     let mut speed_t = idle_budget_to_fill(FIXED_DT);
     let mut home = aicomp_soccer_sim::batch::default_team_brain();
     let mut away = aicomp_soccer_sim::batch::default_team_brain();
+    let mut home_set = false;
+    let mut away_set = false;
     let mut opening = TeamId::Home;
     let mut scenario = MatchScenario::Full;
     let mut titanium_1v1_attack_home = true;
@@ -260,6 +264,7 @@ fn parse_viewer_args() -> ViewerArgs {
                     eprintln!("error: {e}");
                     std::process::exit(1);
                 });
+                home_set = true;
             }
             "--away" => {
                 i += 1;
@@ -272,6 +277,7 @@ fn parse_viewer_args() -> ViewerArgs {
                     eprintln!("error: {e}");
                     std::process::exit(1);
                 });
+                away_set = true;
             }
             "--both" => {
                 i += 1;
@@ -286,6 +292,8 @@ fn parse_viewer_args() -> ViewerArgs {
                 });
                 home = brain.clone();
                 away = brain;
+                home_set = true;
+                away_set = true;
             }
             "-h" | "--help" => {
                 print_viewer_help();
@@ -305,8 +313,15 @@ fn parse_viewer_args() -> ViewerArgs {
         } else {
             TeamId::Away
         };
-        // Same default brains as Full (AIA / chase / idle). Keyboard + Titanium
-        // stay opt-in via --home/--away — pure game + GK-hold goal only.
+        // GK duel: default the GK side to Titanium.txt (graph). Attacker keeps
+        // the Full-match default (AIA3/AIA) unless the user set that side.
+        if titanium_1v1_attack_home {
+            if !away_set {
+                away = BrainInput::Titanium;
+            }
+        } else if !home_set {
+            home = BrainInput::Titanium;
+        }
     }
     ViewerArgs {
         fast,
@@ -401,8 +416,7 @@ fn main() {
             }
             ViewerWorld {
                 world,
-                home: home_brain,
-                away: away_brain,
+                brains: PersistentThinkBarrier::new(home_brain, away_brain),
                 last_home: BrainOutput::default(),
                 last_away: BrainOutput::default(),
                 debug_draw: Default::default(),
@@ -468,8 +482,7 @@ fn soccer_saves_dir() -> PathBuf {
 #[derive(Resource)]
 struct ViewerWorld {
     world: MatchWorld,
-    home: ActiveBrain,
-    away: ActiveBrain,
+    brains: PersistentThinkBarrier<ActiveBrain, ActiveBrain>,
     last_home: BrainOutput,
     last_away: BrainOutput,
     /// Last tick's DebugDrawLine / DebugDrawDisc submissions.
@@ -512,6 +525,12 @@ impl ActiveBrain {
     }
 }
 
+impl ResettableBrain for ActiveBrain {
+    fn reset_state(&mut self) {
+        ActiveBrain::reset_state(self);
+    }
+}
+
 impl TeamBrain for ActiveBrain {
     fn think(&mut self, api: &aicomp_soccer_sim::api::TeamApi) -> BrainOutput {
         match self {
@@ -550,10 +569,17 @@ fn resolve_brain(input: &BrainInput) -> (ActiveBrain, PathBuf) {
             (load_graph_brain(&path), path)
         }
         BrainInput::Graph(path) => (load_graph_brain(path), path.clone()),
-        BrainInput::Titanium => (
-            ActiveBrain::Titanium(TitaniumBrain::default()),
-            PathBuf::from("titanium"),
-        ),
+        BrainInput::Titanium => {
+            let path = soccer_saves_dir().join("Titanium.txt");
+            if path.is_file() {
+                (load_graph_brain(&path), path)
+            } else {
+                (
+                    ActiveBrain::Titanium(TitaniumBrain::default()),
+                    PathBuf::from("titanium"),
+                )
+            }
+        }
         #[cfg(feature = "nn_train")]
         BrainInput::Trained => (
             ActiveBrain::Trained(TrainedBrain::default()),
@@ -1710,15 +1736,14 @@ fn step_locked_tick(
     aicomp_soccer_sim::debug_draw::begin_frame();
     let ViewerWorld {
         world,
-        home,
-        away,
+        brains,
         last_home,
         last_away,
         debug_draw,
     } = viewer;
     let (home_api, away_api) = world.build_apis();
     // Tick lock: both brains must finish before physics.
-    let (mut home_out, mut away_out, timings) = think_barrier(home, away, home_api, away_api);
+    let (mut home_out, mut away_out, timings) = brains.think(home_api, away_api);
     *debug_draw = aicomp_soccer_sim::debug_draw::snapshot();
     if one_v_one.enabled() {
         apply_1v1_freeze(&mut home_out, &mut away_out, world, one_v_one.attack_home);
@@ -1816,7 +1841,7 @@ fn sim_tick_barrier(
 /// Scenario 1 continuous scoring (viewer): never ends the match.
 ///
 /// - Attacker goal: physics already increments score → reset bout layout
-/// - GK P4 holds/tackles ball → award a goal to the GK side, then reset bout
+/// - GK P4 captures/tackles ball → award a goal to the GK side, then reset bout
 fn apply_scenario1_scoring(
     world: &mut MatchWorld,
     one_v_one: Titanium1v1Mode,
@@ -1835,15 +1860,18 @@ fn apply_scenario1_scoring(
     let sh = world.match_state.score_home;
     let sa = world.match_state.score_away;
     let physics_goal = sh > round.start_home || sa > round.start_away;
-    let gk_hold = world.possession.carrier == Some((gk_team, 4)) && world.ball.held;
+    // Carrier is the authoritative result of both pickup and tackle steal.
+    // Do not require the render/ball-held flag: a contested steal can update
+    // possession before the held-ball sync phase of the same physics tick.
+    let gk_capture = world.possession.carrier == Some((gk_team, 4));
 
-    if !physics_goal && !gk_hold {
+    if !physics_goal && !gk_capture {
         return;
     }
 
     let mut keep_h = sh;
     let mut keep_a = sa;
-    if gk_hold && !physics_goal {
+    if gk_capture && !physics_goal {
         // Goal for the goalkeeper's team (attacker is scored on).
         if attack_home {
             keep_a += 1;
@@ -1853,7 +1881,7 @@ fn apply_scenario1_scoring(
         info!(
             home = keep_h,
             away = keep_a,
-            "scenario 1: GK hold → GK team goal"
+            "scenario 1: GK capture → GK team goal"
         );
     } else {
         info!(
@@ -2017,8 +2045,7 @@ fn restart_match(
         *round = Scenario1Round::default();
     }
 
-    viewer.home.reset_state();
-    viewer.away.reset_state();
+    viewer.brains.reset_state();
     // Do not leave stale script debug geometry or selected commands from the
     // previous scenario visible during the first reset tick.
     viewer.debug_draw = Default::default();
@@ -2115,9 +2142,20 @@ fn handle_ui_buttons(
                     UiAction::SetScenario(selected) => {
                         one_v_one.scenario = *selected;
                         let mode = *one_v_one;
-                        // Scenario selection changes only layout and the
-                        // explicitly requested GK scoring rule. It never
-                        // replaces a loaded TXT graph with a built-in brain.
+                        // GK duel defaults the GK side to Titanium.txt; Full
+                        // keeps whatever graphs are already loaded.
+                        if mode.scenario.is_scenario1() {
+                            let ti = soccer_saves_dir().join("Titanium.txt");
+                            if ti.is_file() {
+                                if mode.attack_home {
+                                    viewer.brains.replace_away(load_graph_brain(&ti));
+                                    scripts.away_path = ti;
+                                } else {
+                                    viewer.brains.replace_home(load_graph_brain(&ti));
+                                    scripts.home_path = ti;
+                                }
+                            }
+                        }
                         scripts.status = format!("{} scenario", mode.scenario.label());
                         if let Ok(mut visibility) = scenario_menu_q.single_mut() {
                             *visibility = Visibility::Hidden;
@@ -2170,14 +2208,14 @@ fn handle_ui_buttons(
                     }
                     UiAction::LoadHome => {
                         if let Some(path) = pick_team_script("Load Left team") {
-                            viewer.home = load_graph_brain(&path);
+                            viewer.brains.replace_home(load_graph_brain(&path));
                             scripts.home_path = path;
                             scripts.status = format!("Left {}", file_stem(&scripts.home_path));
                         }
                     }
                     UiAction::LoadAway => {
                         if let Some(path) = pick_team_script("Load Right team") {
-                            viewer.away = load_graph_brain(&path);
+                            viewer.brains.replace_away(load_graph_brain(&path));
                             scripts.away_path = path;
                             scripts.status = format!("Right {}", file_stem(&scripts.away_path));
                         }
@@ -2478,14 +2516,26 @@ fn draw_debug(
     show_debug: Res<SimDebugDraw>,
 ) {
     // Unity DebugDrawLine / DebugDrawDisc — gated by top-right Debug checkbox.
+    // Clip to the playable pitch so parked off-board players (GK duel extras,
+    // AIA debug anchors) do not paint rays/discs into the void.
     if show_debug.0 {
+        let p = &viewer.world.params;
+        let x_min = p.x_min;
+        let x_max = p.x_max;
+        let z_min = p.z_min;
+        let z_max = p.z_max;
         for line in &viewer.debug_draw.lines {
-            let a = Vec2::new(line.a.x * PPM, line.a.y * PPM);
-            let b = Vec2::new(line.b.x * PPM, line.b.y * PPM);
-            let [r, g, bch, a_ch] = line.rgba;
-            gizmos.line_2d(a, b, Color::srgba(r, g, bch, a_ch));
+            if let Some((a, b)) = clip_segment_to_aabb(line.a, line.b, x_min, x_max, z_min, z_max) {
+                let a = Vec2::new(a.x * PPM, a.y * PPM);
+                let b = Vec2::new(b.x * PPM, b.y * PPM);
+                let [r, g, bch, a_ch] = line.rgba;
+                gizmos.line_2d(a, b, Color::srgba(r, g, bch, a_ch));
+            }
         }
         for disc in &viewer.debug_draw.discs {
+            if !point_in_aabb(disc.center, x_min, x_max, z_min, z_max) {
+                continue;
+            }
             let c = Vec2::new(disc.center.x * PPM, disc.center.y * PPM);
             let [r, g, bch, a_ch] = disc.rgba;
             gizmos.circle_2d(
@@ -2528,4 +2578,65 @@ fn draw_debug(
     // Facing
     let tip = c + p.facing * (params.interact_radius * PPM + 8.0);
     gizmos.line_2d(c, tip, Color::srgb(0.2, 1.0, 1.0));
+}
+
+#[inline]
+fn point_in_aabb(p: Vec2, x_min: f32, x_max: f32, z_min: f32, z_max: f32) -> bool {
+    p.x >= x_min && p.x <= x_max && p.y >= z_min && p.y <= z_max
+}
+
+/// Liang–Barsky clip of segment AB against the pitch AABB. Returns None if
+/// the segment lies entirely outside.
+fn clip_segment_to_aabb(
+    a: Vec2,
+    b: Vec2,
+    x_min: f32,
+    x_max: f32,
+    z_min: f32,
+    z_max: f32,
+) -> Option<(Vec2, Vec2)> {
+    let mut t0 = 0.0f32;
+    let mut t1 = 1.0f32;
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+
+    let clip = |p: f32, q: f32, t0: &mut f32, t1: &mut f32| -> bool {
+        if p == 0.0 {
+            return q >= 0.0;
+        }
+        let r = q / p;
+        if p < 0.0 {
+            if r > *t1 {
+                return false;
+            }
+            if r > *t0 {
+                *t0 = r;
+            }
+        } else {
+            if r < *t0 {
+                return false;
+            }
+            if r < *t1 {
+                *t1 = r;
+            }
+        }
+        true
+    };
+
+    if !clip(-dx, a.x - x_min, &mut t0, &mut t1) {
+        return None;
+    }
+    if !clip(dx, x_max - a.x, &mut t0, &mut t1) {
+        return None;
+    }
+    if !clip(-dy, a.y - z_min, &mut t0, &mut t1) {
+        return None;
+    }
+    if !clip(dy, z_max - a.y, &mut t0, &mut t1) {
+        return None;
+    }
+    Some((
+        Vec2::new(a.x + t0 * dx, a.y + t0 * dy),
+        Vec2::new(a.x + t1 * dx, a.y + t1 * dy),
+    ))
 }

@@ -287,7 +287,14 @@ fn build_brain(
             let path = soccer_aia_graph_path();
             build_graph_brain(&path, engine, cache)?
         }
-        BrainInput::Titanium => Box::new(TitaniumBrain::default()),
+        BrainInput::Titanium => {
+            let path = soccer_saves_dir().join("Titanium.txt");
+            if path.is_file() {
+                build_graph_brain(&path, engine, cache)?
+            } else {
+                Box::new(TitaniumBrain::default())
+            }
+        }
         #[cfg(feature = "nn_train")]
         BrainInput::Trained => Box::new(TrainedBrain::default()),
         BrainInput::Graph(path) => build_graph_brain(path, engine, cache)?,
