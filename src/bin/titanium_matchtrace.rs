@@ -255,19 +255,6 @@ fn main() -> ExitCode {
         aicomp_soccer_sim::debug_draw::begin_frame();
         let away_out = away_brain.think(&away_api);
         let away_discs = aicomp_soccer_sim::debug_draw::snapshot().discs;
-        if true {
-            let cmd4 = away_out.for_player(aicomp_soccer_sim::player::PlayerId(4));
-            let p4_before = world
-                .players
-                .iter()
-                .find(|p| p.team == TeamId::Away && p.id.0 == 4)
-                .map(|p| p.pos)
-                .unwrap_or(Vec2::ZERO);
-            eprintln!(
-                "RAW CHECK tick={_tick} away P4 pos_before={:?} cmd.move_to={:?} sprint={} interact={}",
-                p4_before, cmd4.move_to, cmd4.sprint, cmd4.interact
-            );
-        }
         world.step_with_commands(&home_out, &away_out, FIXED_DT);
 
         let pos = |team: TeamId, id: u8| -> Vec2 {

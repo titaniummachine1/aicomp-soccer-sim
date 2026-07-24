@@ -24,4 +24,8 @@ scripts/__pycache__/
 data/titanium/
 target_ti/
 txt.txt
+# Not mine to publish -- a teammate's local reference capture, not part of
+# this session's work. Something in this environment auto-commits saved
+# files regardless of git add state, which swept it in twice already.
+data/reference/Position.txt
 
