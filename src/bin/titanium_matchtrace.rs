@@ -255,7 +255,7 @@ fn main() -> ExitCode {
         aicomp_soccer_sim::debug_draw::begin_frame();
         let away_out = away_brain.think(&away_api);
         let away_discs = aicomp_soccer_sim::debug_draw::snapshot().discs;
-        if _tick % 50 == 0 {
+        if _tick % 10 == 0 {
             let cmd4 = away_out.for_player(aicomp_soccer_sim::player::PlayerId(4));
             let p4_before = world
                 .players
