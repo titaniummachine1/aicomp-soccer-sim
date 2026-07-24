@@ -15,20 +15,27 @@ use std::process::ExitCode;
 use bevy::prelude::Vec2;
 
 use aicomp_soccer_sim::batch::{
-    default_team_brain, soccer_aia_graph_path, BrainInput, GraphEngine, ProgramCache,
+    default_team_brain, soccer_aia_graph_path, BrainInput, ProgramCache,
 };
 use aicomp_soccer_sim::brain::{TeamBrain, TeamId};
-use aicomp_soccer_sim::graph::load_team_graph;
 use aicomp_soccer_sim::graph_vm::RuntimeBrain;
 use aicomp_soccer_sim::params::{default_params_path, SimParams};
-use aicomp_soccer_sim::player::PlayerId;
 use aicomp_soccer_sim::world::{MatchWorld, FIXED_DT};
 
 fn build_brain(input: &BrainInput, cache: &ProgramCache) -> Result<Box<dyn TeamBrain>, String> {
+    // Built-ins matter here as much as graphs: running a symmetric built-in
+    // against itself is the control that tells you whether an asymmetry is in
+    // a team's logic or in the simulator itself.
     let path = match input {
+        BrainInput::Chase => return Ok(Box::new(aicomp_soccer_sim::brain::ChaseBallBrain)),
+        BrainInput::Idle => return Ok(Box::new(aicomp_soccer_sim::brain::IdleBrain)),
         BrainInput::Aia => soccer_aia_graph_path(),
         BrainInput::Graph(p) => p.clone(),
-        other => return Err(format!("titanium_matchtrace only supports graph brains (aia/graph:<path>), got {other:?}")),
+        other => {
+            return Err(format!(
+                "titanium_matchtrace supports chase/idle/aia/graph:<path>, got {other:?}"
+            ))
+        }
     };
     let g = cache
         .get_or_compile(&path)
