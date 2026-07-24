@@ -306,7 +306,9 @@ Editor / saves (workflow, not sim physics):
     **tackler** takes it.
   - Exchange pickup lockout **0.25s** after win (**0.55s** if contest spent both
     to 0). Frida `tackleRegenDelay=1.5s` not live.
-  - Both already at 0 stam: **no** free flip (was oppose-stack tackle lock).
+  - Both already at 0 stam: **equal → tackler steals** (same as any equal duel).
+    Sim follows that; confirm vs Unity with `probes/build_tackle_empty_stam.py`
+    (ping-pong after empty vs freeze).
 
 ### 19. Shot charge: ~0.30s warmup after pickup, then ~0.38s to 1.0
 

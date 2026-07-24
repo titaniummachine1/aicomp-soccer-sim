@@ -266,9 +266,10 @@ pub fn apply_interact(
     // Contested tackle (same rules in Scenario 1 and full match — one code path).
     // `player` here is the tackler (person pressing Interact without the ball).
     // Both lose drain = min(tackler, carrier). Pre-drain stamina decides:
-    //   tackler >= carrier → tackler steals (equal → both end at 0, tackler gets ball)
+    //   tackler >= carrier → tackler steals (equal / both already 0 → steal)
     //   tackler <  carrier → carrier keeps the excess, tackler loses
-    // Both already ~0 → no free flip (oppose-stack ping-pong).
+    // No special-case block at 0/0 — exchange lockout rate-limits flips. Unity
+    // parity: probes/build_tackle_empty_stam.py (confirm ping-pong vs lockout).
     if ball.held {
         if let Some((ct, cid)) = poss.carrier {
             if ct != player.team {
@@ -279,21 +280,13 @@ pub fn apply_interact(
                     let tackler_stam = player.stamina;
                     let carrier_stam = carrier_stamina.unwrap_or(0.0);
                     let eps = 1e-4;
-                    if tackler_stam <= eps && carrier_stam <= eps {
-                        poss.pickup_lockout = poss.pickup_lockout.max(0.40);
-                        trace(format!(
-                            "TACKLE_BOTH_EMPTY {:?} P{} on {:?} P{} (no flip)",
-                            player.team, player.id.0, ct, cid
-                        ));
-                        return InteractOutcome::default();
-                    }
                     let drain = tackler_stam.min(carrier_stam);
                     player.stamina = (tackler_stam - drain).max(0.0);
                     player.stamina_regen_lock_left = params
                         .stamina_tackle_regen_delay_s
                         .max(player.stamina_regen_lock_left);
                     let carrier_after = (carrier_stam - drain).max(0.0);
-                    // Equal or greater stamina → guaranteed steal.
+                    // Pre-drain compare; equal (incl. 0/0) → tackler steals.
                     let tackler_wins = tackler_stam + eps >= carrier_stam;
                     if tackler_wins {
                         poss.carrier = Some((player.team, player.id.0));
@@ -473,7 +466,9 @@ mod tests {
     }
 
     #[test]
-    fn both_empty_stamina_does_not_pingpong_steal() {
+    fn both_empty_stamina_equal_still_steals() {
+        // 0/0 is equal pre-drain → tackler wins (no special-case block).
+        // Exchange lockout still applies (both_spent → 0.55s).
         let params = SimParams::default();
         let mut ball = Ball {
             pos: Vec2::ZERO,
@@ -502,7 +497,7 @@ mod tests {
             sprint: false,
             interact: true,
         };
-        let out = apply_interact(
+        let drain = apply_interact(
             &mut attacker,
             &mut ball,
             &mut poss,
@@ -512,10 +507,13 @@ mod tests {
             Some(0.0),
             Some(0.0),
             None,
-        );
-        assert!(out.drain.is_none());
-        assert_eq!(poss.carrier, Some((TeamId::Home, 1)));
-        assert!(poss.pickup_lockout >= 0.40);
+        )
+        .drain
+        .expect("0/0 duel returns drain");
+        assert!(drain.attacker_wins);
+        assert!(drain.drain.abs() < 1e-5);
+        assert_eq!(poss.carrier, Some((TeamId::Away, 1)));
+        assert!(poss.pickup_lockout >= 0.55);
     }
 
     #[test]
