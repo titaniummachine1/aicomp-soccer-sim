@@ -27,9 +27,8 @@ fn trace(msg: impl std::fmt::Display) {
 pub struct Possession {
     pub carrier: Option<(TeamId, u8)>,
     pub pickup_lockout: f32,
-    /// After a kick, the **shooter alone** cannot re-pickup/tackle for a few
-    /// seconds (SoccerBall inspector: “shooter alone cannot re-pickup/tackle…”;
-    /// serialized ~3.0s). Teammates may still mid-air claim after ball lockout.
+    /// Retained for opening-kick timing/sensor parity. It does not block the
+    /// shooter from interacting with a free ball in range.
     pub kick_exclude_shooter: Option<(TeamId, u8)>,
     pub kick_exclude_left: f32,
     /// True after the **match's** first charged release. Gates opening-only
@@ -197,10 +196,9 @@ pub fn apply_interact(
             player.charge_warmup_left = 0.0;
             let was_opening = !poss.first_kick_done;
             poss.carrier = None;
-            // Ball lockout (global 0.125s): nobody grabs same-tick / instantly.
-            poss.pickup_lockout = params.pickup_delay_s;
-            // Shooter alone (~3s from SoccerBall): cannot re-pickup/tackle.
-            // Teammates may mid-air claim after the ball lockout.
+            // A kicked ball remains interactable immediately. There is no
+            // artificial post-kick cooldown; tackle exchange lockouts below
+            // are separate and only apply after a contested steal.
             poss.kick_exclude_shooter = Some((player.team, player.id.0));
             poss.kick_exclude_left = 3.0;
             poss.first_kick_done = true;
@@ -237,15 +235,6 @@ pub fn apply_interact(
         return InteractOutcome::default();
     }
 
-    let shooter_locked = matches!(
-        poss.kick_exclude_shooter,
-        Some((t, id)) if t == player.team && id == player.id.0
-    );
-    // SoccerBall: shooter alone cannot re-pickup/tackle after releasing a shot.
-    if shooter_locked {
-        return InteractOutcome::default();
-    }
-
     let since_kick = if poss.kick_exclude_left > 0.0 {
         (3.0 - poss.kick_exclude_left).clamp(0.0, 3.0)
     } else {
@@ -253,7 +242,7 @@ pub fn apply_interact(
     };
     let shooter_team = poss.kick_exclude_shooter.map(|(t, _)| t);
 
-    // Shared BALL lockout after kick/steal. Opening dump alone may bypass via
+    // Tackle/pickup exchange lockout. Opening dump alone may bypass via
     // hot_opp (opponent reclaim after hang).
     if poss.pickup_lockout > 0.0 {
         let hot_opp = shooter_team.is_some_and(|t| t != player.team)
@@ -716,8 +705,9 @@ mod tests {
     }
 
     #[test]
-    fn shooter_cannot_repickup_while_exclude_active() {
-        // Prefab: “shooter alone cannot re-pickup/tackle after releasing a shot”.
+    fn shooter_can_repickup_while_exclude_timer_is_active() {
+        // The timer remains for opening-kick timing, but it must not block
+        // normal Interact pickup by the player who just kicked.
         let params = SimParams::default();
         let mut ball = Ball {
             pos: Vec2::new(0.5, 0.0),
@@ -759,7 +749,7 @@ mod tests {
             None,
             None,
         );
-        assert!(poss.carrier.is_none());
-        assert!(!ball.held);
+        assert_eq!(poss.carrier, Some((TeamId::Home, 1)));
+        assert!(ball.held);
     }
 }
