@@ -121,7 +121,9 @@ pub struct InteractOutcome {
     pub shot: bool,
 }
 
-/// Interact uses the hold/aim point (BallHoldLocation), not body center alone.
+/// Interact uses the nearer of BallHoldLocation and the player's body center.
+/// Being inside the body radius is therefore still a valid interaction; the
+/// ball is never physically pushed by that overlap.
 /// `carrier_stamina` is required for contested tackles (read before mut borrow).
 pub fn apply_interact(
     player: &mut Player,
@@ -340,9 +342,7 @@ pub fn apply_interact(
             && poss.opening_hot_reclaim
             && !poss.opening_dump_hang;
         // Unity DB33 Away claim ~0.95–1.0s (Is_Kickoff already 0.37 by t=1.0).
-        let kickoff_claim_ok = kickoff_elapsed_s
-            .map(|t| t >= 0.95)
-            .unwrap_or(true);
+        let kickoff_claim_ok = kickoff_elapsed_s.map(|t| t >= 0.95).unwrap_or(true);
         let can_claim = if player.id.0 == 4 {
             dist <= params.interact_radius
         } else if hot_opp_window {
@@ -385,12 +385,7 @@ pub fn apply_interact(
     InteractOutcome::default()
 }
 
-pub fn sync_held_ball(
-    ball: &mut Ball,
-    players: &[Player],
-    poss: &Possession,
-    params: &SimParams,
-) {
+pub fn sync_held_ball(ball: &mut Ball, players: &[Player], poss: &Possession, params: &SimParams) {
     if let Some((team, id)) = poss.carrier {
         if let Some(p) = players.iter().find(|p| p.team == team && p.id.0 == id) {
             ball.held = true;
@@ -456,7 +451,11 @@ mod tests {
         .drain
         .expect("equal-stam tackle returns drain");
         assert!(drain.attacker_wins);
-        assert!((drain.drain - 1.0).abs() < 1e-5, "carrier drain={}", drain.drain);
+        assert!(
+            (drain.drain - 1.0).abs() < 1e-5,
+            "carrier drain={}",
+            drain.drain
+        );
         assert_eq!(poss.carrier, Some((TeamId::Away, 1)));
         assert!(
             attacker.stamina.abs() < 1e-5,
@@ -664,19 +663,56 @@ mod tests {
             interact: true,
         };
         apply_interact(
-            &mut mate,
+            &mut mate, &mut ball, &mut poss, cmd, &params, 0.019, None, None, None,
+        );
+        assert_eq!(poss.carrier, Some((TeamId::Home, 2)));
+        assert!(ball.held);
+        assert!(ball.grounded(&params));
+    }
+
+    #[test]
+    fn pickup_works_inside_body_radius_when_hold_point_is_outside() {
+        let mut params = SimParams::default();
+        params.hold_offset = 0.8;
+        let mut ball = Ball {
+            pos: Vec2::ZERO,
+            vel: Vec2::ZERO,
+            height: params.ball_rest_height,
+            vel_y: 0.0,
+            held: false,
+        };
+        let mut poss = Possession::default();
+        let mut player = Player {
+            team: TeamId::Home,
+            id: PlayerId(4),
+            pos: Vec2::new(params.interact_radius - 0.05, 0.0),
+            vel: Vec2::ZERO,
+            facing: Vec2::X,
+            stamina: 1.0,
+            stamina_regen_lock_left: 0.0,
+            shot_charge: 0.0,
+            charge_warmup_left: 0.0,
+        };
+        let move_to = player.pos;
+
+        apply_interact(
+            &mut player,
             &mut ball,
             &mut poss,
-            cmd,
+            BrainCommand {
+                move_to,
+                sprint: false,
+                interact: true,
+            },
             &params,
             0.019,
             None,
             None,
             None,
         );
-        assert_eq!(poss.carrier, Some((TeamId::Home, 2)));
+
+        assert_eq!(poss.carrier, Some((TeamId::Home, 4)));
         assert!(ball.held);
-        assert!(ball.grounded(&params));
     }
 
     #[test]
