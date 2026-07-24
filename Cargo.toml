@@ -32,6 +32,18 @@ path = "src/bin/debug_tackle_test.rs"
 name = "titanium_drill"
 path = "src/bin/titanium_drill.rs"
 
+[[bin]]
+name = "titanium_drill2"
+path = "src/bin/titanium_drill2.rs"
+
+[[bin]]
+name = "titanium_drill3"
+path = "src/bin/titanium_drill3.rs"
+
+[[bin]]
+name = "titanium_matchtrace"
+path = "src/bin/titanium_matchtrace.rs"
+
 [features]
 # Day-to-day: `cargo run` (dev + fast_link). Bevy builds ONCE into target/debug,
 # then only THIS crate relinks. Do NOT flip features/profiles casually.

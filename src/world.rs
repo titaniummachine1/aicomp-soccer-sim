@@ -13,7 +13,7 @@
 use bevy::prelude::Vec2;
 
 use crate::api::{build_team_api, first_clear_dir, TeamApi, WorldSensors};
-use crate::ball::{goal_at, held_goal_at, step_free_ball, Ball, EndReason};
+use crate::ball::{goal_at, step_free_ball, Ball, EndReason};
 use crate::brain::{BrainCommand, BrainOutput, TeamBrain, TeamId};
 use crate::match_state::{
     kickoff_control_allowed, place_kickoff, receiving_team_circle_locked, MatchPhase, MatchState,
@@ -315,19 +315,12 @@ impl MatchWorld {
             &self.params,
         );
 
-        // Always verify goal volume after hold sync.
-        // Held: ball past the line in the mouth, and carrier body also on/over
-        // the goal line (players may walk into the net through the mouth).
+        // Always verify goal volume after hold sync. Ball center past the
+        // line inside the mouth scores, held or not — no carrier-body gate.
+        // The real game does not check who is holding the ball, only where
+        // it is; treating that as an exploit to guard against was wrong.
         let scored = if self.ball.held {
-            let carrier_pos = self.possession.carrier.and_then(|(t, id)| {
-                self.players
-                    .iter()
-                    .find(|p| p.team == t && p.id.0 == id)
-                    .map(|p| p.pos)
-            });
-            carrier_pos
-                .map(|cp| held_goal_at(self.ball.pos, cp, &self.params))
-                .unwrap_or(EndReason::None)
+            goal_at(self.ball.pos, &self.params)
         } else {
             let scored = step_free_ball(&mut self.ball, &self.params, dt);
             // No player↔ball body shove (Unity: Interact-only possession).
@@ -607,9 +600,7 @@ mod tests {
     fn idle_carrier_stand_still_gk_steals_with_full_stam() {
         use crate::brain::{BrainCommand, BrainOutput, TeamBrain};
         use crate::player::PlayerId;
-        use crate::titanium::{
-            apply_1v1_freeze, repark_1v1_inactive, setup_1v1_harness, TitaniumBrain,
-        };
+        use crate::titanium::{apply_1v1_freeze, repark_1v1_inactive, setup_1v1_harness};
 
         let params = SimParams::default();
         let mut world = MatchWorld::new_kickoff_opening(params, TeamId::Home);
@@ -622,7 +613,7 @@ mod tests {
             }
         }
 
-        let mut gk = TitaniumBrain::new(false);
+        let mut gk = ChaseBallBrain;
 
         let mut stole = false;
         let mut min_atk_stam = 1.0_f32;

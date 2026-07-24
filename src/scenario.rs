@@ -11,27 +11,37 @@ pub enum MatchScenario {
     Full,
     /// Scenario 1: center attacker P1 vs preset GK P4; extras parked+frozen.
     Scenario1AtkVsGk,
+    /// Scenario 3: real full-strength opponent team (all 4, unmodified AI)
+    /// vs our GK alone — our own P1-3 parked off-pitch and frozen. GK
+    /// capture/tackle at any point = GK goal, same as Scenario 1.
+    Scenario3Full4v1,
 }
 
 impl MatchScenario {
-    pub const ALL: [Self; 2] = [Self::Full, Self::Scenario1AtkVsGk];
+    pub const ALL: [Self; 3] = [Self::Full, Self::Scenario1AtkVsGk, Self::Scenario3Full4v1];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Full => "Full match",
             Self::Scenario1AtkVsGk => "GK duel",
+            Self::Scenario3Full4v1 => "GK vs 4v1",
         }
     }
 
     pub fn cycle(self) -> Self {
         match self {
             Self::Full => Self::Scenario1AtkVsGk,
-            Self::Scenario1AtkVsGk => Self::Full,
+            Self::Scenario1AtkVsGk => Self::Scenario3Full4v1,
+            Self::Scenario3Full4v1 => Self::Full,
         }
     }
 
     pub fn is_scenario1(self) -> bool {
         matches!(self, Self::Scenario1AtkVsGk)
+    }
+
+    pub fn is_scenario_4v1(self) -> bool {
+        matches!(self, Self::Scenario3Full4v1)
     }
 }
 
@@ -100,10 +110,18 @@ mod tests {
 
     #[test]
     fn cycle_round_trips() {
-        assert_eq!(MatchScenario::Full.cycle().cycle(), MatchScenario::Full);
+        // Three variants now — a full round trip takes 3 cycles, not 2.
         assert_eq!(
-            MatchScenario::Scenario1AtkVsGk.cycle().cycle(),
+            MatchScenario::Full.cycle().cycle().cycle(),
+            MatchScenario::Full
+        );
+        assert_eq!(
+            MatchScenario::Scenario1AtkVsGk.cycle().cycle().cycle(),
             MatchScenario::Scenario1AtkVsGk
+        );
+        assert_eq!(
+            MatchScenario::Scenario3Full4v1.cycle().cycle().cycle(),
+            MatchScenario::Scenario3Full4v1
         );
     }
 

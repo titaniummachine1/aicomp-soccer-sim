@@ -19,7 +19,6 @@ use crate::params::SimParams;
 use crate::probe_brains::{PerfectControllerBrain, Test1Brain, Test2Brain};
 #[cfg(feature = "nn_train")]
 use crate::train::TrainedBrain;
-use crate::titanium::TitaniumBrain;
 
 /// Clear copy when `nn_train` is gated off (default). Not a training bug.
 pub const NN_TRAIN_GATED_MSG: &str = "brain 'trained' is temporarily disabled \
@@ -253,14 +252,9 @@ pub fn soccer_aia_graph_path() -> PathBuf {
     saves.join("AIA.txt")
 }
 
-/// Default Full-match brain: AIA3/AIA graph when present, else a random built-in
-/// (chase/idle). Never auto-picks Titanium — that is opt-in (`--home titanium`
-/// / Scenario 1 GK) so the sim does not silently run the Rust titanium policy.
-pub fn default_team_brain() -> BrainInput {
-    let saves = soccer_saves_dir();
-    if saves.join("AIA3.txt").is_file() || saves.join("AIA.txt").is_file() {
-        return BrainInput::Aia;
-    }
+/// A random always-available built-in — no graph file needed, never fails.
+/// The bottom rung of every "what do we run if nothing else is there" chain.
+fn random_builtin() -> BrainInput {
     let bit = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() & 1)
@@ -270,6 +264,54 @@ pub fn default_team_brain() -> BrainInput {
     } else {
         BrainInput::Idle
     }
+}
+
+/// Same cascade as `BrainInput::Titanium`, for callers that just want a
+/// `Box<dyn TeamBrain>` directly (the `titanium_drill*` binaries) instead of
+/// going through the batch runner's `GraphEngine`/`ProgramCache`. Our own
+/// built graph if present, else whatever real opponent graph is in the
+/// saves dir, else a random always-available built-in. Never panics — there
+/// is no native Rust GK left to fall back to, the old one is retired.
+pub fn build_default_titanium_brain() -> Result<Box<dyn TeamBrain>, String> {
+    let saves = soccer_saves_dir();
+    for name in ["Titanium.txt", "AIA3.txt", "AIA.txt"] {
+        let path = saves.join(name);
+        if path.is_file() {
+            let g = load_team_graph(&path).map_err(|e| format!("load graph {path:?}: {e}"))?;
+            return Ok(Box::new(RuntimeBrain::compile(g)));
+        }
+    }
+    Ok(match random_builtin() {
+        BrainInput::Chase => Box::new(ChaseBallBrain),
+        _ => Box::new(IdleBrain),
+    })
+}
+
+/// Default Full-match brain: AIA3/AIA graph when present, else a random built-in
+/// (chase/idle). Never auto-picks Titanium — that is opt-in (`--home titanium`
+/// / Scenario 1 GK) so the sim does not silently run the Rust titanium policy.
+pub fn default_team_brain() -> BrainInput {
+    let saves = soccer_saves_dir();
+    if saves.join("AIA3.txt").is_file() || saves.join("AIA.txt").is_file() {
+        return BrainInput::Aia;
+    }
+    random_builtin()
+}
+
+/// What `BrainInput::Titanium` actually loads on a machine that hasn't built
+/// the Python graph yet. There is no native Rust GK to fall back to anymore
+/// (the old one is retired) — cascade instead: our own graph if it's been
+/// built, then whatever real opponent graph is sitting in the saves dir, then
+/// a random always-available built-in. Never panics; worst case is idle.
+fn titanium_fallback(engine: GraphEngine, cache: Option<&ProgramCache>) -> Result<Box<dyn TeamBrain>, String> {
+    let saves = soccer_saves_dir();
+    for name in ["AIA3.txt", "AIA.txt"] {
+        let path = saves.join(name);
+        if path.is_file() {
+            return build_graph_brain(&path, engine, cache);
+        }
+    }
+    build_brain(&random_builtin(), engine, cache)
 }
 
 fn build_brain(
@@ -292,7 +334,7 @@ fn build_brain(
             if path.is_file() {
                 build_graph_brain(&path, engine, cache)?
             } else {
-                Box::new(TitaniumBrain::default())
+                titanium_fallback(engine, cache)?
             }
         }
         #[cfg(feature = "nn_train")]

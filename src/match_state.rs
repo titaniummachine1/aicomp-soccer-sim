@@ -171,6 +171,11 @@ fn random_opening_kickoff() -> TeamId {
 /// free ball at center, wing faceoffs, Kickoff phase / circle lock, walk-in
 /// pickup, hold, charge warmup, first kick. `kickoff_delay_s` only gates the
 /// cosmetic GoalPause wait before this reset runs after a goal/whistle.
+///
+/// Stamina resets to full for every player here, unconditionally, on every
+/// kickoff — goal-scored or stale-ball whistle alike. This overrides an
+/// earlier "stamina persists across whistle and goal kickoffs" finding
+/// (TimePlot + Discord 2026-07-22): that was a bug, not real behavior.
 pub fn place_kickoff(
     ball: &mut Ball,
     players: &mut [Player],
@@ -185,13 +190,13 @@ pub fn place_kickoff(
     // Auto-hold on (0,0) skipped the Unity first-second path (DB33).
     ball.held = false;
     for p in players.iter_mut() {
-        // Positions / facing / charge reset. Stamina intentionally persists
-        // across whistle and goal kickoffs (TimePlot + Discord 2026-07-22).
         p.pos = faceoff_world(p.team, p.id, kickoff_team);
         p.vel = Vec2::ZERO;
         p.facing = kickoff_facing(p.team, p.id, kickoff_team);
         p.shot_charge = 0.0;
         p.charge_warmup_left = 0.0;
+        p.stamina = 1.0;
+        p.stamina_regen_lock_left = 0.0;
     }
 }
 

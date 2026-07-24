@@ -32,7 +32,8 @@ use aicomp_soccer_sim::team_threads::{
     PersistentThinkBarrier, ResettableBrain, ThinkTimings,
 };
 use aicomp_soccer_sim::titanium::{
-    apply_1v1_freeze, repark_1v1_inactive, setup_1v1_harness, TitaniumBrain,
+    apply_1v1_freeze, apply_4v1_freeze, repark_1v1_inactive, repark_4v1_inactive,
+    setup_1v1_harness, setup_4v1_harness,
 };
 #[cfg(feature = "nn_train")]
 use aicomp_soccer_sim::train::TrainedBrain;
@@ -180,15 +181,20 @@ fn parse_viewer_args() -> ViewerArgs {
                 });
                 scenario = match v {
                     "1" | "scenario1" | "Scenario1" => MatchScenario::Scenario1AtkVsGk,
+                    "3" | "scenario3" | "Scenario3" | "4v1" => MatchScenario::Scenario3Full4v1,
                     "full" | "Full" => MatchScenario::Full,
                     other => {
-                        eprintln!("error: --scenario expected 1|scenario1|full, got {other}");
+                        eprintln!(
+                            "error: --scenario expected 1|scenario1|3|scenario3|4v1|full, got {other}"
+                        );
                         std::process::exit(1);
                     }
                 };
             }
             "--atk-away" => {
-                scenario = MatchScenario::Scenario1AtkVsGk;
+                if matches!(scenario, MatchScenario::Full) {
+                    scenario = MatchScenario::Scenario1AtkVsGk;
+                }
                 titanium_1v1_attack_home = false;
             }
             "--z-bias" => {
@@ -307,14 +313,15 @@ fn parse_viewer_args() -> ViewerArgs {
         }
         i += 1;
     }
-    if scenario.is_scenario1() {
+    if scenario.is_scenario1() || scenario.is_scenario_4v1() {
         opening = if titanium_1v1_attack_home {
             TeamId::Home
         } else {
             TeamId::Away
         };
-        // GK duel: default the GK side to Titanium.txt (graph). Attacker keeps
-        // the Full-match default (AIA3/AIA) unless the user set that side.
+        // GK duel / 4v1: default the GK side to Titanium.txt (graph).
+        // Attacker/opponent keeps the Full-match default (AIA3/AIA) unless
+        // the user set that side.
         if titanium_1v1_attack_home {
             if !away_set {
                 away = BrainInput::Titanium;
@@ -368,6 +375,25 @@ fn main() {
             args.away.label(),
         );
         eprintln!("Controls: WASD move · Shift sprint · E interact/shoot · R reset");
+    } else if args.scenario.is_scenario_4v1() {
+        eprintln!(
+            "Scenario 3 (4v1): GK side={} | opponent brain={} GK brain={}",
+            if args.titanium_1v1_attack_home {
+                "away"
+            } else {
+                "home"
+            },
+            if args.titanium_1v1_attack_home {
+                args.home.label()
+            } else {
+                args.away.label()
+            },
+            if args.titanium_1v1_attack_home {
+                args.away.label()
+            } else {
+                args.home.label()
+            },
+        );
     }
     if args.fast || fill_to_idle_budget(args.speed_t) <= 0.0 {
         eprintln!("viewer zero-idle ON — tick advances as soon as both brains finish");
@@ -379,6 +405,8 @@ fn main() {
                     primary_window: Some(Window {
                         title: if args.scenario.is_scenario1() {
                             "AIComp Soccer Sim — S1 Atk vs GK".into()
+                        } else if args.scenario.is_scenario_4v1() {
+                            "AIComp Soccer Sim — GK vs 4v1".into()
                         } else {
                             "AIComp Soccer Sim".into()
                         },
@@ -413,6 +441,8 @@ fn main() {
                     args.titanium_1v1_attack_home,
                     args.titanium_1v1_z_bias,
                 );
+            } else if args.scenario.is_scenario_4v1() {
+                setup_4v1_harness(&mut world, !args.titanium_1v1_attack_home);
             }
             ViewerWorld {
                 world,
@@ -425,7 +455,7 @@ fn main() {
         .insert_resource(TeamScripts {
             home_path,
             away_path,
-            status: if args.scenario.is_scenario1() {
+            status: if args.scenario.is_scenario1() || args.scenario.is_scenario_4v1() {
                 format!(
                     "{} — pure game; GK capture = GK goal",
                     args.scenario.label()
@@ -497,7 +527,6 @@ enum ActiveBrain {
     Test1(Test1Brain),
     Test2(Test2Brain),
     Perfect(PerfectControllerBrain),
-    Titanium(TitaniumBrain),
     #[cfg(feature = "nn_train")]
     Trained(TrainedBrain),
 }
@@ -512,7 +541,6 @@ impl ActiveBrain {
             ActiveBrain::Test1(_) => "test1",
             ActiveBrain::Test2(_) => "test2",
             ActiveBrain::Perfect(_) => "perfect",
-            ActiveBrain::Titanium(_) => "titanium",
             #[cfg(feature = "nn_train")]
             ActiveBrain::Trained(_) => "trained",
         }
@@ -540,7 +568,6 @@ impl TeamBrain for ActiveBrain {
             ActiveBrain::Test1(b) => b.think(api),
             ActiveBrain::Test2(b) => b.think(api),
             ActiveBrain::Perfect(b) => b.think(api),
-            ActiveBrain::Titanium(b) => b.think(api),
             #[cfg(feature = "nn_train")]
             ActiveBrain::Trained(b) => b.think(api),
         }
@@ -569,15 +596,27 @@ fn resolve_brain(input: &BrainInput) -> (ActiveBrain, PathBuf) {
             (load_graph_brain(&path), path)
         }
         BrainInput::Graph(path) => (load_graph_brain(path), path.clone()),
+        // Titanium is opt-in to a graph like any other team — there is no
+        // native Rust GK to fall back to anymore. Cascade: our own built
+        // graph, then whatever real opponent graph is in the saves dir,
+        // then a random always-available built-in. Never panics.
         BrainInput::Titanium => {
             let path = soccer_saves_dir().join("Titanium.txt");
             if path.is_file() {
-                (load_graph_brain(&path), path)
+                return (load_graph_brain(&path), path);
+            }
+            let aia = aicomp_soccer_sim::batch::soccer_aia_graph_path();
+            if aia.is_file() {
+                return (load_graph_brain(&aia), aia);
+            }
+            let bit = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos() & 1)
+                .unwrap_or(0);
+            if bit == 0 {
+                (ActiveBrain::Chase(ChaseBallBrain), PathBuf::from("chase"))
             } else {
-                (
-                    ActiveBrain::Titanium(TitaniumBrain::default()),
-                    PathBuf::from("titanium"),
-                )
+                (ActiveBrain::Idle(IdleBrain), PathBuf::from("idle"))
             }
         }
         #[cfg(feature = "nn_train")]
@@ -1745,16 +1784,22 @@ fn step_locked_tick(
     // Tick lock: both brains must finish before physics.
     let (mut home_out, mut away_out, timings) = brains.think(home_api, away_api);
     *debug_draw = aicomp_soccer_sim::debug_draw::snapshot();
-    if one_v_one.enabled() {
+    if one_v_one.scenario.is_scenario1() {
         apply_1v1_freeze(&mut home_out, &mut away_out, world, one_v_one.attack_home);
+    } else if one_v_one.scenario.is_scenario_4v1() {
+        // attack_home doubles as "opponent (full team) is Home" here too —
+        // GK is on the other side.
+        apply_4v1_freeze(&mut home_out, &mut away_out, world, !one_v_one.attack_home);
     }
     *last_home = home_out.clone();
     *last_away = away_out.clone();
 
     let phys0 = std::time::Instant::now();
     world.step_with_commands(&home_out, &away_out, FIXED_DT);
-    if one_v_one.enabled() {
+    if one_v_one.scenario.is_scenario1() {
         repark_1v1_inactive(world, one_v_one.attack_home);
+    } else if one_v_one.scenario.is_scenario_4v1() {
+        repark_4v1_inactive(world, !one_v_one.attack_home);
     }
     clock.physics_ms = phys0.elapsed().as_secs_f32() * 1000.0;
     interp.push_tick(world);
@@ -1891,7 +1936,11 @@ fn apply_scenario1_scoring(
         );
     }
 
-    setup_1v1_harness(world, attack_home, one_v_one.z_bias);
+    if one_v_one.scenario.is_scenario1() {
+        setup_1v1_harness(world, attack_home, one_v_one.z_bias);
+    } else {
+        setup_4v1_harness(world, !attack_home);
+    }
     world.match_state.score_home = keep_h;
     world.match_state.score_away = keep_a;
     *round = Scenario1Round {
@@ -2006,7 +2055,7 @@ struct Titanium1v1Mode {
 
 impl Titanium1v1Mode {
     fn enabled(self) -> bool {
-        self.scenario.is_scenario1()
+        self.scenario.is_scenario1() || self.scenario.is_scenario_4v1()
     }
 }
 
@@ -2038,8 +2087,11 @@ fn restart_match(
     let mut params = viewer.world.params.clone();
     params.kickoff_delay_s = 0.0;
     viewer.world = MatchWorld::new_kickoff_opening(params, opening);
-    if one_v_one.enabled() {
+    if one_v_one.scenario.is_scenario1() {
         setup_1v1_harness(&mut viewer.world, one_v_one.attack_home, one_v_one.z_bias);
+        *round = Scenario1Round::arm(&viewer.world);
+    } else if one_v_one.scenario.is_scenario_4v1() {
+        setup_4v1_harness(&mut viewer.world, !one_v_one.attack_home);
         *round = Scenario1Round::arm(&viewer.world);
     } else {
         *round = Scenario1Round::default();
@@ -2142,9 +2194,10 @@ fn handle_ui_buttons(
                     UiAction::SetScenario(selected) => {
                         one_v_one.scenario = *selected;
                         let mode = *one_v_one;
-                        // GK duel defaults the GK side to Titanium.txt; Full
-                        // keeps whatever graphs are already loaded.
-                        if mode.scenario.is_scenario1() {
+                        // GK duel / 4v1 both default the GK side to
+                        // Titanium.txt; Full keeps whatever graphs are
+                        // already loaded.
+                        if mode.scenario.is_scenario1() || mode.scenario.is_scenario_4v1() {
                             let ti = soccer_saves_dir().join("Titanium.txt");
                             if ti.is_file() {
                                 if mode.attack_home {

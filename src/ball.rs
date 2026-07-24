@@ -290,17 +290,6 @@ pub fn goal_at(pos: Vec2, params: &SimParams) -> EndReason {
     EndReason::None
 }
 
-/// Held-ball goal: ball past the line is not enough — the **carrier body** must
-/// also be on/over the goal line. Otherwise `hold_offset` (~1.67m) scores while
-/// the player is still on the pitch (phantom walk-in goals / 50–0 spam).
-pub fn held_goal_at(ball_pos: Vec2, carrier_pos: Vec2, params: &SimParams) -> EndReason {
-    match goal_at(ball_pos, params) {
-        EndReason::GoalAway if carrier_pos.x >= params.goal_line_x => EndReason::GoalAway,
-        EndReason::GoalHome if carrier_pos.x <= -params.goal_line_x => EndReason::GoalHome,
-        _ => EndReason::None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,7 +382,10 @@ mod tests {
     }
 
     #[test]
-    fn held_ball_in_mouth_still_scores() {
+    fn held_ball_in_mouth_scores_regardless_of_carrier_position() {
+        // Ball center past the line inside the mouth scores — the real game
+        // does not check who is holding it or where they are, only where the
+        // ball is.
         let params = SimParams::default();
         let ball = Ball {
             pos: Vec2::new(params.goal_line_x + 0.5, 0.0),
@@ -403,16 +395,6 @@ mod tests {
             held: true,
         };
         assert_eq!(goal_at(ball.pos, &params), EndReason::GoalAway);
-        // Carrier still on the pitch side of the line — hold alone must not score.
-        assert_eq!(
-            held_goal_at(ball.pos, Vec2::new(params.goal_line_x - 1.0, 0.0), &params),
-            EndReason::None
-        );
-        // Carrier on/over the line — walk-in counts.
-        assert_eq!(
-            held_goal_at(ball.pos, Vec2::new(params.goal_line_x, 0.0), &params),
-            EndReason::GoalAway
-        );
         let mut ball = ball;
         assert_eq!(step_free_ball(&mut ball, &params, 0.019), EndReason::GoalAway);
     }
