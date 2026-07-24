@@ -9,3 +9,19 @@ bruteforce_timeplot_analysis.json
 *.orig
 *.bak
 
+# ---------------------------------------------------------------------------
+# Titanium competition engine — NEVER commit to this repo.
+#
+# This repository is PUBLIC. Our actual team AI (the Python graph builder and
+# the Titanium.txt it emits) is the competition deliverable and lives in the
+# PRIVATE titanim-socker-engine repo. It is only *built into* this tree so the
+# drill/headless harnesses can load it as `--gk data/titanium/Titanium.txt`.
+# Everything below is generated or private-by-origin — keep it untracked so a
+# stray `git add -A` can never publish our strategy.
+scripts/build_titanium.py
+scripts/debug_multigoal.py
+scripts/__pycache__/
+data/titanium/
+target_ti/
+txt.txt
+
