@@ -1,0 +1,20 @@
+---
+description: Hard requirement — fast incremental cargo run; never rebuild Bevy on src edits
+alwaysApply: true
+---
+
+# Incremental compile is a hard requirement
+
+Assume the normal workflow is: edit only `src/`, then `cargo run`. Optimize for
+that. Any change that makes Bevy or other heavy deps rebuild after tiny code
+edits is a **regression** unless unavoidable — **warn explicitly before
+suggesting it**.
+
+- Day-to-day: `cargo run` (dev). Compile should rebuild **only this crate**.
+- Do **not** flip Bevy features, profiles, rustflags, or `.cargo/config` casually.
+- Do **not** use `--release` / `--no-default-features` / `cargo clean` for routine
+  iteration (separate caches / full wipe).
+- If something looks wrong: `scripts/rebuild_crate.bat` first, then
+  `scripts/rebuild_deep.bat` only as last resort.
+- Goal: fastest possible edit → compile → run. Preserve incremental compilation
+  unless there is no technically feasible alternative.

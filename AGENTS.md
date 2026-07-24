@@ -4,6 +4,41 @@ Use this crate as the **offline game copy**. Do **not** ask the user to run
 Unity / TimePlots for routine AI evaluation. Self-test with headless matches
 and `cargo test`.
 
+## Hard requirement — fastest edit → compile → run
+
+**Assume the normal workflow is: edit only files in `src/`, then `cargo run`.
+Optimize for that.** Any solution that causes Bevy or other heavy dependencies
+to rebuild for tiny code changes is a **regression** unless absolutely
+unavoidable — and must be **warned about explicitly before suggesting**.
+
+Expected loop:
+
+- Small changes to our code (`src/`).
+- `cargo run` (dev / default features).
+- Compile should be **near-instant**, rebuilding **only this crate**.
+- **Never** treat a Bevy (or other large-dep) recompile after normal edits as OK.
+
+Full dependency rebuild is only expected after:
+
+- first build after clone,
+- `cargo clean` / `scripts\rebuild_deep.bat`,
+- changing Bevy version or its Cargo features,
+- changing Cargo profiles / rustflags / `.cargo/config.toml` linker flags,
+- first use of a different profile (`--release` vs debug),
+- switching feature sets that actually affect dependencies (`nn_train`,
+  `--no-default-features`, etc.).
+
+Ordinary gameplay / AI / sim edits **must not** trigger a Bevy rebuild. Fast
+incremental compilation is a **hard requirement**. Preserve it unless there is
+no technically feasible alternative.
+
+Graceful degradation if something looks wrong (do **not** jump to Bevy):
+
+1. `scripts\rebuild_crate.bat` — this package only
+2. `scripts\rebuild_deep.bat` — Bevy + deps (last resort; multi-minute)
+
+Optional: `scripts\cargo_hot.bat …` for HIGH priority + max `-j`.
+
 ## Always prefer
 
 ```bat
@@ -11,21 +46,15 @@ cargo test --lib
 cargo run --release --bin soccer_headless -- --secs 20 --home chase --away idle
 ```
 
-Viewer only when you need eyes on a bug:
+Viewer (incremental — **dev**, not release):
 
 ```bat
-cargo run --release
+cargo run
 ```
 
 `fast_link` is **default** — Bevy stays prepared in **`target/debug`** for
-`cargo run`. If something looks wrong: `scripts\rebuild_crate.bat` first.
-Still broken: `scripts\rebuild_deep.bat`. Static: `cargo run-static`.
-Max jobs + HIGH priority: `scripts\cargo_hot.bat …`.
-
-**Incremental rule:** day-to-day is `cargo run` (dev), not `--release`.
-Release and dev are different caches; preparing release does **not** skip Bevy
-for the next `cargo run`. Do not flip Bevy features/profiles unless you accept
-one full Bevy prepare again.
+`cargo run`. Release is a **separate** cache; preparing `--release` does **not**
+warm the next `cargo run`.
 
 **NN train harness** (`src/train`, brain `trained`) is **gated off by default**
 (`nn_train` feature) so slow compiles are not mistaken for training failure.
