@@ -324,7 +324,22 @@ fn run_batch(args: &Args, params: SimParams) -> Vec<Result<BatchMatchResult, Str
     run_batch_parallel(jobs, args.jobs)
 }
 
+/// Graph compilation is recursive-descent over the dependency DAG (memoized,
+/// but depth still scales with the graph's longest chain, not node count).
+/// A sufficiently large opponent graph can exceed the default thread stack
+/// and crash with a raw STATUS_STACK_OVERFLOW before any of our own error
+/// handling gets a chance to run. Running on a thread with a much bigger
+/// stack sidesteps this without touching the interpreter itself.
 fn main() -> ExitCode {
+    std::thread::Builder::new()
+        .stack_size(512 * 1024 * 1024)
+        .spawn(run)
+        .expect("spawn main worker thread")
+        .join()
+        .expect("main worker thread panicked")
+}
+
+fn run() -> ExitCode {
     let argv: Vec<String> = env::args().skip(1).collect();
     let args = match parse_args(&argv) {
         Ok(a) => a,
