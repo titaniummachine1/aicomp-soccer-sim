@@ -25,6 +25,10 @@ pub mod team_threads;
 pub mod titanium;
 pub mod timeplot;
 pub mod world;
+/// Square-weights NN harness. **Off by default** (`nn_train` feature) so Bevy
+/// cold-build pain is not mistaken for training breakage. Code is intact —
+/// `cargo build --features nn_train` turns it back on.
+#[cfg(feature = "nn_train")]
 pub mod train;
 
 pub use ball::{goal_at, resolve_player_bodies, step_free_ball, Ball, EndReason};

@@ -20,7 +20,16 @@ cargo run --release
 `fast_link` is **default** — Bevy stays prepared. If something looks wrong:
 `scripts\rebuild_crate.bat` first (this crate only). Still broken:
 `scripts\rebuild_deep.bat` (full wipe including Bevy). Static portable:
-`cargo run-static`.
+`cargo run-static`. Max jobs + HIGH priority: `scripts\cargo_hot.bat …`.
+
+**Cold Bevy builds are multi-minute on purpose** (wgpu/render). Chess engines have
+no Bevy — do not compare. Do **not** use `--release` for the first Bevy prepare;
+use `cargo run` / `scripts\cargo_hot.bat build`. After Bevy is cached, optional
+smoother viewer FPS: `cargo run --profile dev-smooth`.
+
+**NN train harness** (`src/train`, brain `trained`) is **gated off by default**
+(`nn_train` feature) so slow compiles are not mistaken for training failure.
+Code is intact. Re-enable: `--features nn_train`.
 
 ## Fishtest-style batch
 

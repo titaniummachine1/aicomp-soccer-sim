@@ -17,8 +17,14 @@ use crate::graph::{load_team_graph, GraphBrain};
 use crate::graph_vm::{CachedProgram, RuntimeBrain};
 use crate::params::SimParams;
 use crate::probe_brains::{PerfectControllerBrain, Test1Brain, Test2Brain};
+#[cfg(feature = "nn_train")]
 use crate::train::TrainedBrain;
 use crate::titanium::TitaniumBrain;
+
+/// Clear copy when `nn_train` is gated off (default). Not a training bug.
+pub const NN_TRAIN_GATED_MSG: &str = "brain 'trained' is temporarily disabled \
+(feature nn_train OFF) to isolate Bevy cold builds — training code is intact; \
+rebuild with --features nn_train";
 use crate::world::{MatchWorld, FIXED_DT};
 
 /// Leave one logical CPU free ("core 0" reservation for system/UI).
@@ -88,6 +94,7 @@ pub enum BrainInput {
     Perfect,
     Aia,
     Titanium,
+    #[cfg(feature = "nn_train")]
     Trained,
     Graph(PathBuf),
 }
@@ -128,7 +135,16 @@ impl BrainInput {
             "perfect" | "kb" | "keyboard" => Ok(Self::Perfect),
             "aia" => Ok(Self::Aia),
             "titanium" | "ti" => Ok(Self::Titanium),
-            "trained" => Ok(Self::Trained),
+            "trained" => {
+                #[cfg(feature = "nn_train")]
+                {
+                    Ok(Self::Trained)
+                }
+                #[cfg(not(feature = "nn_train"))]
+                {
+                    Err(NN_TRAIN_GATED_MSG.into())
+                }
+            }
             other => Err(format!(
                 "unknown brain '{other}' (chase|idle|test1|test2|perfect|aia|titanium|trained|graph:<path>)"
             )),
@@ -144,6 +160,7 @@ impl BrainInput {
             Self::Perfect => "perfect".into(),
             Self::Aia => "aia".into(),
             Self::Titanium => "titanium".into(),
+            #[cfg(feature = "nn_train")]
             Self::Trained => "trained".into(),
             Self::Graph(p) => format!("graph:{}", p.display()),
         }
@@ -235,6 +252,7 @@ fn build_brain(
             build_graph_brain(&path, engine, cache)?
         }
         BrainInput::Titanium => Box::new(TitaniumBrain::default()),
+        #[cfg(feature = "nn_train")]
         BrainInput::Trained => Box::new(TrainedBrain::default()),
         BrainInput::Graph(path) => build_graph_brain(path, engine, cache)?,
     })

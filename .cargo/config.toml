@@ -2,20 +2,31 @@
 #
 #   1) Normal (default) — incremental. Bevy + deps stay prepared.
 #        cargo run --release
+#        scripts\cargo_hot.bat run --release
 #
 #   2) Static — portable .exe, still keeps dep object cache when possible.
 #        cargo run-static
 #
 #   3) Crate-only rebuild — wipe THIS package only; Bevy/libs untouched.
-#      Use when the binary looks stale/wrong after an edit.
 #        scripts\rebuild_crate.bat
-#        cargo clean -p aicomp-soccer-sim && cargo build --release
 #
 #   4) DEEP — wipe target/ entirely (Bevy + all deps). Last resort.
 #        scripts\rebuild_deep.bat
+#
+# Cold Bevy rebuilds on this machine (4c/8t) are always multi-minute — that is
+# wgpu/bevy_render, not "single-threaded cargo". Use cargo_hot.bat so jobs and
+# process priority are maxed; prefer `cargo run` (dev) over release for day-to-day.
+
+[build]
+# Use every logical CPU (override with CARGO_BUILD_JOBS if needed).
+jobs = 8
 
 [alias]
 run-static = "run --release --no-default-features"
 build-static = "build --release --no-default-features"
 # Mid-layer: force recompile of this crate only (Bevy stays).
 clean-crate = "clean -p aicomp-soccer-sim"
+
+# Faster links than MSVC link.exe (stable rust-lld from the toolchain).
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"

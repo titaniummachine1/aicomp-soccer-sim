@@ -30,6 +30,7 @@ use aicomp_soccer_sim::probe_brains::{PerfectControllerBrain, Test1Brain, Test2B
 use aicomp_soccer_sim::scenario::MatchScenario;
 use aicomp_soccer_sim::team_threads::{think_barrier, ThinkTimings};
 use aicomp_soccer_sim::world::{MatchWorld, FIXED_DT};
+#[cfg(feature = "nn_train")]
 use aicomp_soccer_sim::train::TrainedBrain;
 use aicomp_soccer_sim::titanium::{
     apply_1v1_freeze, repark_1v1_inactive, setup_1v1_harness, TitaniumBrain,
@@ -492,6 +493,7 @@ enum ActiveBrain {
     Test2(Test2Brain),
     Perfect(PerfectControllerBrain),
     Titanium(TitaniumBrain),
+    #[cfg(feature = "nn_train")]
     Trained(TrainedBrain),
 }
 
@@ -505,6 +507,7 @@ impl ActiveBrain {
             ActiveBrain::Test2(_) => "test2",
             ActiveBrain::Perfect(_) => "perfect",
             ActiveBrain::Titanium(_) => "titanium",
+            #[cfg(feature = "nn_train")]
             ActiveBrain::Trained(_) => "trained",
         }
     }
@@ -526,6 +529,7 @@ impl TeamBrain for ActiveBrain {
             ActiveBrain::Test2(b) => b.think(api),
             ActiveBrain::Perfect(b) => b.think(api),
             ActiveBrain::Titanium(b) => b.think(api),
+            #[cfg(feature = "nn_train")]
             ActiveBrain::Trained(b) => b.think(api),
         }
     }
@@ -557,10 +561,11 @@ fn resolve_brain(input: &BrainInput) -> (ActiveBrain, PathBuf) {
             ActiveBrain::Titanium(TitaniumBrain::default()),
             PathBuf::from("titanium"),
         ),
+        #[cfg(feature = "nn_train")]
         BrainInput::Trained => (
             ActiveBrain::Trained(TrainedBrain::default()),
-            PathBuf::from("trained")
-        )
+            PathBuf::from("trained"),
+        ),
     }
 }
 

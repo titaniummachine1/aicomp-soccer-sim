@@ -188,6 +188,7 @@ fn build_brain(input: &BrainInput) -> Result<Box<dyn TeamBrain>, String> {
             Box::new(RuntimeBrain::compile(g))
         }
         BrainInput::Titanium => Box::new(aicomp_soccer_sim::titanium::TitaniumBrain::default()),
+        #[cfg(feature = "nn_train")]
         BrainInput::Trained => Box::new(aicomp_soccer_sim::train::TrainedBrain::default()),
         BrainInput::Graph(path) => {
             let g = load_team_graph(path).map_err(|e| format!("load {path:?}: {e}"))?;
