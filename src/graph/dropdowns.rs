@@ -312,6 +312,8 @@ impl OperationKind {
         self as u32
     }
 
+    /// Human-readable Unity dropdown label; retained for tooling and probes.
+    #[allow(dead_code)]
     pub fn label(self) -> &'static str {
         match self {
             Self::Abs => "abs",
@@ -370,6 +372,7 @@ pub fn eval_operation(a: f32, kind: u32) -> f32 {
 }
 
 /// Load helper: JSON modifier → wire `u32` for IR immediates.
+#[allow(dead_code)]
 pub fn operation_kind(modifier: &str) -> u32 {
     OperationKind::from_modifier(modifier).as_u32()
 }

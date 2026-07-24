@@ -92,8 +92,8 @@ AIA GAPS (stock AIA.txt still soft / blank in sim):
 
 fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut secs = 60.0f32;
-    let mut home = BrainInput::Aia;
-    let mut away = BrainInput::Aia;
+    let mut home = aicomp_soccer_sim::batch::default_team_brain();
+    let mut away = aicomp_soccer_sim::batch::default_team_brain();
     let mut opening = TeamId::Home;
     let mut until_goal = false;
     let mut goals = 1u32;
@@ -183,7 +183,7 @@ fn build_brain(input: &BrainInput) -> Result<Box<dyn TeamBrain>, String> {
         BrainInput::Test2 => Box::new(Test2Brain::default()),
         BrainInput::Perfect => Box::new(PerfectControllerBrain),
         BrainInput::Aia => {
-            let path = soccer_saves_dir().join("AIA.txt");
+            let path = aicomp_soccer_sim::batch::soccer_aia_graph_path();
             let g = load_team_graph(&path).map_err(|e| format!("load AIA: {e}"))?;
             Box::new(RuntimeBrain::compile(g))
         }
@@ -211,8 +211,11 @@ fn print_aia_gap_banner(saves: &Path) {
             saves.join("AIA_Debug.txt").display()
         );
     }
-    if !saves.join("AIA.txt").is_file() {
-        eprintln!("warn: missing {}", saves.join("AIA.txt").display());
+    if !saves.join("AIA3.txt").is_file() && !saves.join("AIA.txt").is_file() {
+        eprintln!(
+            "warn: missing AIA3.txt / AIA.txt under {}",
+            saves.display()
+        );
     }
 }
 

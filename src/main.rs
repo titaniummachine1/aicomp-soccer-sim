@@ -29,12 +29,12 @@ use aicomp_soccer_sim::player::PlayerId;
 use aicomp_soccer_sim::probe_brains::{PerfectControllerBrain, Test1Brain, Test2Brain};
 use aicomp_soccer_sim::scenario::MatchScenario;
 use aicomp_soccer_sim::team_threads::{think_barrier, ThinkTimings};
-use aicomp_soccer_sim::world::{MatchWorld, FIXED_DT};
-#[cfg(feature = "nn_train")]
-use aicomp_soccer_sim::train::TrainedBrain;
 use aicomp_soccer_sim::titanium::{
     apply_1v1_freeze, repark_1v1_inactive, setup_1v1_harness, TitaniumBrain,
 };
+#[cfg(feature = "nn_train")]
+use aicomp_soccer_sim::train::TrainedBrain;
+use aicomp_soccer_sim::world::{MatchWorld, FIXED_DT};
 use bevy::picking::prelude::*;
 use bevy::prelude::*;
 use bevy::ui::{FocusPolicy, RelativeCursorPosition};
@@ -114,13 +114,13 @@ USAGE:
   cargo run --release -- [OPTIONS]
 
 OPTIONS:
-  --home <brain>        Home / Team A brain (default: aia)
-  --away <brain>        Away / Team B brain (default: aia)
+  --home <brain>        Home / Team A brain (default: aia3 if Saves has AIA3.txt)
+  --away <brain>        Away / Team B brain (default: same)
   --both <brain>        Set home and away to the same brain
-  --scenario 1          Scenario 1: full roster; inactive players parked far + frozen
+  --scenario 1          GK duel: P1 vs GK P4; extras parked; GK capture = GK goal
   --scenario scenario1  Alias for --scenario 1
   --titanium-1v1        Compatibility alias for --scenario 1
-  --atk-away            With Scenario 1, Away attacks (default Home)
+  --atk-away            With GK duel, Away attacks (default Home)
   --z-bias <+|->        Attacker spawn Z bias (default +)
   --opening home|away   Opening kickoff side (default: home; R keeps it)
   --seed <u64>          Opening from seed: even=home, odd=away
@@ -129,12 +129,14 @@ OPTIONS:
   -h, --help            Show this help
 
 BRAINS:
-  chase | idle | test1 | test2 | perfect (kb|keyboard) | aia | titanium | graph:<path>
+  chase | idle | test1 | test2 | perfect (kb|keyboard) | aia | aia3 | titanium | graph:<path>
 
-SCENARIO 1:
-  Default brains: attacker = keyboard (perfect), GK = titanium.
-  Override with --home / --away (e.g. both titanium for AI vs AI).
-  WASD move · Shift sprint · E interact/shoot · R reset bout
+  Default (Full + GK duel): AIA3.txt (else AIA.txt) from AIComp Saves; if missing, random chase/idle.
+  Titanium / keyboard are opt-in only (--home / --away) — scenario UI never swaps brains.
+
+GK DUEL:
+  Same brains as Full. Only rule change: GK P4 capture/tackle awards a goal to the GK side.
+  Layout: attacker P1 + GK P4 live; other six parked + frozen.
 
 TIMING:
   Tick lock always waits for both brains.
@@ -154,9 +156,8 @@ fn parse_viewer_args() -> ViewerArgs {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut fast = false;
     let mut speed_t = idle_budget_to_fill(FIXED_DT);
-    let mut home = BrainInput::Aia;
-    let mut away = BrainInput::Aia;
-    let mut brains_explicit = false;
+    let mut home = aicomp_soccer_sim::batch::default_team_brain();
+    let mut away = aicomp_soccer_sim::batch::default_team_brain();
     let mut opening = TeamId::Home;
     let mut scenario = MatchScenario::Full;
     let mut titanium_1v1_attack_home = true;
@@ -259,7 +260,6 @@ fn parse_viewer_args() -> ViewerArgs {
                     eprintln!("error: {e}");
                     std::process::exit(1);
                 });
-                brains_explicit = true;
             }
             "--away" => {
                 i += 1;
@@ -272,7 +272,6 @@ fn parse_viewer_args() -> ViewerArgs {
                     eprintln!("error: {e}");
                     std::process::exit(1);
                 });
-                brains_explicit = true;
             }
             "--both" => {
                 i += 1;
@@ -287,7 +286,6 @@ fn parse_viewer_args() -> ViewerArgs {
                 });
                 home = brain.clone();
                 away = brain;
-                brains_explicit = true;
             }
             "-h" | "--help" => {
                 print_viewer_help();
@@ -307,17 +305,8 @@ fn parse_viewer_args() -> ViewerArgs {
         } else {
             TeamId::Away
         };
-        // Default: you drive the attacker (P1), Titanium GKs. Explicit
-        // --home/--away/--both keep AI-vs-AI / custom setups.
-        if !brains_explicit {
-            if titanium_1v1_attack_home {
-                home = BrainInput::Perfect;
-                away = BrainInput::Titanium;
-            } else {
-                home = BrainInput::Titanium;
-                away = BrainInput::Perfect;
-            }
-        }
+        // Same default brains as Full (AIA / chase / idle). Keyboard + Titanium
+        // stay opt-in via --home/--away — pure game + GK-hold goal only.
     }
     ViewerArgs {
         fast,
@@ -423,7 +412,10 @@ fn main() {
             home_path,
             away_path,
             status: if args.scenario.is_scenario1() {
-                format!("{} titanium harness", args.scenario.label())
+                format!(
+                    "{} — pure game; GK capture = GK goal",
+                    args.scenario.label()
+                )
             } else {
                 format!("cli home={} away={}", args.home.label(), args.away.label())
             },
@@ -498,6 +490,7 @@ enum ActiveBrain {
 }
 
 impl ActiveBrain {
+    #[allow(dead_code)]
     fn label(&self) -> &'static str {
         match self {
             ActiveBrain::Runtime(_) => "runtime",
@@ -553,7 +546,7 @@ fn resolve_brain(input: &BrainInput) -> (ActiveBrain, PathBuf) {
             PathBuf::from("perfect"),
         ),
         BrainInput::Aia => {
-            let path = soccer_saves_dir().join("AIA.txt");
+            let path = aicomp_soccer_sim::batch::soccer_aia_graph_path();
             (load_graph_brain(&path), path)
         }
         BrainInput::Graph(path) => (load_graph_brain(path), path.clone()),
@@ -839,7 +832,8 @@ enum UiAction {
     LoadHome,
     LoadAway,
     Restart,
-    CycleScenario,
+    ToggleScenarioMenu,
+    SetScenario(MatchScenario),
     TogglePause,
     ToggleFast,
     ToggleDebug,
@@ -859,6 +853,14 @@ struct DebugButtonText;
 
 #[derive(Component)]
 struct ScenarioButtonText;
+
+#[derive(Component)]
+struct ScenarioMenuPanel;
+
+#[derive(Component)]
+struct ScenarioOptionText {
+    scenario: MatchScenario,
+}
 
 #[derive(Component)]
 struct TeamNameText {
@@ -1014,9 +1016,12 @@ fn setup_board(
         ));
     }
 
-    let disc_mesh = meshes.add(Circle::new(1.0));
     let interact_px = p.interact_radius * PPM;
+    let body_px = p.body_radius * PPM;
+    let disc_mesh = meshes.add(Circle::new(body_px));
+    let interaction_ring_mesh = meshes.add(Annulus::new((interact_px - 1.5).max(0.5), interact_px));
     let ball_px = p.ball_radius * PPM;
+    let ball_mesh = meshes.add(Circle::new(1.0));
     let home_mat = materials.add(Color::srgb(0.85, 0.88, 0.95));
     let away_mat = materials.add(Color::srgb(0.12, 0.12, 0.14));
     let ball_mat = materials.add(Color::WHITE);
@@ -1035,7 +1040,7 @@ fn setup_board(
         };
         let z = player_z(player.team, player.id);
         let pos = Vec3::new(player.pos.x * PPM, player.pos.y * PPM, z);
-        // Arc in unit-disc space (parent scales by interact_px) so children share disc Z.
+        // Arc in unit-disc space, scaled locally to the interaction radius.
         let arc_r = 1.0 + STAMINA_ARC_PAD_PX / interact_px;
         let arc_hw = STAMINA_ARC_HALF_W_PX / interact_px;
         let empty_mesh = meshes.add(stroked_arc_mesh(
@@ -1060,10 +1065,18 @@ fn setup_board(
                 },
                 Mesh2d(disc_mesh.clone()),
                 MeshMaterial2d(mat),
-                Transform::from_translation(pos).with_scale(Vec3::splat(interact_px)),
+                // The filled circle is exactly the physics body collider.
+                Transform::from_translation(pos),
                 Pickable::default(),
             ))
             .with_children(|child| {
+                child.spawn((
+                    Mesh2d(interaction_ring_mesh.clone()),
+                    MeshMaterial2d(materials.add(Color::srgba(1.0, 1.0, 1.0, 0.72))),
+                    // Same player layer; the ring is only the interaction
+                    // reach indicator and is not a second collision body.
+                    Transform::from_xyz(0.0, 0.0, 0.02),
+                ));
                 child.spawn((
                     PlayerStaminaArc {
                         team: player.team,
@@ -1072,7 +1085,7 @@ fn setup_board(
                     },
                     Mesh2d(empty_mesh),
                     MeshMaterial2d(stamina_empty_mat.clone()),
-                    Transform::IDENTITY,
+                    Transform::from_scale(Vec3::splat(interact_px)),
                 ));
                 child.spawn((
                     PlayerStaminaArc {
@@ -1082,7 +1095,7 @@ fn setup_board(
                     },
                     Mesh2d(fill_mesh),
                     MeshMaterial2d(stamina_fill_mat.clone()),
-                    Transform::IDENTITY,
+                    Transform::from_scale(Vec3::splat(interact_px)),
                     Visibility::Hidden,
                 ));
             });
@@ -1102,7 +1115,7 @@ fn setup_board(
 
     commands.spawn((
         BallDisc,
-        Mesh2d(disc_mesh),
+        Mesh2d(ball_mesh),
         MeshMaterial2d(ball_mat),
         Transform::from_xyz(0.0, 0.0, 12.0).with_scale(Vec3::splat(ball_px)),
     ));
@@ -1606,7 +1619,7 @@ fn scenario_btn(parent: &mut ChildSpawnerCommands, scenario: MatchScenario) {
     parent
         .spawn((
             Button,
-            UiAction::CycleScenario,
+            UiAction::ToggleScenarioMenu,
             Node {
                 padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
                 min_width: Val::Px(120.0),
@@ -1620,11 +1633,59 @@ fn scenario_btn(parent: &mut ChildSpawnerCommands, scenario: MatchScenario) {
         .with_children(|b| {
             b.spawn((
                 ScenarioButtonText,
-                Text::new(scenario.label()),
+                Text::new(format!("Scenario: {}", scenario.label())),
                 TextFont::from_font_size(13.0),
                 TextColor(Color::WHITE),
                 TextLayout::new(Justify::Center, LineBreak::NoWrap),
             ));
+        });
+
+    parent
+        .spawn((
+            ScenarioMenuPanel,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(300.0),
+                top: Val::Px(58.0),
+                min_width: Val::Px(170.0),
+                padding: UiRect::all(Val::Px(5.0)),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(3.0),
+                border_radius: BorderRadius::all(Val::Px(6.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.06, 0.06, 0.10, 0.98)),
+            Visibility::Hidden,
+        ))
+        .with_children(|menu| {
+            for option in MatchScenario::ALL {
+                menu.spawn((
+                    Button,
+                    UiAction::SetScenario(option),
+                    Node {
+                        width: Val::Percent(100.0),
+                        padding: UiRect::axes(Val::Px(9.0), Val::Px(6.0)),
+                        ..default()
+                    },
+                    BackgroundColor(if option == scenario {
+                        Color::srgb(0.18, 0.38, 0.28)
+                    } else {
+                        Color::srgb(0.16, 0.16, 0.22)
+                    }),
+                ))
+                .with_children(|item| {
+                    item.spawn((
+                        ScenarioOptionText { scenario: option },
+                        Text::new(if option == scenario {
+                            format!("✓ {}", option.label())
+                        } else {
+                            option.label().to_string()
+                        }),
+                        TextFont::from_font_size(13.0),
+                        TextColor(Color::WHITE),
+                    ));
+                });
+            }
         });
 }
 
@@ -1950,11 +2011,7 @@ fn restart_match(
     params.kickoff_delay_s = 0.0;
     viewer.world = MatchWorld::new_kickoff_opening(params, opening);
     if one_v_one.enabled() {
-        setup_1v1_harness(
-            &mut viewer.world,
-            one_v_one.attack_home,
-            one_v_one.z_bias,
-        );
+        setup_1v1_harness(&mut viewer.world, one_v_one.attack_home, one_v_one.z_bias);
         *round = Scenario1Round::arm(&viewer.world);
     } else {
         *round = Scenario1Round::default();
@@ -1962,7 +2019,10 @@ fn restart_match(
 
     viewer.home.reset_state();
     viewer.away.reset_state();
-    
+    // Do not leave stale script debug geometry or selected commands from the
+    // previous scenario visible during the first reset tick.
+    viewer.debug_draw = Default::default();
+
     viewer.last_home = BrainOutput::default();
     viewer.last_away = BrainOutput::default();
     interp.reset_from(&viewer.world);
@@ -1996,6 +2056,7 @@ fn handle_ui_buttons(
         (
             With<StatusText>,
             Without<ScenarioButtonText>,
+            Without<ScenarioOptionText>,
             Without<DebugButtonText>,
         ),
     >,
@@ -2009,6 +2070,7 @@ fn handle_ui_buttons(
             With<DebugButtonText>,
             Without<StatusText>,
             Without<ScenarioButtonText>,
+            Without<ScenarioOptionText>,
         ),
     >,
     mut interp: ResMut<InterpState>,
@@ -2016,13 +2078,14 @@ fn handle_ui_buttons(
     opening: Res<ViewerOpening>,
     mut one_v_one: ResMut<Titanium1v1Mode>,
     mut round: ResMut<Scenario1Round>,
-    mut scenario_q: Query<
-        &mut Text,
+    mut scenario_menu_q: Query<&mut Visibility, With<ScenarioMenuPanel>>,
+    mut scenario_text_q: Query<
         (
-            With<ScenarioButtonText>,
-            Without<StatusText>,
-            Without<DebugButtonText>,
+            &mut Text,
+            Option<&ScenarioButtonText>,
+            Option<&ScenarioOptionText>,
         ),
+        Or<(With<ScenarioButtonText>, With<ScenarioOptionText>)>,
     >,
 ) {
     for (interaction, action, mut bg) in &mut interactions {
@@ -2040,32 +2103,24 @@ fn handle_ui_buttons(
             Interaction::Pressed => {
                 *bg = BackgroundColor(lighten(base, 0.20));
                 match action {
-                    UiAction::CycleScenario => {
-                        one_v_one.scenario = one_v_one.scenario.cycle();
-                        let mode = *one_v_one;
-                        if mode.enabled() {
-                            // Attacker = keyboard P1, GK = Titanium.
-                            if mode.attack_home {
-                                viewer.home =
-                                    ActiveBrain::Perfect(PerfectControllerBrain);
-                                viewer.away =
-                                    ActiveBrain::Titanium(TitaniumBrain::new(false));
-                                scripts.home_path = PathBuf::from("keyboard");
-                                scripts.away_path = PathBuf::from("titanium");
+                    UiAction::ToggleScenarioMenu => {
+                        if let Ok(mut visibility) = scenario_menu_q.single_mut() {
+                            *visibility = if matches!(*visibility, Visibility::Hidden) {
+                                Visibility::Visible
                             } else {
-                                viewer.home =
-                                    ActiveBrain::Titanium(TitaniumBrain::new(false));
-                                viewer.away =
-                                    ActiveBrain::Perfect(PerfectControllerBrain);
-                                scripts.home_path = PathBuf::from("titanium");
-                                scripts.away_path = PathBuf::from("keyboard");
-                            }
-                            scripts.status = format!(
-                                "{} — WASD/Shift/E attack, Titanium GK",
-                                mode.scenario.label()
-                            );
-                        } else {
-                            scripts.status = format!("{} scenario", mode.scenario.label());
+                                Visibility::Hidden
+                            };
+                        }
+                    }
+                    UiAction::SetScenario(selected) => {
+                        one_v_one.scenario = *selected;
+                        let mode = *one_v_one;
+                        // Scenario selection changes only layout and the
+                        // explicitly requested GK scoring rule. It never
+                        // replaces a loaded TXT graph with a built-in brain.
+                        scripts.status = format!("{} scenario", mode.scenario.label());
+                        if let Ok(mut visibility) = scenario_menu_q.single_mut() {
+                            *visibility = Visibility::Hidden;
                         }
                         restart_match(
                             &mut viewer,
@@ -2076,8 +2131,16 @@ fn handle_ui_buttons(
                             &mut round,
                         );
                         paused.0 = false;
-                        if let Ok(mut text) = scenario_q.single_mut() {
-                            *text = Text::new(mode.scenario.label());
+                        for (mut text, button, option) in &mut scenario_text_q {
+                            if button.is_some() {
+                                *text = Text::new(format!("Scenario: {}", mode.scenario.label()));
+                            } else if let Some(option) = option {
+                                *text = Text::new(if option.scenario == mode.scenario {
+                                    format!("✓ {}", option.scenario.label())
+                                } else {
+                                    option.scenario.label().to_string()
+                                });
+                            }
                         }
                         selection.selected = None;
                     }
@@ -2459,11 +2522,7 @@ fn draw_debug(
 
     let hold = p.hold_pos(params.hold_offset);
     let hold_px = Vec2::new(hold.x * PPM, hold.y * PPM);
-    gizmos.circle_2d(
-        hold_px,
-        4.0,
-        Color::srgb(1.0, 0.6, 0.1),
-    );
+    gizmos.circle_2d(hold_px, 4.0, Color::srgb(1.0, 0.6, 0.1));
     gizmos.line_2d(c, hold_px, Color::srgb(1.0, 0.6, 0.1));
 
     // Facing

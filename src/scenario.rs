@@ -14,10 +14,12 @@ pub enum MatchScenario {
 }
 
 impl MatchScenario {
+    pub const ALL: [Self; 2] = [Self::Full, Self::Scenario1AtkVsGk];
+
     pub fn label(self) -> &'static str {
         match self {
-            Self::Full => "Full",
-            Self::Scenario1AtkVsGk => "S1 Atk vs GK",
+            Self::Full => "Full match",
+            Self::Scenario1AtkVsGk => "GK duel",
         }
     }
 

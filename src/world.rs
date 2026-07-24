@@ -7,10 +7,8 @@
 //! - Possession via interact radius only
 //! - Brains run inline on the sim thread (no per-match worker threads in batch)
 //!
-//! Goal entry / post-corner pathfinding: deferred. If a move target is inside
-//! the goal volume we'd need a collision-circle sweep vs posts+walls (go
-//! straight if clear, else pathfind). For now assume nobody needs to walk
-//! into the goals — clamp players to the playable AABB.
+//! Goal-mouth entry is open through the center; outside the mouth, players
+//! remain clamped to the playable AABB. Free-ball post response is unchanged.
 
 use bevy::prelude::Vec2;
 
@@ -26,7 +24,6 @@ use crate::possession::{
     apply_interact, reset_possession_for_kickoff, sync_held_ball, tick_possession_timers,
     Possession,
 };
-use bevy::log::info;
 /// Confirmed AIComp fixed step (~52.6 Hz). Independent of render FPS.
 pub const FIXED_DT: f32 = 0.019;
 
@@ -177,20 +174,15 @@ impl MatchWorld {
                     .find(|p| p.team == t && p.id.0 == cid)
                     .map(|p| p.shot_charge)
             });
-            let cmd = raw;
-            // NB: This whole section is extremely badly coded by the LLM. Nothing should ever mutate the commands from the player,
-            // unless it's input sanetization. Things like opening movement etc. should be done as part of the engine step,
-            // or part of a separate method called before simulating, so that it can be skipped in fast mode. That said, I
-            // don't know what functionality this was meant to fix, so I will leave the commands for now, but the command
-            // beneath is commented out specifically because it made movement different than in the simulation.
-
-            // let cmd = filter_kickoff(
-            //     &self.players[i],
-            //     cmd,
-            //     &self.match_state,
-            //     &self.params,
-            //     self.ball.pos,
-            // );
+            // Kickoff restrictions are engine rules, not AI substitution:
+            // only the kicking striker may walk into the opening ball.
+            let cmd = filter_kickoff(
+                &self.players[i],
+                raw,
+                &self.match_state,
+                &self.params,
+                self.ball.pos,
+            );
             // let cmd = project_move_outside_kickoff_circle(
             //     &self.players[i],
             //     cmd,
@@ -324,8 +316,8 @@ impl MatchWorld {
         );
 
         // Always verify goal volume after hold sync.
-        // Held: require carrier body on/over the goal line (hold_offset alone
-        // must not score — players are clamped to the goal line AABB).
+        // Held: ball past the line in the mouth, and carrier body also on/over
+        // the goal line (players may walk into the net through the mouth).
         let scored = if self.ball.held {
             let carrier_pos = self.possession.carrier.and_then(|(t, id)| {
                 self.players
@@ -441,6 +433,8 @@ fn filter_kickoff(
     }
 }
 
+/// Retained Unity probe hook; currently disabled so raw TXT commands are used.
+#[allow(dead_code)]
 /// While opening-chase is suppressed, pin the *receiving* Defender MoveTo.x
 /// near the State0 skirt so they don't march onto the carrier C-lane.
 fn bias_receiving_defender_opening_hold(
@@ -466,6 +460,8 @@ fn bias_receiving_defender_opening_hold(
     }
 }
 
+/// Retained Unity probe hook; currently disabled so raw TXT commands are used.
+#[allow(dead_code)]
 /// Away opening carrier (DB35): Unity walks mostly −X with mild −Z while
 /// charging (O1≈(−3,−1.2) at release). Forcing Clear-F into MoveTo overshoots
 /// −Z and the dump flies past Home T2. Lead with a capped west/south step;
@@ -494,6 +490,8 @@ fn bias_away_opening_carrier_dump_lane(
     }
 }
 
+/// Retained Unity probe hook; currently disabled so raw TXT commands are used.
+#[allow(dead_code)]
 /// Block receiving-team tackles on the kickoff carrier until this kickoff's
 /// first kick has been released (Playmaker T2 was poaching before Away's dump).
 fn bias_receiving_opening_no_tackle(
@@ -514,6 +512,8 @@ fn bias_receiving_opening_no_tackle(
     }
 }
 
+/// Retained Unity probe hook; currently disabled so raw TXT commands are used.
+#[allow(dead_code)]
 /// Receiving team is idle during Kickoff (`filter_kickoff`); faceoff ±(1,7)
 /// sits **inside** r=7.25 (quirk #13). Do not rewrite MoveTo to the ring —
 /// that marched Home T1 off its park in the first second (Unity DB33 holds
@@ -529,15 +529,23 @@ fn project_move_outside_kickoff_circle(
     cmd
 }
 
-/// Pitch walk box only. Ball still uses open goal mouths for scoring; players
-/// do not enter the net (no post sweep / pathfind in batch sims).
+/// Pitch walk box. Goal mouths stay open so carriers can walk into the net
+/// (Unity walk-in goals). Outside the mouth, X is clamped to the playable AABB.
 pub fn clamp_player_to_pitch(player: &mut Player, params: &SimParams) {
-    player.pos.x = player.pos.x.clamp(params.x_min, params.x_max);
     player.pos.y = player.pos.y.clamp(params.z_min, params.z_max);
 
-    if player.pos.x <= params.x_min && player.vel.x < 0.0
-        || player.pos.x >= params.x_max && player.vel.x > 0.0
-    {
+    let in_mouth = player.pos.y.abs() <= params.goal_half_width;
+    // Past the goal line into the net (posts sit ~0.7m past the line).
+    let net_back = params.goal_line_x.abs() + 3.0;
+    if in_mouth {
+        player.pos.x = player.pos.x.clamp(-net_back, net_back);
+    } else {
+        player.pos.x = player.pos.x.clamp(params.x_min, params.x_max);
+    }
+
+    let x_lo = if in_mouth { -net_back } else { params.x_min };
+    let x_hi = if in_mouth { net_back } else { params.x_max };
+    if player.pos.x <= x_lo && player.vel.x < 0.0 || player.pos.x >= x_hi && player.vel.x > 0.0 {
         player.vel.x = 0.0;
     }
     if player.pos.y <= params.z_min && player.vel.y < 0.0
@@ -623,7 +631,7 @@ mod tests {
         let mut last_gk = 1.0_f32;
 
         for tick in 0..(25.0 / FIXED_DT) as u32 {
-            let (home_api, away_api) = world.build_apis();
+            let (_home_api, away_api) = world.build_apis();
             let mut home_out = BrainOutput::default();
             // Attacker stands still, holds ball (no Interact = no charge/kick).
             for i in 0..4 {
@@ -974,7 +982,7 @@ mod tests {
     }
 
     #[test]
-    fn player_cannot_enter_goal_past_line() {
+    fn player_can_walk_into_goal_mouth() {
         let params = SimParams::default();
         let mut p = Player {
             team: TeamId::Home,
@@ -987,6 +995,14 @@ mod tests {
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
         };
+        clamp_player_to_pitch(&mut p, &params);
+        assert!(
+            p.pos.x > params.x_max + 0.2,
+            "mouth must open into the net; got x={}",
+            p.pos.x
+        );
+        // Outside the mouth, still clamped to the pitch AABB.
+        p.pos = Vec2::new(40.5, params.goal_half_width + 1.0);
         clamp_player_to_pitch(&mut p, &params);
         assert!(p.pos.x <= params.x_max + 1e-4);
     }

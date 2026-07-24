@@ -133,7 +133,7 @@ impl BrainInput {
             "test1" => Ok(Self::Test1),
             "test2" => Ok(Self::Test2),
             "perfect" | "kb" | "keyboard" => Ok(Self::Perfect),
-            "aia" => Ok(Self::Aia),
+            "aia" | "aia3" => Ok(Self::Aia),
             "titanium" | "ti" => Ok(Self::Titanium),
             "trained" => {
                 #[cfg(feature = "nn_train")]
@@ -146,7 +146,7 @@ impl BrainInput {
                 }
             }
             other => Err(format!(
-                "unknown brain '{other}' (chase|idle|test1|test2|perfect|aia|titanium|trained|graph:<path>)"
+                "unknown brain '{other}' (chase|idle|test1|test2|perfect|aia|aia3|titanium|trained|graph:<path>)"
             )),
         }
     }
@@ -158,7 +158,14 @@ impl BrainInput {
             Self::Test1 => "test1".into(),
             Self::Test2 => "test2".into(),
             Self::Perfect => "perfect".into(),
-            Self::Aia => "aia".into(),
+            Self::Aia => {
+                let p = soccer_aia_graph_path();
+                if p.file_name().and_then(|s| s.to_str()) == Some("AIA3.txt") {
+                    "aia3".into()
+                } else {
+                    "aia".into()
+                }
+            }
             Self::Titanium => "titanium".into(),
             #[cfg(feature = "nn_train")]
             Self::Trained => "trained".into(),
@@ -236,6 +243,35 @@ pub fn soccer_saves_dir() -> PathBuf {
         .join("Soccer")
 }
 
+/// Unity Saves graph for `aia` / `aia3`: prefer **AIA3.txt**, else AIA.txt.
+pub fn soccer_aia_graph_path() -> PathBuf {
+    let saves = soccer_saves_dir();
+    let aia3 = saves.join("AIA3.txt");
+    if aia3.is_file() {
+        return aia3;
+    }
+    saves.join("AIA.txt")
+}
+
+/// Default Full-match brain: AIA3/AIA graph when present, else a random built-in
+/// (chase/idle). Never auto-picks Titanium — that is opt-in (`--home titanium`
+/// / Scenario 1 GK) so the sim does not silently run the Rust titanium policy.
+pub fn default_team_brain() -> BrainInput {
+    let saves = soccer_saves_dir();
+    if saves.join("AIA3.txt").is_file() || saves.join("AIA.txt").is_file() {
+        return BrainInput::Aia;
+    }
+    let bit = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() & 1)
+        .unwrap_or(0);
+    if bit == 0 {
+        BrainInput::Chase
+    } else {
+        BrainInput::Idle
+    }
+}
+
 fn build_brain(
     input: &BrainInput,
     engine: GraphEngine,
@@ -248,7 +284,7 @@ fn build_brain(
         BrainInput::Test2 => Box::new(Test2Brain::default()),
         BrainInput::Perfect => Box::new(PerfectControllerBrain),
         BrainInput::Aia => {
-            let path = soccer_saves_dir().join("AIA.txt");
+            let path = soccer_aia_graph_path();
             build_graph_brain(&path, engine, cache)?
         }
         BrainInput::Titanium => Box::new(TitaniumBrain::default()),

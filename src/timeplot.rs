@@ -31,7 +31,6 @@ struct PlotPrev {
     phase: MatchPhase,
     /// 0=loose, 1=home, 2=away
     poss: u8,
-    home_has: bool,
     /// Carrier shot charge (Home API "Ball Carrier Shot Charge" — either team).
     home_charge: f32,
     carrier: Option<(TeamId, u8)>,
@@ -390,7 +389,6 @@ impl TimePlotRecorder {
             score_away: sa,
             phase,
             poss,
-            home_has,
             home_charge,
             carrier,
         });

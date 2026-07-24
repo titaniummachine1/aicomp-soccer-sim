@@ -111,11 +111,9 @@ pub fn setup_1v1_harness(world: &mut MatchWorld, attack_home: bool, z_bias: f32)
     world.match_state.reset_stale_tracker(world.ball.pos);
 }
 
-/// Re-park inactive Scenario 1 players after physics clamps the pitch roster.
-///
-/// MatchWorld intentionally clamps every player to the playable AABB. Keeping
-/// this harness-only correction here preserves that core behavior while making
-/// inactive players remain invisible and unable to interact with the ball.
+/// Re-park inactive Scenario 1 players after physics (goal-mouth clamp can pull
+/// off-pitch parks back onto the AABB edges). Harness-only; keeps extras away
+/// from the ball.
 pub fn repark_1v1_inactive(world: &mut MatchWorld, attack_home: bool) {
     let (atk, gk_team) = if attack_home {
         (TeamId::Home, TeamId::Away)

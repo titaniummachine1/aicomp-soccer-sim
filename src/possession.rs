@@ -9,8 +9,8 @@ use crate::brain::{BrainCommand, TeamId};
 use crate::params::SimParams;
 use crate::player::Player;
 
-/// When set (`Some(t)`), `apply_interact` prints which branch ran that tick.
-/// Used by `debug_tick_trace` — leave `None` in normal runs.
+// When set (`Some(t)`), `apply_interact` prints which branch ran that tick.
+// Used by `debug_tick_trace` — leave `None` in normal runs.
 thread_local! {
     pub static TRACE_T: Cell<Option<f32>> = const { Cell::new(None) };
 }
@@ -131,7 +131,7 @@ pub fn apply_interact(
     params: &SimParams,
     dt: f32,
     carrier_stamina: Option<f32>,
-    carrier_shot_charge: Option<f32>,
+    _carrier_shot_charge: Option<f32>,
     // Some(elapsed) in Kickoff: free-ball claim waits until ≈1.0s (Unity DB33).
     kickoff_elapsed_s: Option<f32>,
 ) -> InteractOutcome {
