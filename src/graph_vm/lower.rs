@@ -100,6 +100,8 @@ pub struct CompileResult {
 #[derive(Debug, Clone)]
 struct CallFrame {
     create_sid: String,
+    /// Function call node sid (for resolving Color args through params).
+    call_sid: String,
     args: [Reg; 4],
     port_regs: HashMap<String, Reg>,
 }
@@ -163,6 +165,13 @@ impl Lowerer {
         let debug_draw_sids = lowerer.graph.debug_draws.clone();
         for sid in &debug_draw_sids {
             lowerer.lower_debug_draw(sid);
+        }
+        // Root Function side-effects (e.g. AIA Draw Player Debugs) — return unused.
+        let root_fns = lowerer.graph.root_functions.clone();
+        for sid in &root_fns {
+            if let Some(node) = lowerer.graph.nodes.get(sid).cloned() {
+                let _ = lowerer.lower_function_call(&node);
+            }
         }
         let controllers_by_slot = lowerer.graph.controllers.clone();
         for (i, ctrl_sid) in controllers_by_slot.iter().enumerate() {
@@ -306,18 +315,56 @@ impl Lowerer {
         let Some(in_sid) = self.graph.input_port_sid(node_sid, port_name) else {
             return crate::debug_draw::named_rgba("White");
         };
-        let Some(src_out) = self.graph.input_source.get(&in_sid) else {
+        self.resolve_color_from_port(&in_sid, 0)
+    }
+
+    /// Walk Relay / CreateFunction params back to a Color constant.
+    fn resolve_color_from_port(&self, port_sid: &str, depth: u32) -> [f32; 4] {
+        if depth > 12 {
             return crate::debug_draw::named_rgba("White");
-        };
-        let Some(pref) = self.graph.ports.get(src_out) else {
-            return crate::debug_draw::named_rgba("White");
-        };
-        if let Some(src_node) = self.graph.nodes.get(&pref.node_sid) {
-            if src_node.id == "Color" {
-                return crate::debug_draw::named_rgba(&src_node.modifier);
-            }
         }
-        crate::debug_draw::named_rgba("White")
+        // If this port is an input/relay, follow its source first.
+        if let Some(src_out) = self.graph.input_source.get(port_sid) {
+            return self.resolve_color_from_port(src_out, depth + 1);
+        }
+        let Some(pref) = self.graph.ports.get(port_sid) else {
+            return crate::debug_draw::named_rgba("White");
+        };
+        let Some(node) = self.graph.nodes.get(&pref.node_sid) else {
+            return crate::debug_draw::named_rgba("White");
+        };
+        match node.id.as_str() {
+            "Color" => crate::debug_draw::named_rgba(&node.modifier),
+            "Relay" => {
+                if let Some(in_sid) = self.graph.input_port_sid(&node.sid, "Any1") {
+                    self.resolve_color_from_port(&in_sid, depth + 1)
+                } else {
+                    crate::debug_draw::named_rgba("White")
+                }
+            }
+            "CreateFunction" => {
+                let idx = match pref.port_name.as_str() {
+                    "Any1" => 0,
+                    "Any2" => 1,
+                    "Any3" => 2,
+                    "Any4" => 3,
+                    _ => return crate::debug_draw::named_rgba("White"),
+                };
+                let Some(frame) = self.call_stack.last() else {
+                    return crate::debug_draw::named_rgba("White");
+                };
+                if frame.create_sid != node.sid {
+                    return crate::debug_draw::named_rgba("White");
+                }
+                let arg_port = ["Any1", "Any2", "Any3", "Any4"][idx];
+                if let Some(in_sid) = self.graph.input_port_sid(&frame.call_sid, arg_port) {
+                    self.resolve_color_from_port(&in_sid, depth + 1)
+                } else {
+                    crate::debug_draw::named_rgba("White")
+                }
+            }
+            _ => crate::debug_draw::named_rgba("White"),
+        }
     }
 
     fn lower_input(&mut self, node_sid: &str, port_name: &str) -> Option<Reg> {
@@ -438,9 +485,7 @@ impl Lowerer {
                         });
                         self.emit_move(node_sid, port_name, pos, RegisterKind::Vector)
                     }
-                    RelativePosMode::DirOnly(d) => {
-                        self.emit_const_vec2(node_sid, port_name, d)
-                    }
+                    RelativePosMode::DirOnly(d) => self.emit_const_vec2(node_sid, port_name, d),
                     RelativePosMode::PosPlus(d) => {
                         let pos = self.lower_input(node_sid, "Transform1").unwrap_or_else(|| {
                             self.emit_const_vec2(node_sid, "Transform1", Vec2::ZERO)
@@ -543,7 +588,8 @@ impl Lowerer {
                     .lower_input(node_sid, "Float1")
                     .unwrap_or_else(|| self.emit_const_float(node_sid, "Float1", 0.0));
                 let (opcode, op) = if node.id == "Operation" {
-                    let kind = crate::graph::dropdowns::OperationKind::from_modifier(&node.modifier);
+                    let kind =
+                        crate::graph::dropdowns::OperationKind::from_modifier(&node.modifier);
                     (OpCode::Operation, kind.as_u32())
                 } else {
                     (OpCode::Abs, 0)
@@ -778,9 +824,15 @@ impl Lowerer {
         ];
         self.call_stack.push(CallFrame {
             create_sid: def.sid.clone(),
+            call_sid: fn_node.sid.clone(),
             args,
             port_regs: HashMap::new(),
         });
+        // Unity runs DebugDraw sinks inside the function body each call.
+        let body_draws = def.debug_draws.clone();
+        for sid in &body_draws {
+            self.lower_debug_draw(sid);
+        }
         let ret = self
             .lower_input(&def.sid, "Any1")
             .unwrap_or_else(|| self.emit_const_null(&def.sid, "Any1"));
@@ -1171,5 +1223,203 @@ mod tests {
             ctx.output.commands[0].move_to.x,
             expect
         );
+    }
+
+    fn node_owned(
+        id: &str,
+        sid: &str,
+        modifier: &str,
+        owner: &str,
+        ports: Vec<RawPort>,
+    ) -> RawNode {
+        RawNode {
+            id: id.into(),
+            sid: sid.into(),
+            modifier: serde_json::json!(modifier),
+            owner_function_sid: owner.into(),
+            ports,
+        }
+    }
+
+    #[test]
+    fn root_function_debug_draw_lowers_and_runs() {
+        let raw = RawGraph {
+            nodes: vec![
+                node(
+                    "CreateFunction",
+                    "cf",
+                    "Draw",
+                    vec![
+                        port("Any1", "cf_a1o", 1, "cf"),
+                        port("Any2", "cf_a2o", 1, "cf"),
+                        port("Any4", "cf_a4o", 1, "cf"),
+                        port("Any1", "cf_ret", 0, "cf"),
+                    ],
+                ),
+                node_owned("Relay", "ra", "", "cf", vec![port("Any1", "rao", 2, "ra")]),
+                node_owned("Relay", "rb", "", "cf", vec![port("Any1", "rbo", 2, "rb")]),
+                node_owned("Relay", "rc", "", "cf", vec![port("Any1", "rco", 2, "rc")]),
+                node_owned(
+                    "Float",
+                    "fw",
+                    "1",
+                    "cf",
+                    vec![port("Float1", "fwo", 1, "fw")],
+                ),
+                node_owned(
+                    "DebugDrawLine",
+                    "ddl",
+                    "",
+                    "cf",
+                    vec![
+                        port("Vector31", "ddla", 0, "ddl"),
+                        port("Vector32", "ddlb", 0, "ddl"),
+                        port("Float1", "ddlw", 0, "ddl"),
+                        port("Color1", "ddlc", 0, "ddl"),
+                    ],
+                ),
+                node("Float", "ax", "1", vec![port("Float1", "axo", 1, "ax")]),
+                node("Float", "az", "2", vec![port("Float1", "azo", 1, "az")]),
+                node("Float", "ay", "0", vec![port("Float1", "ayo", 1, "ay")]),
+                node(
+                    "ConstructVector3",
+                    "pa",
+                    "",
+                    vec![
+                        port("Vector31", "pao", 1, "pa"),
+                        port("Float1", "pax", 0, "pa"),
+                        port("Float2", "pay", 0, "pa"),
+                        port("Float3", "paz", 0, "pa"),
+                    ],
+                ),
+                node("Float", "bx", "5", vec![port("Float1", "bxo", 1, "bx")]),
+                node("Float", "bz", "6", vec![port("Float1", "bzo", 1, "bz")]),
+                node("Float", "by", "0", vec![port("Float1", "byo", 1, "by")]),
+                node(
+                    "ConstructVector3",
+                    "pb",
+                    "",
+                    vec![
+                        port("Vector31", "pbo", 1, "pb"),
+                        port("Float1", "pbx", 0, "pb"),
+                        port("Float2", "pby", 0, "pb"),
+                        port("Float3", "pbz", 0, "pb"),
+                    ],
+                ),
+                node(
+                    "Color",
+                    "col",
+                    "Orange",
+                    vec![port("Color1", "colo", 1, "col")],
+                ),
+                node(
+                    "Function",
+                    "fn",
+                    "Draw",
+                    vec![
+                        port("Any1", "fna1", 0, "fn"),
+                        port("Any2", "fna2", 0, "fn"),
+                        port("Any4", "fna4", 0, "fn"),
+                        port("Any1", "fno", 1, "fn"),
+                    ],
+                ),
+            ],
+            connections: vec![
+                RawConnection {
+                    port0: "cf_a1o".into(),
+                    port1: "rao".into(),
+                },
+                RawConnection {
+                    port0: "cf_a2o".into(),
+                    port1: "rbo".into(),
+                },
+                RawConnection {
+                    port0: "cf_a4o".into(),
+                    port1: "rco".into(),
+                },
+                RawConnection {
+                    port0: "rao".into(),
+                    port1: "ddla".into(),
+                },
+                RawConnection {
+                    port0: "rbo".into(),
+                    port1: "ddlb".into(),
+                },
+                RawConnection {
+                    port0: "rco".into(),
+                    port1: "ddlc".into(),
+                },
+                RawConnection {
+                    port0: "fwo".into(),
+                    port1: "ddlw".into(),
+                },
+                RawConnection {
+                    port0: "axo".into(),
+                    port1: "pax".into(),
+                },
+                RawConnection {
+                    port0: "ayo".into(),
+                    port1: "pay".into(),
+                },
+                RawConnection {
+                    port0: "azo".into(),
+                    port1: "paz".into(),
+                },
+                RawConnection {
+                    port0: "bxo".into(),
+                    port1: "pbx".into(),
+                },
+                RawConnection {
+                    port0: "byo".into(),
+                    port1: "pby".into(),
+                },
+                RawConnection {
+                    port0: "bzo".into(),
+                    port1: "pbz".into(),
+                },
+                RawConnection {
+                    port0: "pao".into(),
+                    port1: "fna1".into(),
+                },
+                RawConnection {
+                    port0: "pbo".into(),
+                    port1: "fna2".into(),
+                },
+                RawConnection {
+                    port0: "colo".into(),
+                    port1: "fna4".into(),
+                },
+            ],
+        };
+
+        let graph = index_graph(raw, "vm_draw_test".into());
+        let compiled = Lowerer::compile(graph);
+        let has_draw = compiled
+            .controllers
+            .instructions
+            .iter()
+            .any(|i| i.op == OpCode::DebugDrawLine);
+        assert!(
+            has_draw,
+            "controllers IR must include DebugDrawLine from Function body"
+        );
+
+        let program = ProgramBuilder.pack(&compiled);
+        let mut ctx = ExecutionContext::new(
+            crate::api::TeamApi::empty(crate::brain::TeamId::Home),
+            compiled.vars.len(),
+            program.register_count as usize,
+        );
+        ctx.init_api_slots(&compiled.apis);
+        crate::debug_draw::begin_frame();
+        let mut interp = Interpreter::default();
+        interp.execute_settle(&program, &mut ctx);
+        interp.execute_controllers(&program, &mut ctx);
+        let snap = crate::debug_draw::snapshot();
+        assert_eq!(snap.lines.len(), 1);
+        let line = &snap.lines[0];
+        assert!((line.a.x - 1.0).abs() < 1e-4 && (line.a.y - 2.0).abs() < 1e-4);
+        assert!((line.b.x - 5.0).abs() < 1e-4 && (line.b.y - 6.0).abs() < 1e-4);
+        assert_eq!(line.rgba, crate::debug_draw::named_rgba("Orange"));
     }
 }

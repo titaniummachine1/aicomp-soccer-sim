@@ -70,6 +70,8 @@ pub struct GraphNode {
 pub struct CreateFunctionDef {
     pub sid: String,
     pub name: String,
+    /// DebugDrawLine / DebugDrawDisc body nodes owned by this CreateFunction.
+    pub debug_draws: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +86,8 @@ pub struct TeamGraph {
     pub set_variables: Vec<String>,
     /// Root-level DebugDrawLine / DebugDrawDisc sinks (owner empty).
     pub debug_draws: Vec<String>,
+    /// Root-level Function call sIDs (owner empty) — Unity runs these even when unread.
+    pub root_functions: Vec<String>,
     /// Function name → CreateFunction definition.
     pub create_functions: HashMap<String, CreateFunctionDef>,
     pub path: String,
@@ -101,7 +105,10 @@ pub fn index_graph(raw: RawGraph, path: String) -> TeamGraph {
     let mut controllers: [Option<String>; 4] = [None, None, None, None];
     let mut set_variables = Vec::new();
     let mut debug_draws = Vec::new();
+    let mut root_functions = Vec::new();
     let mut create_functions = HashMap::new();
+    // CreateFunction sid → owned DebugDraw sids (filled after name map exists).
+    let mut owned_debug_by_create: HashMap<String, Vec<String>> = HashMap::new();
 
     for n in raw.nodes {
         let modifier = normalize_modifier(&n.id, &n.modifier);
@@ -111,10 +118,18 @@ pub fn index_graph(raw: RawGraph, path: String) -> TeamGraph {
         if n.id == "SetVariable" && n.owner_function_sid.is_empty() {
             set_variables.push(n.sid.clone());
         }
-        if (n.id == "DebugDrawLine" || n.id == "DebugDrawDisc")
-            && n.owner_function_sid.is_empty()
-        {
-            debug_draws.push(n.sid.clone());
+        if n.id == "DebugDrawLine" || n.id == "DebugDrawDisc" {
+            if n.owner_function_sid.is_empty() {
+                debug_draws.push(n.sid.clone());
+            } else {
+                owned_debug_by_create
+                    .entry(n.owner_function_sid.clone())
+                    .or_default()
+                    .push(n.sid.clone());
+            }
+        }
+        if n.id == "Function" && n.owner_function_sid.is_empty() {
+            root_functions.push(n.sid.clone());
         }
         if n.id == "CreateFunction" {
             create_functions.insert(
@@ -122,6 +137,7 @@ pub fn index_graph(raw: RawGraph, path: String) -> TeamGraph {
                 CreateFunctionDef {
                     sid: n.sid.clone(),
                     name: modifier.clone(),
+                    debug_draws: Vec::new(),
                 },
             );
         }
@@ -147,7 +163,14 @@ pub fn index_graph(raw: RawGraph, path: String) -> TeamGraph {
         );
     }
 
+    for def in create_functions.values_mut() {
+        if let Some(owned) = owned_debug_by_create.remove(&def.sid) {
+            def.debug_draws = owned;
+        }
+    }
+
     let mut input_source = HashMap::new();
+    let mut relay_relay: Vec<(String, String)> = Vec::new();
     for c in raw.connections {
         let Some(a) = ports.get(&c.port0) else {
             continue;
@@ -155,11 +178,51 @@ pub fn index_graph(raw: RawGraph, path: String) -> TeamGraph {
         let Some(b) = ports.get(&c.port1) else {
             continue;
         };
-        // Prefer out → in; also accept reverse just in case.
-        if a.polarity != 0 && b.polarity == 0 {
+        let pa = a.polarity;
+        let pb = b.polarity;
+        // Out(1) → In(0)
+        if pa == 1 && pb == 0 {
             input_source.insert(c.port1.clone(), c.port0.clone());
-        } else if b.polarity != 0 && a.polarity == 0 {
+        } else if pb == 1 && pa == 0 {
             input_source.insert(c.port0.clone(), c.port1.clone());
+        // Out(1) → Relay(2)
+        } else if pa == 1 && pb == 2 {
+            input_source.insert(c.port1.clone(), c.port0.clone());
+        } else if pb == 1 && pa == 2 {
+            input_source.insert(c.port0.clone(), c.port1.clone());
+        // Relay(2) → In(0)
+        } else if pa == 2 && pb == 0 {
+            input_source.insert(c.port1.clone(), c.port0.clone());
+        } else if pb == 2 && pa == 0 {
+            input_source.insert(c.port0.clone(), c.port1.clone());
+        // Relay(2) ↔ Relay(2) — propagate after primary edges exist.
+        } else if pa == 2 && pb == 2 {
+            relay_relay.push((c.port0.clone(), c.port1.clone()));
+        // Legacy: any non-zero → in(0)
+        } else if pa != 0 && pb == 0 {
+            input_source.insert(c.port1.clone(), c.port0.clone());
+        } else if pb != 0 && pa == 0 {
+            input_source.insert(c.port0.clone(), c.port1.clone());
+        }
+    }
+
+    // Propagate sources along Relay↔Relay chains (CreateFunction → Relay → Relay → sink).
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (a, b) in &relay_relay {
+            if let Some(src) = input_source.get(a).cloned() {
+                if input_source.get(b).is_none() {
+                    input_source.insert(b.clone(), src);
+                    changed = true;
+                }
+            }
+            if let Some(src) = input_source.get(b).cloned() {
+                if input_source.get(a).is_none() {
+                    input_source.insert(a.clone(), src);
+                    changed = true;
+                }
+            }
         }
     }
 
@@ -170,6 +233,7 @@ pub fn index_graph(raw: RawGraph, path: String) -> TeamGraph {
         controllers,
         set_variables,
         debug_draws,
+        root_functions,
         create_functions,
         path,
     }
@@ -205,9 +269,15 @@ fn controller_slot(id: &str) -> Option<usize> {
 impl TeamGraph {
     pub fn input_port_sid(&self, node_sid: &str, port_name: &str) -> Option<String> {
         let node = self.nodes.get(node_sid)?;
+        // Prefer true inputs (polarity 0); Relay uses polarity 2 as bidirectional.
         node.ports
             .iter()
             .find(|p| p.id == port_name && p.polarity == 0)
+            .or_else(|| {
+                node.ports
+                    .iter()
+                    .find(|p| p.id == port_name && p.polarity == 2)
+            })
             .map(|p| p.sid.clone())
     }
 

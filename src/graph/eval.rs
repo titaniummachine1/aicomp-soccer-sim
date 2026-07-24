@@ -82,6 +82,14 @@ impl TeamBrain for GraphBrain {
             ctx.exec_debug_draw(sid);
         }
 
+        // Root Function calls are often side-effect only (e.g. AIA Draw Player Debugs).
+        let root_fns = self.graph.root_functions.clone();
+        for sid in &root_fns {
+            if let Some(node) = ctx.graph.nodes.get(sid).cloned() {
+                let _ = ctx.eval_function_call(&node);
+            }
+        }
+
         let mut out = BrainOutput::default();
         for (i, ctrl_sid) in controllers.iter().enumerate() {
             let Some(sid) = ctrl_sid else {
@@ -621,6 +629,12 @@ impl<'a> EvalCtx<'a> {
             cache: HashMap::new(),
         });
 
+        // Unity runs DebugDraw sinks inside the function body each call.
+        let body_draws = def.debug_draws.clone();
+        for sid in &body_draws {
+            self.exec_debug_draw(sid);
+        }
+
         // Return is CreateFunction Any1 polarity 0.
         let ret = self
             .input_named(&def.sid, "Any1")
@@ -968,6 +982,193 @@ mod tests {
         let out = brain.think(&empty_api());
         assert!((out.commands[0].move_to.x - 6.0).abs() < 1e-4);
         assert!((out.commands[0].move_to.y - 8.0).abs() < 1e-4);
+    }
+
+    fn node_owned(
+        id: &str,
+        sid: &str,
+        modifier: &str,
+        owner: &str,
+        ports: Vec<RawPort>,
+    ) -> RawNode {
+        RawNode {
+            id: id.into(),
+            sid: sid.into(),
+            modifier: serde_json::json!(modifier),
+            owner_function_sid: owner.into(),
+            ports,
+        }
+    }
+
+    #[test]
+    fn root_function_debug_draw_line_runs_with_color() {
+        // Mirrors AIA Draw Player Debugs: side-effect Function → body DebugDrawLine
+        // via polarity-2 Relays from CreateFunction params (Color on Any4).
+        let raw = RawGraph {
+            nodes: vec![
+                node(
+                    "CreateFunction",
+                    "cf",
+                    "Draw",
+                    vec![
+                        port("Any1", "cf_a1o", 1, "cf"),
+                        port("Any2", "cf_a2o", 1, "cf"),
+                        port("Any4", "cf_a4o", 1, "cf"),
+                        port("Any1", "cf_ret", 0, "cf"),
+                    ],
+                ),
+                node_owned("Relay", "ra", "", "cf", vec![port("Any1", "rao", 2, "ra")]),
+                node_owned("Relay", "rb", "", "cf", vec![port("Any1", "rbo", 2, "rb")]),
+                node_owned("Relay", "rc", "", "cf", vec![port("Any1", "rco", 2, "rc")]),
+                node_owned(
+                    "Float",
+                    "fw",
+                    "1",
+                    "cf",
+                    vec![port("Float1", "fwo", 1, "fw")],
+                ),
+                node_owned(
+                    "DebugDrawLine",
+                    "ddl",
+                    "",
+                    "cf",
+                    vec![
+                        port("Vector31", "ddla", 0, "ddl"),
+                        port("Vector32", "ddlb", 0, "ddl"),
+                        port("Float1", "ddlw", 0, "ddl"),
+                        port("Color1", "ddlc", 0, "ddl"),
+                    ],
+                ),
+                node("Float", "ax", "1", vec![port("Float1", "axo", 1, "ax")]),
+                node("Float", "az", "2", vec![port("Float1", "azo", 1, "az")]),
+                node("Float", "ay", "0", vec![port("Float1", "ayo", 1, "ay")]),
+                node(
+                    "ConstructVector3",
+                    "pa",
+                    "",
+                    vec![
+                        port("Vector31", "pao", 1, "pa"),
+                        port("Float1", "pax", 0, "pa"),
+                        port("Float2", "pay", 0, "pa"),
+                        port("Float3", "paz", 0, "pa"),
+                    ],
+                ),
+                node("Float", "bx", "5", vec![port("Float1", "bxo", 1, "bx")]),
+                node("Float", "bz", "6", vec![port("Float1", "bzo", 1, "bz")]),
+                node("Float", "by", "0", vec![port("Float1", "byo", 1, "by")]),
+                node(
+                    "ConstructVector3",
+                    "pb",
+                    "",
+                    vec![
+                        port("Vector31", "pbo", 1, "pb"),
+                        port("Float1", "pbx", 0, "pb"),
+                        port("Float2", "pby", 0, "pb"),
+                        port("Float3", "pbz", 0, "pb"),
+                    ],
+                ),
+                node(
+                    "Color",
+                    "col",
+                    "Red",
+                    vec![port("Color1", "colo", 1, "col")],
+                ),
+                node(
+                    "Function",
+                    "fn",
+                    "Draw",
+                    vec![
+                        port("Any1", "fna1", 0, "fn"),
+                        port("Any2", "fna2", 0, "fn"),
+                        port("Any4", "fna4", 0, "fn"),
+                        port("Any1", "fno", 1, "fn"),
+                    ],
+                ),
+            ],
+            connections: vec![
+                // Body: CF params → Relays → DebugDrawLine
+                RawConnection {
+                    port0: "cf_a1o".into(),
+                    port1: "rao".into(),
+                },
+                RawConnection {
+                    port0: "cf_a2o".into(),
+                    port1: "rbo".into(),
+                },
+                RawConnection {
+                    port0: "cf_a4o".into(),
+                    port1: "rco".into(),
+                },
+                RawConnection {
+                    port0: "rao".into(),
+                    port1: "ddla".into(),
+                },
+                RawConnection {
+                    port0: "rbo".into(),
+                    port1: "ddlb".into(),
+                },
+                RawConnection {
+                    port0: "rco".into(),
+                    port1: "ddlc".into(),
+                },
+                RawConnection {
+                    port0: "fwo".into(),
+                    port1: "ddlw".into(),
+                },
+                // Call-site args
+                RawConnection {
+                    port0: "axo".into(),
+                    port1: "pax".into(),
+                },
+                RawConnection {
+                    port0: "ayo".into(),
+                    port1: "pay".into(),
+                },
+                RawConnection {
+                    port0: "azo".into(),
+                    port1: "paz".into(),
+                },
+                RawConnection {
+                    port0: "bxo".into(),
+                    port1: "pbx".into(),
+                },
+                RawConnection {
+                    port0: "byo".into(),
+                    port1: "pby".into(),
+                },
+                RawConnection {
+                    port0: "bzo".into(),
+                    port1: "pbz".into(),
+                },
+                RawConnection {
+                    port0: "pao".into(),
+                    port1: "fna1".into(),
+                },
+                RawConnection {
+                    port0: "pbo".into(),
+                    port1: "fna2".into(),
+                },
+                RawConnection {
+                    port0: "colo".into(),
+                    port1: "fna4".into(),
+                },
+            ],
+        };
+
+        let g = index_graph(raw, "draw_test".into());
+        assert_eq!(g.root_functions.len(), 1);
+        assert_eq!(g.create_functions.get("Draw").unwrap().debug_draws.len(), 1);
+
+        crate::debug_draw::begin_frame();
+        let mut brain = GraphBrain::new(g);
+        let _ = brain.think(&empty_api());
+        let snap = crate::debug_draw::snapshot();
+        assert_eq!(snap.lines.len(), 1, "function body DebugDrawLine must run");
+        let line = &snap.lines[0];
+        assert!((line.a.x - 1.0).abs() < 1e-4 && (line.a.y - 2.0).abs() < 1e-4);
+        assert!((line.b.x - 5.0).abs() < 1e-4 && (line.b.y - 6.0).abs() < 1e-4);
+        let red = crate::debug_draw::named_rgba("Red");
+        assert_eq!(line.rgba, red);
     }
 
     fn empty_api() -> TeamApi {
