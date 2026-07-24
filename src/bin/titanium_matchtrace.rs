@@ -117,7 +117,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     Ok(Args { secs, home, away, opening, seed, win_goals, window_s })
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Sample {
     t: f32,
     ball: Vec2,
@@ -125,10 +125,38 @@ struct Sample {
     carrier: Option<(TeamId, u8)>,
     home_pos: [Vec2; 4],
     away_pos: [Vec2; 4],
+    // (color, position) pairs the graph submitted this tick via DebugDrawDisc
+    // — reused here purely to read out internal intermediate values (e.g.
+    // team_goal, a computed cover/press target) that aren't otherwise
+    // observable from outside the graph.
+    home_discs: Vec<(String, Vec2)>,
+    away_discs: Vec<(String, Vec2)>,
 }
 
 fn fmt_v(v: Vec2) -> String {
     format!("({:6.1},{:5.1})", v.x, v.y)
+}
+
+fn disc_color_name(rgba: [f32; 4]) -> String {
+    for name in [
+        "White", "Red", "Green", "Yellow", "Orange", "Magenta", "Cyan", "Blue", "Gray", "Black",
+    ] {
+        let named = aicomp_soccer_sim::debug_draw::named_rgba(name);
+        if (named[0] - rgba[0]).abs() < 1e-3
+            && (named[1] - rgba[1]).abs() < 1e-3
+            && (named[2] - rgba[2]).abs() < 1e-3
+        {
+            return name.to_string();
+        }
+    }
+    format!("{rgba:?}")
+}
+
+fn discs_to_named(discs: &[aicomp_soccer_sim::debug_draw::DebugDisc]) -> Vec<(String, Vec2)> {
+    discs
+        .iter()
+        .map(|d| (disc_color_name(d.rgba), d.center))
+        .collect()
 }
 
 fn print_sample(s: &Sample) {
@@ -151,6 +179,22 @@ fn print_sample(s: &Sample) {
         fmt_v(s.away_pos[2]),
         fmt_v(s.away_pos[3]),
     );
+    if !s.away_discs.is_empty() {
+        let joined: Vec<String> = s
+            .away_discs
+            .iter()
+            .map(|(name, p)| format!("{name}={}", fmt_v(*p)))
+            .collect();
+        eprintln!("           away-GK debug: {}", joined.join(" "));
+    }
+    if !s.home_discs.is_empty() {
+        let joined: Vec<String> = s
+            .home_discs
+            .iter()
+            .map(|(name, p)| format!("{name}={}", fmt_v(*p)))
+            .collect();
+        eprintln!("           home-GK debug: {}", joined.join(" "));
+    }
 }
 
 fn main() -> ExitCode {
@@ -205,8 +249,25 @@ fn main() -> ExitCode {
 
     for _tick in 0..max_ticks {
         let (home_api, away_api) = world.build_apis();
+        aicomp_soccer_sim::debug_draw::begin_frame();
         let home_out = home_brain.think(&home_api);
+        let home_discs = aicomp_soccer_sim::debug_draw::snapshot().discs;
+        aicomp_soccer_sim::debug_draw::begin_frame();
         let away_out = away_brain.think(&away_api);
+        let away_discs = aicomp_soccer_sim::debug_draw::snapshot().discs;
+        if _tick % 50 == 0 {
+            let cmd4 = away_out.for_player(aicomp_soccer_sim::player::PlayerId(4));
+            let p4_before = world
+                .players
+                .iter()
+                .find(|p| p.team == TeamId::Away && p.id.0 == 4)
+                .map(|p| p.pos)
+                .unwrap_or(Vec2::ZERO);
+            eprintln!(
+                "RAW CHECK tick={_tick} away P4 pos_before={:?} cmd.move_to={:?} sprint={} interact={}",
+                p4_before, cmd4.move_to, cmd4.sprint, cmd4.interact
+            );
+        }
         world.step_with_commands(&home_out, &away_out, FIXED_DT);
 
         let pos = |team: TeamId, id: u8| -> Vec2 {
@@ -224,7 +285,10 @@ fn main() -> ExitCode {
             carrier: world.possession.carrier,
             home_pos: [pos(TeamId::Home, 1), pos(TeamId::Home, 2), pos(TeamId::Home, 3), pos(TeamId::Home, 4)],
             away_pos: [pos(TeamId::Away, 1), pos(TeamId::Away, 2), pos(TeamId::Away, 3), pos(TeamId::Away, 4)],
+            home_discs: discs_to_named(&home_discs),
+            away_discs: discs_to_named(&away_discs),
         };
+        let sample_t = sample.t;
         if history.len() == window_ticks {
             history.pop_front();
         }
@@ -236,7 +300,7 @@ fn main() -> ExitCode {
         if total > last_total {
             eprintln!(
                 "=== GOAL t={:.2}s score={sh}-{sa} (last {:.1}s of positions) ===",
-                sample.t, args.window_s
+                sample_t, args.window_s
             );
             for s in history.iter() {
                 print_sample(s);
