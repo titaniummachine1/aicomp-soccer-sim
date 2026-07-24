@@ -106,6 +106,17 @@ struct CallFrame {
     port_regs: HashMap<String, Reg>,
 }
 
+/// Recursion-depth cap for `lower_port`/`lower_node_output`. Real, working
+/// graphs (Titanium included, thousands of nodes) sit far below this; it
+/// exists only to catch a runaway dependency chain -- most plausibly a true
+/// cycle, where a node's lowering recurses into its own not-yet-produced
+/// output -- before it overflows the thread stack. Confirmed against a real
+/// opponent graph that the actual game does not crash on this either: it
+/// silently times out / skips that tick's decision for the affected player.
+/// Matching that (return a null constant and stop recursing) instead of a
+/// hard process crash is the correct behavior, not "make the cycle resolve."
+const MAX_LOWER_DEPTH: u32 = 5000;
+
 #[derive(Debug)]
 pub struct Lowerer {
     graph: TeamGraph,
@@ -115,6 +126,7 @@ pub struct Lowerer {
     ir: Vec<IrInst>,
     vars: VariableTable,
     apis: ApiSlotTable,
+    lower_depth: u32,
 }
 
 impl Lowerer {
@@ -136,6 +148,7 @@ impl Lowerer {
                 dense_ids: Vec::new(),
                 label_to_slot: HashMap::new(),
             },
+            lower_depth: 0,
         };
 
         for sid in &set_variable_sids {
@@ -393,10 +406,15 @@ impl Lowerer {
         if let Some(r) = self.cache_get(port_sid) {
             return r;
         }
+        if self.lower_depth >= MAX_LOWER_DEPTH {
+            return self.emit_const_null(port_sid, "depth-limit");
+        }
         let Some(pref) = self.graph.ports.get(port_sid).cloned() else {
             return self.emit_const_null(port_sid, "missing");
         };
+        self.lower_depth += 1;
         let reg = self.lower_node_output(&pref.node_sid, &pref.port_name);
+        self.lower_depth -= 1;
         self.cache_set(port_sid.to_string(), reg);
         reg
     }
