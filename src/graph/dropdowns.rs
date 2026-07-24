@@ -201,8 +201,8 @@ pub fn resolve<'a>(node_id: &str, modifier: &'a str) -> &'a str {
         "SoccerGetTransform" => SOCCER_GET_TRANSFORM,
         "SoccerGetVector3" => SOCCER_GET_VECTOR3,
         "RelativePosition" => RELATIVE_POSITION,
-        // Unity saves Operation as dropdown index (AIGamePyLibrary.nodes.Operation).
-        "Operation" => OPERATION,
+        // Operation stays numeric (Unity dropdown index). Do not stringify —
+        // runtime uses OP_* u32 kinds. Labels are only for diagnostics / tests.
         _ => return modifier,
     };
     if let Ok(i) = modifier.parse::<usize>() {
@@ -213,71 +213,98 @@ pub fn resolve<'a>(node_id: &str, modifier: &'a str) -> &'a str {
     modifier
 }
 
-/// Unity Operation dropdown order (AIGamePyLibrary `Operation(...).index(value)`).
-/// Index 10 = sqrt — not our old internal encoding where sqrt was 5.
+/// Unity Operation dropdown indices (AIGamePyLibrary `Operation(...).index`).
+/// These are the values stored in graph JSON and in IR immediates — not strings.
+pub const OP_ABS: u32 = 0;
+pub const OP_ROUND: u32 = 1;
+pub const OP_FLOOR: u32 = 2;
+pub const OP_CEIL: u32 = 3;
+pub const OP_SIN: u32 = 4;
+pub const OP_COS: u32 = 5;
+pub const OP_TAN: u32 = 6;
+pub const OP_ASIN: u32 = 7;
+pub const OP_ACOS: u32 = 8;
+pub const OP_ATAN: u32 = 9;
+pub const OP_SQRT: u32 = 10;
+pub const OP_SIGN: u32 = 11;
+pub const OP_LN: u32 = 12;
+pub const OP_LOG10: u32 = 13;
+pub const OP_EXP: u32 = 14; // e^
+pub const OP_POW10: u32 = 15; // 10^
+pub const OP_COUNT: u32 = 16;
+
+/// Label table aligned with [`OP_ABS`]…[`OP_POW10`] (debug / rare label loads only).
 pub const OPERATION: &[&str] = &[
-    "abs",    // 0
-    "round",  // 1
-    "floor",  // 2
-    "ceil",   // 3
-    "sin",    // 4
-    "cos",    // 5
-    "tan",    // 6
-    "asin",   // 7
-    "acos",   // 8
-    "atan",   // 9
-    "sqrt",   // 10
-    "sign",   // 11
-    "ln",     // 12
-    "log10",  // 13
-    "e^",     // 14
-    "10^",    // 15
+    "abs",    // OP_ABS
+    "round",  // OP_ROUND
+    "floor",  // OP_FLOOR
+    "ceil",   // OP_CEIL
+    "sin",    // OP_SIN
+    "cos",    // OP_COS
+    "tan",    // OP_TAN
+    "asin",   // OP_ASIN
+    "acos",   // OP_ACOS
+    "atan",   // OP_ATAN
+    "sqrt",   // OP_SQRT
+    "sign",   // OP_SIGN
+    "ln",     // OP_LN
+    "log10",  // OP_LOG10
+    "e^",     // OP_EXP
+    "10^",    // OP_POW10
 ];
 
-/// Map Operation modifier (label or Unity dropdown index) → kind index.
+/// Parse graph JSON modifier → Unity Operation kind (`u32`).
 ///
-/// **Hard-fails** on unknown values — silent identity fallback hid sqrt bugs
-/// (Unity `sqrt` is `"10"`; unmatched → old kind 13 → returned the input).
+/// Primary path: decimal index (`"10"` → [`OP_SQRT`]). Label form is accepted
+/// only for hand-written / legacy graphs. **Panics** on unknown — never
+/// silently returns the input (that hid the sqrt bug).
 pub fn operation_kind(modifier: &str) -> u32 {
     let m = modifier.trim();
-    if let Ok(i) = m.parse::<usize>() {
-        if i < OPERATION.len() {
-            return i as u32;
+    if let Ok(i) = m.parse::<u32>() {
+        if i < OP_COUNT {
+            return i;
         }
-        panic!(
-            "Operation modifier index {i} out of range 0..{} (Unity dropdown)",
-            OPERATION.len()
-        );
+        panic!("Operation modifier index {i} out of range 0..{OP_COUNT}");
     }
     let key = m.to_ascii_lowercase();
-    OPERATION
-        .iter()
-        .position(|label| *label == key || (*label == "sign" && key == "signum"))
-        .map(|i| i as u32)
-        .unwrap_or_else(|| {
-            panic!(
-                "unknown Operation modifier {modifier:?}; expected one of {OPERATION:?} \
-                 or index 0..{}",
-                OPERATION.len()
-            )
-        })
+    match key.as_str() {
+        "abs" => OP_ABS,
+        "round" => OP_ROUND,
+        "floor" => OP_FLOOR,
+        "ceil" => OP_CEIL,
+        "sin" => OP_SIN,
+        "cos" => OP_COS,
+        "tan" => OP_TAN,
+        "asin" => OP_ASIN,
+        "acos" => OP_ACOS,
+        "atan" => OP_ATAN,
+        "sqrt" => OP_SQRT,
+        "sign" | "signum" => OP_SIGN,
+        "ln" => OP_LN,
+        "log10" => OP_LOG10,
+        "e^" => OP_EXP,
+        "10^" => OP_POW10,
+        _ => panic!(
+            "unknown Operation modifier {modifier:?}; expected index 0..{OP_COUNT} or label in {OPERATION:?}"
+        ),
+    }
 }
 
-/// Evaluate Operation by Unity dropdown kind (see [`OPERATION`]).
+/// Evaluate by Unity kind index (see `OP_*` constants).
 pub fn eval_operation(a: f32, kind: u32) -> f32 {
     match kind {
-        0 => a.abs(),
-        1 => a.round(),
-        2 => a.floor(),
-        3 => a.ceil(),
-        4 => a.sin(),
-        5 => a.cos(),
-        6 => a.tan(),
-        7 => a.asin(),
-        8 => a.acos(),
-        9 => a.atan(),
-        10 => a.max(0.0).sqrt(),
-        11 => {
+        OP_ABS => a.abs(),
+        OP_ROUND => a.round(),
+        OP_FLOOR => a.floor(),
+        OP_CEIL => a.ceil(),
+        OP_SIN => a.sin(),
+        OP_COS => a.cos(),
+        OP_TAN => a.tan(),
+        OP_ASIN => a.asin(),
+        OP_ACOS => a.acos(),
+        OP_ATAN => a.atan(),
+        OP_SQRT => a.max(0.0).sqrt(),
+        OP_SIGN => {
             if a > 0.0 {
                 1.0
             } else if a < 0.0 {
@@ -286,10 +313,10 @@ pub fn eval_operation(a: f32, kind: u32) -> f32 {
                 0.0
             }
         }
-        12 => a.ln(),
-        13 => a.log10(),
-        14 => a.exp(),
-        15 => 10f32.powf(a),
+        OP_LN => a.ln(),
+        OP_LOG10 => a.log10(),
+        OP_EXP => a.exp(),
+        OP_POW10 => 10f32.powf(a),
         _ => panic!("Operation kind {kind} out of range (internal bug)"),
     }
 }
@@ -371,18 +398,16 @@ mod relative_pos_tests {
 
     #[test]
     fn unity_operation_index_10_is_sqrt() {
-        assert_eq!(resolve("Operation", "10"), "sqrt");
-        assert_eq!(operation_kind("10"), 10);
-        assert_eq!(operation_kind("sqrt"), 10);
-        let got = eval_operation(2.0, operation_kind("10"));
+        assert_eq!(operation_kind("10"), OP_SQRT);
+        assert_eq!(operation_kind("sqrt"), OP_SQRT);
+        let got = eval_operation(2.0, OP_SQRT);
         assert!((got - 2.0_f32.sqrt()).abs() < 1e-6);
     }
 
     #[test]
     fn unity_operation_index_5_is_cos_not_sqrt() {
-        assert_eq!(resolve("Operation", "5"), "cos");
-        assert_eq!(operation_kind("5"), 5);
-        let got = eval_operation(0.0, 5);
+        assert_eq!(operation_kind("5"), OP_COS);
+        let got = eval_operation(0.0, OP_COS);
         assert!((got - 1.0).abs() < 1e-6);
     }
 
