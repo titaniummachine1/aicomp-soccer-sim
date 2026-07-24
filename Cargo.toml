@@ -46,8 +46,8 @@ default = ["fast_link"]
 fast_link = ["bevy/dynamic_linking"]
 
 [dependencies]
-# Top-down 2D only.
-bevy = { version = "0.19" }
+# Viewer is 2D + UI only — drop default 3D/audio to cut Bevy compile size.
+bevy = { version = "0.19", default-features = false, features = ["2d", "ui", "png"] }
 micropool = "0.3"
 rfd = "0.15"
 serde = { version = "1", features = ["derive"] }
