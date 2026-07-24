@@ -378,6 +378,8 @@ fn main() -> ExitCode {
                     "away": result.away,
                     "score_home": result.score_home,
                     "score_away": result.score_away,
+                    "possession_s_home": result.possession_s_home,
+                    "possession_s_away": result.possession_s_away,
                     "phase": result.phase,
                     "until_goal": result.until_goal,
                     "win_goals": result.win_goals,

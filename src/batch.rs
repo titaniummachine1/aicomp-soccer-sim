@@ -211,6 +211,11 @@ pub struct BatchMatchResult {
     pub away: String,
     pub score_home: u32,
     pub score_away: u32,
+    /// Seconds each side held the ball during Play. This is not cosmetic: the
+    /// real match is decided on score first and **possession second**, so a
+    /// draw on goals is still a win or a loss on these numbers.
+    pub possession_s_home: f32,
+    pub possession_s_away: f32,
     pub phase: String,
     pub until_goal: bool,
     pub goal_stopped: bool,
@@ -450,6 +455,8 @@ pub fn run_match_job(
         away: job.away.label(),
         score_home: world.match_state.score_home,
         score_away: world.match_state.score_away,
+        possession_s_home: world.match_state.possession_s_home,
+        possession_s_away: world.match_state.possession_s_away,
         phase: format!("{:?}", world.match_state.phase),
         until_goal: job.until_goal,
         goal_stopped,
