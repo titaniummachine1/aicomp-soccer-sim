@@ -543,7 +543,7 @@ impl Lowerer {
                     .lower_input(node_sid, "Float1")
                     .unwrap_or_else(|| self.emit_const_float(node_sid, "Float1", 0.0));
                 let (opcode, op) = if node.id == "Operation" {
-                    (OpCode::Operation, operation_kind(&node.modifier))
+                    (OpCode::Operation, crate::graph::dropdowns::operation_kind(&node.modifier))
                 } else {
                     (OpCode::Abs, 0)
                 };
@@ -954,25 +954,6 @@ fn parse_float(s: &str) -> f32 {
     t.parse().unwrap_or(0.0)
 }
 
-fn operation_kind(modifier: &str) -> u32 {
-    match modifier.to_ascii_lowercase().as_str() {
-        "abs" => 0,
-        "round" => 1,
-        "floor" => 2,
-        "ceil" => 3,
-        "sign" | "signum" => 4,
-        "sqrt" => 5,
-        "sin" => 6,
-        "cos" => 7,
-        "tan" => 8,
-        "ln" => 9,
-        "log10" => 10,
-        "e^" => 11,
-        "10^" => 12,
-        _ => 13,
-    }
-}
-
 fn compare_float_op(op: i32) -> (OpCode, u32) {
     match op {
         1 => (OpCode::Lt, 0),
@@ -1099,5 +1080,95 @@ mod tests {
         let mut interp = Interpreter::default();
         interp.execute_controllers(&program, &mut ctx);
         assert!((ctx.output.commands[0].move_to.x - 7.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn unity_sqrt_dropdown_index_10_via_runtime() {
+        // Unity AIA saves Operation(sqrt) as modifier "10", not the label "sqrt".
+        let raw = RawGraph {
+            nodes: vec![
+                node("Float", "f2", "2", vec![port("Float1", "f2o", 1, "f2")]),
+                node(
+                    "Operation",
+                    "op",
+                    "10",
+                    vec![
+                        port("Float1", "opi", 0, "op"),
+                        port("Float1", "opo", 1, "op"),
+                    ],
+                ),
+                node("Float", "z0", "0", vec![port("Float1", "z0o", 1, "z0")]),
+                node(
+                    "ConstructVector3",
+                    "cv",
+                    "",
+                    vec![
+                        port("Vector31", "cvo", 1, "cv"),
+                        port("Float1", "cvx", 0, "cv"),
+                        port("Float2", "cvy", 0, "cv"),
+                        port("Float3", "cvz", 0, "cv"),
+                    ],
+                ),
+                node("Bool", "bf", "1", vec![port("Bool1", "bfo", 1, "bf")]),
+                node(
+                    "SoccerController1",
+                    "c1",
+                    "",
+                    vec![
+                        port("Vector31", "c1m", 0, "c1"),
+                        port("Bool1", "c1s", 0, "c1"),
+                        port("Bool2", "c1i", 0, "c1"),
+                    ],
+                ),
+            ],
+            connections: vec![
+                RawConnection {
+                    port0: "f2o".into(),
+                    port1: "opi".into(),
+                },
+                RawConnection {
+                    port0: "opo".into(),
+                    port1: "cvx".into(),
+                },
+                RawConnection {
+                    port0: "z0o".into(),
+                    port1: "cvy".into(),
+                },
+                RawConnection {
+                    port0: "z0o".into(),
+                    port1: "cvz".into(),
+                },
+                RawConnection {
+                    port0: "cvo".into(),
+                    port1: "c1m".into(),
+                },
+                RawConnection {
+                    port0: "bfo".into(),
+                    port1: "c1s".into(),
+                },
+                RawConnection {
+                    port0: "bfo".into(),
+                    port1: "c1i".into(),
+                },
+            ],
+        };
+        let graph = index_graph(raw, "sqrt_test".into());
+        let compiled = Lowerer::compile(graph);
+        let program = ProgramBuilder.pack(&compiled);
+        let mut ctx = ExecutionContext::new(
+            crate::api::TeamApi::empty(crate::brain::TeamId::Home),
+            compiled.vars.len(),
+            program.register_count as usize,
+        );
+        ctx.init_api_slots(&compiled.apis);
+        let mut interp = Interpreter::default();
+        interp.execute_controllers(&program, &mut ctx);
+        let expect = 2.0_f32.sqrt();
+        assert!(
+            (ctx.output.commands[0].move_to.x - expect).abs() < 1e-4,
+            "got {} want sqrt(2)={}",
+            ctx.output.commands[0].move_to.x,
+            expect
+        );
     }
 }

@@ -201,6 +201,8 @@ pub fn resolve<'a>(node_id: &str, modifier: &'a str) -> &'a str {
         "SoccerGetTransform" => SOCCER_GET_TRANSFORM,
         "SoccerGetVector3" => SOCCER_GET_VECTOR3,
         "RelativePosition" => RELATIVE_POSITION,
+        // Unity saves Operation as dropdown index (AIGamePyLibrary.nodes.Operation).
+        "Operation" => OPERATION,
         _ => return modifier,
     };
     if let Ok(i) = modifier.parse::<usize>() {
@@ -209,6 +211,87 @@ pub fn resolve<'a>(node_id: &str, modifier: &'a str) -> &'a str {
         }
     }
     modifier
+}
+
+/// Unity Operation dropdown order (AIGamePyLibrary `Operation(...).index(value)`).
+/// Index 10 = sqrt — not our old internal encoding where sqrt was 5.
+pub const OPERATION: &[&str] = &[
+    "abs",    // 0
+    "round",  // 1
+    "floor",  // 2
+    "ceil",   // 3
+    "sin",    // 4
+    "cos",    // 5
+    "tan",    // 6
+    "asin",   // 7
+    "acos",   // 8
+    "atan",   // 9
+    "sqrt",   // 10
+    "sign",   // 11
+    "ln",     // 12
+    "log10",  // 13
+    "e^",     // 14
+    "10^",    // 15
+];
+
+/// Map Operation modifier (label or Unity dropdown index) → kind index.
+///
+/// **Hard-fails** on unknown values — silent identity fallback hid sqrt bugs
+/// (Unity `sqrt` is `"10"`; unmatched → old kind 13 → returned the input).
+pub fn operation_kind(modifier: &str) -> u32 {
+    let m = modifier.trim();
+    if let Ok(i) = m.parse::<usize>() {
+        if i < OPERATION.len() {
+            return i as u32;
+        }
+        panic!(
+            "Operation modifier index {i} out of range 0..{} (Unity dropdown)",
+            OPERATION.len()
+        );
+    }
+    let key = m.to_ascii_lowercase();
+    OPERATION
+        .iter()
+        .position(|label| *label == key || (*label == "sign" && key == "signum"))
+        .map(|i| i as u32)
+        .unwrap_or_else(|| {
+            panic!(
+                "unknown Operation modifier {modifier:?}; expected one of {OPERATION:?} \
+                 or index 0..{}",
+                OPERATION.len()
+            )
+        })
+}
+
+/// Evaluate Operation by Unity dropdown kind (see [`OPERATION`]).
+pub fn eval_operation(a: f32, kind: u32) -> f32 {
+    match kind {
+        0 => a.abs(),
+        1 => a.round(),
+        2 => a.floor(),
+        3 => a.ceil(),
+        4 => a.sin(),
+        5 => a.cos(),
+        6 => a.tan(),
+        7 => a.asin(),
+        8 => a.acos(),
+        9 => a.atan(),
+        10 => a.max(0.0).sqrt(),
+        11 => {
+            if a > 0.0 {
+                1.0
+            } else if a < 0.0 {
+                -1.0
+            } else {
+                0.0
+            }
+        }
+        12 => a.ln(),
+        13 => a.log10(),
+        14 => a.exp(),
+        15 => 10f32.powf(a),
+        _ => panic!("Operation kind {kind} out of range (internal bug)"),
+    }
 }
 
 /// AIGamePyLibrary RelativePosition dropdown (+ World as used in Soccer UI).
@@ -284,5 +367,28 @@ mod relative_pos_tests {
         let p = Vec2::new(10.0, 0.0);
         assert_eq!(apply_relative_position(p, "Self + Forward"), Vec2::new(11.0, 0.0));
         assert_eq!(apply_relative_position(p, "Forward"), Vec2::X);
+    }
+
+    #[test]
+    fn unity_operation_index_10_is_sqrt() {
+        assert_eq!(resolve("Operation", "10"), "sqrt");
+        assert_eq!(operation_kind("10"), 10);
+        assert_eq!(operation_kind("sqrt"), 10);
+        let got = eval_operation(2.0, operation_kind("10"));
+        assert!((got - 2.0_f32.sqrt()).abs() < 1e-6);
+    }
+
+    #[test]
+    fn unity_operation_index_5_is_cos_not_sqrt() {
+        assert_eq!(resolve("Operation", "5"), "cos");
+        assert_eq!(operation_kind("5"), 5);
+        let got = eval_operation(0.0, 5);
+        assert!((got - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown Operation modifier")]
+    fn unknown_operation_modifier_panics() {
+        let _ = operation_kind("nope");
     }
 }

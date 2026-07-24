@@ -401,32 +401,8 @@ impl<'a> EvalCtx<'a> {
                     .input_named(node_sid, "Float1")
                     .map(|v| v.as_float())
                     .unwrap_or(0.0);
-                let op = node.modifier.to_ascii_lowercase();
-                let r = match op.as_str() {
-                    "abs" => a.abs(),
-                    "round" => a.round(),
-                    "floor" => a.floor(),
-                    "ceil" => a.ceil(),
-                    "sign" | "signum" => {
-                        if a > 0.0 {
-                            1.0
-                        } else if a < 0.0 {
-                            -1.0
-                        } else {
-                            0.0
-                        }
-                    }
-                    "sqrt" => a.max(0.0).sqrt(),
-                    "sin" => a.sin(),
-                    "cos" => a.cos(),
-                    "tan" => a.tan(),
-                    "ln" => a.ln(),
-                    "log10" => a.log10(),
-                    "e^" => a.exp(),
-                    "10^" => 10f32.powf(a),
-                    _ => a,
-                };
-                GraphValue::Float(r)
+                let kind = crate::graph::dropdowns::operation_kind(&node.modifier);
+                GraphValue::Float(crate::graph::dropdowns::eval_operation(a, kind))
             }
 
             "AbsFloat" | "Absolute" => {

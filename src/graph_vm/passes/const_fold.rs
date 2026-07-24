@@ -170,7 +170,7 @@ fn try_fold(inst: &IrInst, known: &[Option<VmValue>]) -> Option<VmValue> {
         OpCode::Abs if args.len() >= 1 => Some(VmValue::Float(as_f(args[0]).abs())),
         OpCode::Operation if args.len() >= 1 => {
             let kind = inst.immediates.first().copied().unwrap_or(0);
-            Some(VmValue::Float(eval_operation(as_f(args[0]), kind)))
+            Some(VmValue::Float(crate::graph::dropdowns::eval_operation(as_f(args[0]), kind)))
         }
         OpCode::Not if args.len() >= 1 => Some(VmValue::Bool(!as_b(args[0]))),
         OpCode::And if args.len() >= 2 => Some(VmValue::Bool(as_b(args[0]) && as_b(args[1]))),
@@ -302,33 +302,6 @@ fn coerce_select(chosen: VmValue, mode: u32) -> VmValue {
             _ => Vec2::ZERO,
         }),
         _ => chosen,
-    }
-}
-
-fn eval_operation(a: f32, kind: u32) -> f32 {
-    match kind {
-        0 => a.abs(),
-        1 => a.round(),
-        2 => a.floor(),
-        3 => a.ceil(),
-        4 => {
-            if a > 0.0 {
-                1.0
-            } else if a < 0.0 {
-                -1.0
-            } else {
-                0.0
-            }
-        }
-        5 => a.max(0.0).sqrt(),
-        6 => a.sin(),
-        7 => a.cos(),
-        8 => a.tan(),
-        9 => a.ln(),
-        10 => a.log10(),
-        11 => a.exp(),
-        12 => 10f32.powf(a),
-        _ => a,
     }
 }
 

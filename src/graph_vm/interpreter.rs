@@ -102,7 +102,7 @@ fn run_inst(inst: &Instruction, ctx: &mut ExecutionContext) {
             }
         }
         OpCode::Abs => unary_f(ctx, ops, |a, _| a.abs()),
-        OpCode::Operation => unary_f(ctx, ops, eval_operation),
+        OpCode::Operation => unary_f(ctx, ops, crate::graph::dropdowns::eval_operation),
         OpCode::Move => {
             if ops.len() >= 2 {
                 let value = ctx
@@ -382,33 +382,6 @@ fn reg_v(ctx: &ExecutionContext, i: usize) -> Vec2 {
 fn reg_eq(ctx: &ExecutionContext, a: usize, b: usize) -> bool {
     ctx.frame.registers.get(a).copied().unwrap_or(VmValue::Null)
         == ctx.frame.registers.get(b).copied().unwrap_or(VmValue::Null)
-}
-
-fn eval_operation(a: f32, kind: u32) -> f32 {
-    match kind {
-        0 => a.abs(),
-        1 => a.round(),
-        2 => a.floor(),
-        3 => a.ceil(),
-        4 => {
-            if a > 0.0 {
-                1.0
-            } else if a < 0.0 {
-                -1.0
-            } else {
-                0.0
-            }
-        }
-        5 => a.max(0.0).sqrt(),
-        6 => a.sin(),
-        7 => a.cos(),
-        8 => a.tan(),
-        9 => a.ln(),
-        10 => a.log10(),
-        11 => a.exp(),
-        12 => 10f32.powf(a),
-        _ => a,
-    }
 }
 
 #[cfg(test)]
