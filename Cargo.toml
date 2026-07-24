@@ -33,23 +33,21 @@ name = "titanium_drill"
 path = "src/bin/titanium_drill.rs"
 
 [features]
-# Fast local edit→run is the DEFAULT (Bevy dynamic linking).
+# Day-to-day: `cargo run` (dev + fast_link). Bevy builds ONCE into target/debug,
+# then only THIS crate relinks. Do NOT flip features/profiles casually.
 #
-# Tier 1 — normal (default): only this crate rebuilds on src edits; prepared
-#          Bevy libraries / DLLs in target/ are left alone.
-# Tier 2 — static: portable .exe (`cargo run-static`). Keeps dep cache.
+# Tier 1 — normal: cargo run / cargo run --release (separate caches!)
+# Tier 2 — static: cargo run-static
 # Tier 3 — crate-only: scripts\rebuild_crate.bat
-# Tier 4 — DEEP: scripts\rebuild_deep.bat (full wipe; multi-minute Bevy/wgpu).
+# Tier 4 — DEEP: scripts\rebuild_deep.bat
 #
-# nn_train is OFF by default on purpose: square_weights harness is intact but
-# gated so slow Bevy cold builds are not mistaken for "training broken".
-# Re-enable: cargo build --features nn_train
+# nn_train OFF by default (intact behind --features nn_train).
 default = ["fast_link"]
 fast_link = ["bevy/dynamic_linking"]
 nn_train = []
 
 [dependencies]
-# Viewer is 2D + UI only — drop default 3D/audio (Bevy docs: compile less code).
+# Viewer is 2D + UI only — drop default 3D/audio.
 bevy = { version = "0.19", default-features = false, features = ["2d", "ui", "png"] }
 micropool = "0.3"
 rfd = "0.15"
@@ -59,19 +57,15 @@ serde_json = "1"
 [dev-dependencies]
 approx = "0.5"
 
-# --- Profiles (Bevy / community cold-build guidance) ---
-# opt-level=3 on ALL deps makes first Bevy builds 5–10× slower (reports like
-# ~2 min → ~13+ min). Default stays cold-friendlier; use profile `dev-smooth`
-# after Bevy is cached if the viewer feels sluggish:
-#   cargo run --profile dev-smooth
+# Bevy official incremental setup: light opt on our crate, heavy opt on deps.
+# Needed for fast edit→run AND Windows dynamic_linking symbol limits.
+# First `cargo run` after a feature/profile change prepares Bevy once; after
+# that Bevy stays put. `cargo run --release` uses a DIFFERENT cache (target/release).
 [profile.dev]
 opt-level = 1
 incremental = true
 
-[profile.dev-smooth]
-inherits = "dev"
-
-[profile.dev-smooth.package."*"]
+[profile.dev.package."*"]
 opt-level = 3
 
 # Explicit slow/max-opt path when sharing a single static .exe (no Bevy DLLs).

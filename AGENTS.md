@@ -17,15 +17,15 @@ Viewer only when you need eyes on a bug:
 cargo run --release
 ```
 
-`fast_link` is **default** — Bevy stays prepared. If something looks wrong:
-`scripts\rebuild_crate.bat` first (this crate only). Still broken:
-`scripts\rebuild_deep.bat` (full wipe including Bevy). Static portable:
-`cargo run-static`. Max jobs + HIGH priority: `scripts\cargo_hot.bat …`.
+`fast_link` is **default** — Bevy stays prepared in **`target/debug`** for
+`cargo run`. If something looks wrong: `scripts\rebuild_crate.bat` first.
+Still broken: `scripts\rebuild_deep.bat`. Static: `cargo run-static`.
+Max jobs + HIGH priority: `scripts\cargo_hot.bat …`.
 
-**Cold Bevy builds are multi-minute on purpose** (wgpu/render). Chess engines have
-no Bevy — do not compare. Do **not** use `--release` for the first Bevy prepare;
-use `cargo run` / `scripts\cargo_hot.bat build`. After Bevy is cached, optional
-smoother viewer FPS: `cargo run --profile dev-smooth`.
+**Incremental rule:** day-to-day is `cargo run` (dev), not `--release`.
+Release and dev are different caches; preparing release does **not** skip Bevy
+for the next `cargo run`. Do not flip Bevy features/profiles unless you accept
+one full Bevy prepare again.
 
 **NN train harness** (`src/train`, brain `trained`) is **gated off by default**
 (`nn_train` feature) so slow compiles are not mistaken for training failure.
