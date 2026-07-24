@@ -201,8 +201,7 @@ pub fn resolve<'a>(node_id: &str, modifier: &'a str) -> &'a str {
         "SoccerGetTransform" => SOCCER_GET_TRANSFORM,
         "SoccerGetVector3" => SOCCER_GET_VECTOR3,
         "RelativePosition" => RELATIVE_POSITION,
-        // Operation stays numeric (Unity dropdown index). Do not stringify —
-        // runtime uses OP_* u32 kinds. Labels are only for diagnostics / tests.
+        // Operation stays a Unity dropdown index in JSON; see [`OperationKind`].
         _ => return modifier,
     };
     if let Ok(i) = modifier.parse::<usize>() {
@@ -213,112 +212,166 @@ pub fn resolve<'a>(node_id: &str, modifier: &'a str) -> &'a str {
     modifier
 }
 
-/// Unity Operation dropdown indices (AIGamePyLibrary `Operation(...).index`).
-/// These are the values stored in graph JSON and in IR immediates — not strings.
-pub const OP_ABS: u32 = 0;
-pub const OP_ROUND: u32 = 1;
-pub const OP_FLOOR: u32 = 2;
-pub const OP_CEIL: u32 = 3;
-pub const OP_SIN: u32 = 4;
-pub const OP_COS: u32 = 5;
-pub const OP_TAN: u32 = 6;
-pub const OP_ASIN: u32 = 7;
-pub const OP_ACOS: u32 = 8;
-pub const OP_ATAN: u32 = 9;
-pub const OP_SQRT: u32 = 10;
-pub const OP_SIGN: u32 = 11;
-pub const OP_LN: u32 = 12;
-pub const OP_LOG10: u32 = 13;
-pub const OP_EXP: u32 = 14; // e^
-pub const OP_POW10: u32 = 15; // 10^
-pub const OP_COUNT: u32 = 16;
-
-/// Label table aligned with [`OP_ABS`]…[`OP_POW10`] (debug / rare label loads only).
-pub const OPERATION: &[&str] = &[
-    "abs",    // OP_ABS
-    "round",  // OP_ROUND
-    "floor",  // OP_FLOOR
-    "ceil",   // OP_CEIL
-    "sin",    // OP_SIN
-    "cos",    // OP_COS
-    "tan",    // OP_TAN
-    "asin",   // OP_ASIN
-    "acos",   // OP_ACOS
-    "atan",   // OP_ATAN
-    "sqrt",   // OP_SQRT
-    "sign",   // OP_SIGN
-    "ln",     // OP_LN
-    "log10",  // OP_LOG10
-    "e^",     // OP_EXP
-    "10^",    // OP_POW10
-];
-
-/// Parse graph JSON modifier → Unity Operation kind (`u32`).
+/// Unity `Operation` dropdown (AIGamePyLibrary `Operation(...).index`).
 ///
-/// Primary path: decimal index (`"10"` → [`OP_SQRT`]). Label form is accepted
-/// only for hand-written / legacy graphs. **Panics** on unknown — never
-/// silently returns the input (that hid the sqrt bug).
-pub fn operation_kind(modifier: &str) -> u32 {
-    let m = modifier.trim();
-    if let Ok(i) = m.parse::<u32>() {
-        if i < OP_COUNT {
-            return i;
-        }
-        panic!("Operation modifier index {i} out of range 0..{OP_COUNT}");
+/// Discriminants **are** the wire values in graph JSON / IR immediates.
+/// Writers use variants (`OperationKind::Sqrt`); never invent raw integers at
+/// call sites — parse with [`OperationKind::from_modifier`] or
+/// [`OperationKind::from_immediate`].
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum OperationKind {
+    Abs = 0,
+    Round = 1,
+    Floor = 2,
+    Ceil = 3,
+    Sin = 4,
+    Cos = 5,
+    Tan = 6,
+    Asin = 7,
+    Acos = 8,
+    Atan = 9,
+    Sqrt = 10,
+    Sign = 11,
+    Ln = 12,
+    Log10 = 13,
+    /// `e^`
+    Exp = 14,
+    /// `10^`
+    Pow10 = 15,
+}
+
+impl OperationKind {
+    pub const COUNT: u32 = 16;
+
+    /// Unity / IR integer → kind. **Panics** if out of range (no silent fallback).
+    pub fn from_immediate(kind: u32) -> Self {
+        Self::try_from_immediate(kind).unwrap_or_else(|| {
+            panic!(
+                "Operation kind {kind} out of range 0..{} (Unity dropdown)",
+                Self::COUNT
+            )
+        })
     }
-    let key = m.to_ascii_lowercase();
-    match key.as_str() {
-        "abs" => OP_ABS,
-        "round" => OP_ROUND,
-        "floor" => OP_FLOOR,
-        "ceil" => OP_CEIL,
-        "sin" => OP_SIN,
-        "cos" => OP_COS,
-        "tan" => OP_TAN,
-        "asin" => OP_ASIN,
-        "acos" => OP_ACOS,
-        "atan" => OP_ATAN,
-        "sqrt" => OP_SQRT,
-        "sign" | "signum" => OP_SIGN,
-        "ln" => OP_LN,
-        "log10" => OP_LOG10,
-        "e^" => OP_EXP,
-        "10^" => OP_POW10,
-        _ => panic!(
-            "unknown Operation modifier {modifier:?}; expected index 0..{OP_COUNT} or label in {OPERATION:?}"
-        ),
+
+    pub fn try_from_immediate(kind: u32) -> Option<Self> {
+        Some(match kind {
+            0 => Self::Abs,
+            1 => Self::Round,
+            2 => Self::Floor,
+            3 => Self::Ceil,
+            4 => Self::Sin,
+            5 => Self::Cos,
+            6 => Self::Tan,
+            7 => Self::Asin,
+            8 => Self::Acos,
+            9 => Self::Atan,
+            10 => Self::Sqrt,
+            11 => Self::Sign,
+            12 => Self::Ln,
+            13 => Self::Log10,
+            14 => Self::Exp,
+            15 => Self::Pow10,
+            _ => return None,
+        })
+    }
+
+    /// Graph JSON modifier: `"10"` (Unity) or legacy label `"sqrt"`.
+    /// **Panics** on unknown — never returns a default op.
+    pub fn from_modifier(modifier: &str) -> Self {
+        let m = modifier.trim();
+        if let Ok(i) = m.parse::<u32>() {
+            return Self::from_immediate(i);
+        }
+        match m.to_ascii_lowercase().as_str() {
+            "abs" => Self::Abs,
+            "round" => Self::Round,
+            "floor" => Self::Floor,
+            "ceil" => Self::Ceil,
+            "sin" => Self::Sin,
+            "cos" => Self::Cos,
+            "tan" => Self::Tan,
+            "asin" => Self::Asin,
+            "acos" => Self::Acos,
+            "atan" => Self::Atan,
+            "sqrt" => Self::Sqrt,
+            "sign" | "signum" => Self::Sign,
+            "ln" => Self::Ln,
+            "log10" => Self::Log10,
+            "e^" => Self::Exp,
+            "10^" => Self::Pow10,
+            _ => panic!(
+                "unknown Operation modifier {modifier:?}; expected index 0..{} or a Unity label",
+                Self::COUNT
+            ),
+        }
+    }
+
+    #[inline]
+    pub fn as_u32(self) -> u32 {
+        self as u32
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Abs => "abs",
+            Self::Round => "round",
+            Self::Floor => "floor",
+            Self::Ceil => "ceil",
+            Self::Sin => "sin",
+            Self::Cos => "cos",
+            Self::Tan => "tan",
+            Self::Asin => "asin",
+            Self::Acos => "acos",
+            Self::Atan => "atan",
+            Self::Sqrt => "sqrt",
+            Self::Sign => "sign",
+            Self::Ln => "ln",
+            Self::Log10 => "log10",
+            Self::Exp => "e^",
+            Self::Pow10 => "10^",
+        }
+    }
+
+    /// Apply the op. Exhaustive match — new variants must handle here.
+    pub fn eval(self, a: f32) -> f32 {
+        match self {
+            Self::Abs => a.abs(),
+            Self::Round => a.round(),
+            Self::Floor => a.floor(),
+            Self::Ceil => a.ceil(),
+            Self::Sin => a.sin(),
+            Self::Cos => a.cos(),
+            Self::Tan => a.tan(),
+            Self::Asin => a.asin(),
+            Self::Acos => a.acos(),
+            Self::Atan => a.atan(),
+            Self::Sqrt => a.max(0.0).sqrt(),
+            Self::Sign => {
+                if a > 0.0 {
+                    1.0
+                } else if a < 0.0 {
+                    -1.0
+                } else {
+                    0.0
+                }
+            }
+            Self::Ln => a.ln(),
+            Self::Log10 => a.log10(),
+            Self::Exp => a.exp(),
+            Self::Pow10 => 10f32.powf(a),
+        }
     }
 }
 
-/// Evaluate by Unity kind index (see `OP_*` constants).
+/// IR helper: immediate `u32` → eval (panics on bad kind).
 pub fn eval_operation(a: f32, kind: u32) -> f32 {
-    match kind {
-        OP_ABS => a.abs(),
-        OP_ROUND => a.round(),
-        OP_FLOOR => a.floor(),
-        OP_CEIL => a.ceil(),
-        OP_SIN => a.sin(),
-        OP_COS => a.cos(),
-        OP_TAN => a.tan(),
-        OP_ASIN => a.asin(),
-        OP_ACOS => a.acos(),
-        OP_ATAN => a.atan(),
-        OP_SQRT => a.max(0.0).sqrt(),
-        OP_SIGN => {
-            if a > 0.0 {
-                1.0
-            } else if a < 0.0 {
-                -1.0
-            } else {
-                0.0
-            }
-        }
-        OP_LN => a.ln(),
-        OP_LOG10 => a.log10(),
-        OP_EXP => a.exp(),
-        OP_POW10 => 10f32.powf(a),
-        _ => panic!("Operation kind {kind} out of range (internal bug)"),
-    }
+    OperationKind::from_immediate(kind).eval(a)
+}
+
+/// Load helper: JSON modifier → wire `u32` for IR immediates.
+pub fn operation_kind(modifier: &str) -> u32 {
+    OperationKind::from_modifier(modifier).as_u32()
 }
 
 /// AIGamePyLibrary RelativePosition dropdown (+ World as used in Soccer UI).
@@ -398,22 +451,22 @@ mod relative_pos_tests {
 
     #[test]
     fn unity_operation_index_10_is_sqrt() {
-        assert_eq!(operation_kind("10"), OP_SQRT);
-        assert_eq!(operation_kind("sqrt"), OP_SQRT);
-        let got = eval_operation(2.0, OP_SQRT);
+        assert_eq!(OperationKind::from_modifier("10"), OperationKind::Sqrt);
+        assert_eq!(OperationKind::from_modifier("sqrt"), OperationKind::Sqrt);
+        let got = OperationKind::Sqrt.eval(2.0);
         assert!((got - 2.0_f32.sqrt()).abs() < 1e-6);
     }
 
     #[test]
     fn unity_operation_index_5_is_cos_not_sqrt() {
-        assert_eq!(operation_kind("5"), OP_COS);
-        let got = eval_operation(0.0, OP_COS);
+        assert_eq!(OperationKind::from_modifier("5"), OperationKind::Cos);
+        let got = OperationKind::Cos.eval(0.0);
         assert!((got - 1.0).abs() < 1e-6);
     }
 
     #[test]
     #[should_panic(expected = "unknown Operation modifier")]
     fn unknown_operation_modifier_panics() {
-        let _ = operation_kind("nope");
+        let _ = OperationKind::from_modifier("nope");
     }
 }

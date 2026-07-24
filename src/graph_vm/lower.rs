@@ -543,7 +543,8 @@ impl Lowerer {
                     .lower_input(node_sid, "Float1")
                     .unwrap_or_else(|| self.emit_const_float(node_sid, "Float1", 0.0));
                 let (opcode, op) = if node.id == "Operation" {
-                    (OpCode::Operation, crate::graph::dropdowns::operation_kind(&node.modifier))
+                    let kind = crate::graph::dropdowns::OperationKind::from_modifier(&node.modifier);
+                    (OpCode::Operation, kind.as_u32())
                 } else {
                     (OpCode::Abs, 0)
                 };

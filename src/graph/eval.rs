@@ -401,8 +401,8 @@ impl<'a> EvalCtx<'a> {
                     .input_named(node_sid, "Float1")
                     .map(|v| v.as_float())
                     .unwrap_or(0.0);
-                let kind = crate::graph::dropdowns::operation_kind(&node.modifier);
-                GraphValue::Float(crate::graph::dropdowns::eval_operation(a, kind))
+                let kind = crate::graph::dropdowns::OperationKind::from_modifier(&node.modifier);
+                GraphValue::Float(kind.eval(a))
             }
 
             "AbsFloat" | "Absolute" => {
