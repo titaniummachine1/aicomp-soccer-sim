@@ -101,22 +101,32 @@ impl Default for SimParams {
 
 impl SimParams {
     pub fn fallback(source_path: PathBuf) -> Self {
-        let ball_radius = 0.40637236;
+        // ONE radius, used for collision AND rendering -- no visual/physical
+        // split. Measured by walking a held ball flush into every wall and
+        // corner: pitch corners are +-40.0 / +-25.0 from the engine nodes and
+        // the ball centre stops at +-39.75 / +-24.75, so the radius is 0.25
+        // exactly, identical on both axes (3177 held samples).
+        let ball_radius = 0.25;
         Self {
             ball_radius,
             slide_accel: 5.95,
             wall_e: 0.2,
             wall_mu: 0.35,
             stop_speed_eps: 0.0001,
-            x_min: -40.0,
-            x_max: 40.0,
-            z_min: -25.0,
-            z_max: 25.0,
+            // Ball-CENTRE AABB (not the pitch outline). Pitch corners read
+            // +-40.0 / +-25.0 from the engine nodes; a held ball snaps flush to
+            // a wall at +-39.75 / +-24.75, so the ball's collision radius is
+            // 0.25 and the centre bound is corner - 0.25. Measured over 3177
+            // held samples, identical on both axes.
+            x_min: -39.75,
+            x_max: 39.75,
+            z_min: -24.75,
+            z_max: 24.75,
             goal_half_width: 5.7,
-            goal_line_x: 39.5,
+            goal_line_x: 40.0,   // pitch end line, from corner nodes
             posts_x: 40.2,
             post_radius: 0.3,
-            post_contact_radius: 0.3 + 0.40637236,
+            post_contact_radius: 0.3 + 0.25,
             kickoff_circle_r: 7.25,
             player_max_speed: 8.0,
             player_accel: 100.0,
