@@ -31,6 +31,25 @@ impl Backend for Interpreter {
 
 fn run_inst(inst: &Instruction, ctx: &mut ExecutionContext, names: &[String]) {
     let ops = inst.operands.as_slice();
+    exec_inst(inst, ctx, names);
+    // Watchpoint: report which graph node produced a value of interest. Off
+    // unless TITANIUM_WATCH is set, so the hot path is one atomic-free check.
+    if crate::graph_vm::watch::is_armed() {
+        if let Some(&dst) = ops.first() {
+            if let Some(VmValue::Float(v)) = ctx.frame.registers.get(dst as usize) {
+                crate::graph_vm::watch::check(
+                    *v,
+                    &inst.source_sid,
+                    &inst.source_port,
+                    &format!("{:?}", inst.opcode),
+                );
+            }
+        }
+    }
+}
+
+fn exec_inst(inst: &Instruction, ctx: &mut ExecutionContext, names: &[String]) {
+    let ops = inst.operands.as_slice();
     match inst.opcode {
         OpCode::ConstNull => {
             if let Some(&dst) = ops.first() {
