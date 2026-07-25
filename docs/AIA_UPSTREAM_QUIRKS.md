@@ -76,18 +76,19 @@ Editor / saves (workflow, not sim physics):
   `Normalize(OppGoalCenter − player)` (AIA already has `StrikerDirToOppGoal`)
   as Direction 1 instead of the SoccerGet.
 
-### 1b. Custom functions **cannot nest** (engine limit)
+### 1b. Custom functions **cannot nest** (engine limit) — **Unity lifted in v0.63**
 
-- **Where:** `ENGINE` · `CONFIRMED` (AIA Discord bot, 2026-07-22; Maia /
-  PunkSkeleton report: nested `Player Distance To The Ball` →
+- **Where:** `ENGINE` · was `CONFIRMED` pre-v0.63 (AIA Discord bot, 2026-07-22;
+  Maia / PunkSkeleton: nested `Player Distance To The Ball` →
   `Relative Direction` made every player distance identical)
-- **What:** “you can't currently nest functions inside of other functions. if
-  you want to use them you'll need to pass a value from one function into
-  another as a parameter.” Nested `Function` calls yield Null / identical
-  wrong results (e.g. Player Distance always the same).
-- **Sim:** GraphBrain + O0 lowerer reject nested `Function` (return/emit Null).
-- **Note:** Stock `AIA.txt` has **0** nested `Function` calls — this quirk
-  breaks _other_ graphs that nest helpers, not AIA itself.
+- **What (≤v0.61):** “you can't currently nest functions inside of other
+  functions…” Nested `Function` calls yielded Null / identical wrong results.
+- **Unity v0.63+:** nested custom functions **allowed** (author changelog).
+- **Sim (still behind):** GraphBrain + O0 lowerer still reject nested
+  `Function` (return/emit Null). Fix tracked in
+  [`HANDOFF_UNITY_v0.63.md`](HANDOFF_UNITY_v0.63.md).
+- **Note:** Stock `AIA.txt` has **0** nested `Function` calls — nesting
+  matters for newer / helper-heavy graphs, not AIA itself.
 
 ### 2. Kickoff walk-in is **engine-scripted** (graph control locked)
 
@@ -334,7 +335,8 @@ Editor / saves (workflow, not sim physics):
   TimePlot |Ball−T1| while held ≈1.54–1.67, first sample ≈1.67)
 - **Sim:** `hold_offset_m=1.67`. Capsule body radius **0.762**; NavMeshAgent
   radius 0.5 / stoppingDistance **1.25** (pathfinding only — DeterministicMover
-  moves).
+  moves). Mover brake-to-rest is **decel 200** (TimePlot 2026-07-25 median;
+  stop from sprint ≈0.16 m / 0.04 s), not the NavMesh distance.
 
 ### 22. Tackle (locked): both lose `min(stam)`; remainder / tie → ball
 
@@ -462,7 +464,7 @@ timings are practically close — not bit-perfect.
 | Opp-goal dir    | Clear lane into mouth or null; goal-dir uses interact_r                         |
 | ClearMate       | LOS + short corridor + other mates block; MIN_DOT 0.93; mate_r body×2.8; max 36 |
 | Kicking striker | Spawns at (0,0) when kicking off; kickoff face ±Z (#24)                         |
-| Speeds          | walk **7** / sprint **8**; no stam throttle (#11); Clear-sticky facing (#24)    |
+| Speeds          | walk **7** / sprint **8**; accel **100** / decel **200**; no stam throttle (#11); Clear-sticky facing (#24)    |
 | Clear blockers  | body1.5 + continuous closest-approach ray                                       |
 | Charge          | 0.30s warmup + 0.38s to full (#19)                                              |
 | Hold offset     | **1.67 m** prefab BallHoldLocation Z (#21); body capsule **0.762**              |

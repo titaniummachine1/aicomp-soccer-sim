@@ -109,6 +109,7 @@
     "walk_speed_mps": 7.0,
     "sprint_speed_mps": 8.0,
     "intercept_defaults_mps": { "max_speed": 8.0, "acceleration": 100.0 },
+    "deceleration_mps2": 200.0,
     "minimum_move_delta_m": 0.25,
     "body_radius_m": 0.655,
     "nav_agent_radius_m": 0.5,
@@ -170,9 +171,9 @@
       "nav_agent_radius_m": 0.5,
       "nav_agent_stopping_distance_m": 1.25,
       "deterministic_mover_unnamed_floats": [10.0, 100.0, 0.5, 8.0, 0.1, 0.1],
-      "note": "100≈accel, 8≈sprint already TimePlot-locked. No CharacterController. Interact gates possession."
+      "note": "100≈accel, 8≈sprint TimePlot-locked. NavMesh stoppingDistance=1.25 is pathfinding-only — DeterministicMover brakes at decel 200, not that distance. No CharacterController. Interact gates possession."
     },
-    "note": "Prefab: capsule body 0.762, BallHoldLocation Z=1.67, NavMesh stoppingDistance=1.25. Walk 7 / sprint 8 / accel 100. Interact-gated pickup. Equal-stam tackle: tackler wins + both dump."
+    "note": "Prefab: capsule body 0.762, BallHoldLocation Z=1.67, NavMesh stoppingDistance=1.25 (path only). Walk 7 / sprint 8 / accel 100 / decel 200 (TimePlot 2026-07-25). Interact-gated pickup. Equal-stam tackle: tackler wins + both dump."
   },
   "bevy_impl_hints": [
     "Ball: Dynamic RigidBody, LockedAxes::ROTATION_LOCKED, sphere collider radius radius_world, friction/restitution as contacts above OR custom Coulomb slide force -accel*normalize(vel) while grounded",

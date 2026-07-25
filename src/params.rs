@@ -30,6 +30,8 @@ pub struct SimParams {
     /// Sprint speed once stamina hits zero (measured 7.65).
     pub player_sprint_empty_speed: f32,
     pub player_accel: f32,
+    /// Brake-to-rest magnitude (TimePlot median 200 — exactly 2× accel).
+    pub player_decel: f32,
     /// Soft cap on launch |v| (TimePlot ~29.94; ball maxSpeed ~30).
     pub kick_max_speed: f32,
     /// Planar launch: `min(base + per_charge * c, kick_horiz_cap)` (TimePlot sweep).
@@ -135,6 +137,8 @@ impl SimParams {
             player_max_speed: 8.0,
             player_sprint_empty_speed: 7.65,
             player_accel: 100.0,
+            // TimePlot 2026-07-25: decel-to-rest median 200.000 (n=279).
+            player_decel: 200.0,
             kick_max_speed: 29.94,
             // (10 + 290 c) / 9  — TimePlot charge sweep 2026-07-22
             kick_speed_base: 10.0 / 9.0,
@@ -277,6 +281,9 @@ impl SimParams {
             if let Some(d) = pl.intercept_defaults_mps {
                 p.player_max_speed = d.max_speed.unwrap_or(p.player_max_speed);
                 p.player_accel = d.acceleration.unwrap_or(p.player_accel);
+            }
+            if let Some(d) = pl.deceleration_mps2 {
+                p.player_decel = d;
             }
             if let Some(t) = pl.global_pickup_delay_after_shot_s {
                 p.pickup_delay_s = t;
@@ -447,6 +454,8 @@ struct RawKick {
 struct RawPlayers {
     walk_speed_mps: Option<f32>,
     intercept_defaults_mps: Option<RawIntercept>,
+    /// Brake-to-rest (TimePlot median 200). Distinct from accel.
+    deceleration_mps2: Option<f32>,
     minimum_move_delta_m: Option<f32>,
     global_pickup_delay_after_shot_s: Option<f32>,
     global_pickup_delay_after_exchange_s: Option<f32>,
@@ -536,6 +545,8 @@ mod measured_constants_tests {
             ("player_walk_speed", p.player_walk_speed, 7.0, "measured"),
             ("player_max_speed", p.player_max_speed, 8.0, "measured"),
             ("player_sprint_empty_speed", p.player_sprint_empty_speed, 7.65, "measured"),
+            ("player_accel", p.player_accel, 100.0, "accel from rest median n=277"),
+            ("player_decel", p.player_decel, 200.0, "decel to rest median n=279"),
             ("kickoff_circle_r", p.kickoff_circle_r, 7.25, "Kickoff Circle Radius node"),
         ];
 
