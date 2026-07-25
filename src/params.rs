@@ -67,8 +67,12 @@ pub struct SimParams {
     pub shot_charge_time_s: f32,
     /// Pickup/tackle reach. **CONFIRMED** 1.75 (ApiProbe timeplot).
     pub interact_radius: f32,
-    /// Soft radius for clear-dir blockers / future post-sweep (**CANDIDATE**).
-    /// Not a NavMeshAgent — field has no obstacles for normal play.
+    /// Player collision radius. **MEASURED** 0.655 (2026-07-25): walking flush
+    /// into both sidelines stops the centre at z = +-24.345 against corners at
+    /// +-25.0, agreeing to 0.0004 between opposite walls. The end walls give
+    /// ~0.75 but are contaminated by goal-post geometry (posts_x 40.2), so the
+    /// sidelines are the clean read. Supersedes the prefab CapsuleCollider
+    /// value 0.7619, which is four game versions stale.
     pub body_radius: f32,
     /// Hold/aim offset from player center (**CANDIDATE**).
     pub hold_offset: f32,
@@ -155,8 +159,7 @@ impl SimParams {
             shot_charge_warmup_s: 0.30,
             shot_charge_time_s: 0.38,
             interact_radius: 1.75,
-            // CapsuleCollider.m_Radius on AIALander - Soccer (prefab evidence).
-            body_radius: 0.7618736,
+            body_radius: 0.655,
             // BallHoldLocation local Z on prefab (TimePlot first hold ≈1.67).
             hold_offset: 1.67,
             hold_marker_radius: ball_radius * 0.55,
