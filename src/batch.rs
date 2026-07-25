@@ -554,3 +554,30 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod mercy_rule_tests {
+    use super::MERCY_GOAL_DIFF;
+
+    /// The rule is a GOAL DIFFERENCE of 7, not "somebody reached 7 goals".
+    /// Every real match so far happened to end 7:0, which does not
+    /// distinguish the two readings — this does.
+    #[test]
+    fn mercy_triggers_on_difference_not_on_a_total() {
+        let stops = |h: u32, a: u32| h.abs_diff(a) >= MERCY_GOAL_DIFF;
+
+        // 7 clear, but neither reading is ambiguous here: loser has scored.
+        assert!(stops(9, 2), "9:2 is a 7-goal gap and must stop");
+        assert!(stops(2, 9), "symmetric: trailing side counts too");
+        assert!(stops(12, 5), "12:5 is a 7-goal gap");
+
+        // A team past 7 goals is NOT enough on its own.
+        assert!(!stops(8, 3), "8:3 is only 5 clear — must keep playing");
+        assert!(!stops(10, 6), "10:6 is only 4 clear — must keep playing");
+        assert!(!stops(7, 1), "7:1 is only 6 clear — must keep playing");
+
+        // Exact boundary.
+        assert!(!stops(6, 0), "6:0 is 6 clear — below the bar");
+        assert!(stops(7, 0), "7:0 is exactly 7 clear — at the bar");
+    }
+}
