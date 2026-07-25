@@ -24,7 +24,9 @@ use aicomp_soccer_sim::brain::{
 use aicomp_soccer_sim::graph::load_team_graph;
 use aicomp_soccer_sim::graph_vm::RuntimeBrain;
 use aicomp_soccer_sim::params::{default_params_path, SimParams};
-use aicomp_soccer_sim::probe_brains::{PerfectControllerBrain, Test1Brain, Test2Brain};
+use aicomp_soccer_sim::probe_brains::{
+    KickRoutineBrain, PerfectControllerBrain, Test1Brain, Test2Brain,
+};
 use aicomp_soccer_sim::world::{MatchWorld, FIXED_DT};
 use aicomp_soccer_sim::{MatchPhase, TimePlotRecorder};
 
@@ -182,6 +184,7 @@ fn build_brain(input: &BrainInput) -> Result<Box<dyn TeamBrain>, String> {
         BrainInput::Test1 => Box::new(Test1Brain::default()),
         BrainInput::Test2 => Box::new(Test2Brain::default()),
         BrainInput::Perfect => Box::new(PerfectControllerBrain),
+        BrainInput::Kick => Box::new(KickRoutineBrain::default()),
         BrainInput::Aia => {
             let path = aicomp_soccer_sim::batch::soccer_aia_graph_path();
             let g = load_team_graph(&path).map_err(|e| format!("load AIA: {e}"))?;

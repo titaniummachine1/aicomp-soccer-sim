@@ -1,14 +1,14 @@
 //! Runtime values flowing through graph ports.
 
-use bevy::prelude::Vec2;
+use bevy::prelude::{Vec2, Vec3};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum GraphValue {
     Bool(bool),
     Float(f32),
     String(String),
-    /// Pitch-plane position / direction (Unity XZ → our xy).
-    Vec(Vec2),
+    /// Full Unity Vector3 (X, Y height, Z).
+    Vec(Vec3),
     /// World transform treated as position for RelativePosition / GetTransform.
     Transform(Vec2),
     Null,
@@ -34,21 +34,24 @@ impl GraphValue {
                     0.0
                 }
             }
-            GraphValue::Vec(v) | GraphValue::Transform(v) => v.length(),
+            GraphValue::Vec(v) => v.length(),
+            GraphValue::Transform(v) => v.length(),
             _ => 0.0,
         }
     }
 
-    pub fn as_vec(&self) -> Vec2 {
+    pub fn as_vec(&self) -> Vec3 {
         match self {
-            GraphValue::Vec(v) | GraphValue::Transform(v) => *v,
-            _ => Vec2::ZERO,
+            GraphValue::Vec(v) => *v,
+            GraphValue::Transform(v) => super::pitch_vec::vec3_from_pitch(*v),
+            _ => Vec3::ZERO,
         }
     }
 
     pub fn as_transform_pos(&self) -> Vec2 {
         match self {
-            GraphValue::Transform(v) | GraphValue::Vec(v) => *v,
+            GraphValue::Transform(v) => *v,
+            GraphValue::Vec(v) => super::pitch_vec::pitch_plane(*v),
             _ => Vec2::ZERO,
         }
     }

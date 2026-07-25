@@ -1055,7 +1055,7 @@ mod tests {
     }
 
     /// Corner / wall-slam should not blow the FIXED_DT budget (viewer "OVER").
-    /// Maia nested-Function Null is unrelated — AIA itself has zero nested calls.
+    /// Nested Function calls are legal as of Unity v0.63; AIA itself still has zero.
     #[test]
     fn corner_slam_tick_cost_stays_under_budget() {
         use crate::graph::load_team_graph;

@@ -39,6 +39,6 @@ pub use params::SimParams;
 pub use player::{project_hold_into_playable, Player, PlayerId, SimpleMover};
 pub use possession::Possession;
 pub use scenario::{evaluate_scenario1, MatchScenario, Scenario1Outcome};
-pub use probe_brains::{PerfectControllerBrain, Test1Brain, Test2Brain};
+pub use probe_brains::{KickRoutineBrain, PerfectControllerBrain, Test1Brain, Test2Brain};
 pub use timeplot::TimePlotRecorder;
 pub use world::{MatchWorld, FIXED_DT};

@@ -70,7 +70,7 @@ pub struct GraphNode {
 pub struct CreateFunctionDef {
     pub sid: String,
     pub name: String,
-    /// DebugDrawLine / DebugDrawDisc body nodes owned by this CreateFunction.
+    /// DebugDrawLine / DebugDrawDisc / TimePlot body nodes owned by this CreateFunction.
     pub debug_draws: Vec<String>,
 }
 
@@ -84,7 +84,7 @@ pub struct TeamGraph {
     pub controllers: [Option<String>; 4],
     /// Root-level SetVariable node sIDs (owner empty).
     pub set_variables: Vec<String>,
-    /// Root-level DebugDrawLine / DebugDrawDisc sinks (owner empty).
+    /// Root-level DebugDrawLine / DebugDrawDisc / TimePlot sinks (owner empty).
     pub debug_draws: Vec<String>,
     /// Root-level Function call sIDs (owner empty) — Unity runs these even when unread.
     pub root_functions: Vec<String>,
@@ -118,7 +118,10 @@ pub fn index_graph(raw: RawGraph, path: String) -> TeamGraph {
         if n.id == "SetVariable" && n.owner_function_sid.is_empty() {
             set_variables.push(n.sid.clone());
         }
-        if n.id == "DebugDrawLine" || n.id == "DebugDrawDisc" {
+        // TimePlot is a sink like the DebugDraws: it has no output, it exists
+        // purely for its side effect. It used to be dropped here, which is why
+        // the sim could not observe any graph-internal value a brain plotted.
+        if n.id == "DebugDrawLine" || n.id == "DebugDrawDisc" || n.id == "TimePlot" {
             if n.owner_function_sid.is_empty() {
                 debug_draws.push(n.sid.clone());
             } else {

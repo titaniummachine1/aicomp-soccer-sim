@@ -178,6 +178,107 @@ impl TeamBrain for Test1Brain {
     }
 }
 
+/// Scripted kick parity driver: blank opponents, P1 fires a fixed kick sequence.
+///
+/// Requires [`setup_kick_routine_harness`] — starts in Play with ball at center,
+/// not kickoff. Sequence: +45° full → pickup → center → −45° full → pickup →
+/// center → −45° half → park.
+#[derive(Debug, Default)]
+pub struct KickRoutineBrain {
+    phase: u8,
+    prev_has: bool,
+}
+
+impl KickRoutineBrain {
+    fn charge_of(api: &TeamApi, has: bool) -> f32 {
+        if !has {
+            return 0.0;
+        }
+        api.get_float("Teammate 1 Shot Charge")
+            .or_else(|| api.get_float("Ball Carrier Shot Charge"))
+            .unwrap_or(0.0)
+    }
+
+    fn aim_dir(deg: f32) -> Vec2 {
+        let rad = deg.to_radians();
+        Vec2::new(rad.cos(), rad.sin())
+    }
+}
+
+impl TeamBrain for KickRoutineBrain {
+    fn think(&mut self, api: &TeamApi) -> BrainOutput {
+        let mut out = BrainOutput::default();
+        let park = park_corner(api);
+        for i in 1..4 {
+            out.commands[i] = BrainCommand {
+                move_to: park,
+                sprint: false,
+                interact: false,
+            };
+        }
+
+        let ball = api.get_transform("Ball").unwrap_or(Vec2::ZERO);
+        let me = api.get_transform("Team Player 1").unwrap_or(Vec2::ZERO);
+        let has = api.get_bool("Team Player 1 Has Ball").unwrap_or(false);
+        let near = api.get_bool("Is Ball Nearby Team Player 1").unwrap_or(false);
+        let charge = Self::charge_of(api, has);
+        let released = self.prev_has && !has && charge <= 0.05;
+        let center = Vec2::ZERO;
+        let at_center = me.distance(center) < 1.25;
+
+        if released && matches!(self.phase, 0 | 2 | 4) {
+            self.phase += 1;
+        } else if has && !self.prev_has && matches!(self.phase, 1 | 3 | 5) {
+            self.phase += 1;
+        }
+
+        let (aim_deg, charge_need, sprint_release) = match self.phase {
+            0 => (45.0_f32, 0.97_f32, true),
+            2 => (-45.0_f32, 0.97_f32, true),
+            4 => (-45.0_f32, 0.50_f32, false),
+            _ => (0.0, 1.0, false),
+        };
+
+        out.commands[0] = match self.phase {
+            0 | 2 | 4 if has => {
+                let dir = Self::aim_dir(aim_deg);
+                if !at_center {
+                    BrainCommand {
+                        move_to: center,
+                        sprint: false,
+                        interact: true,
+                    }
+                } else if charge >= charge_need {
+                    BrainCommand {
+                        move_to: me + dir * 10.0,
+                        sprint: sprint_release,
+                        interact: false,
+                    }
+                } else {
+                    BrainCommand {
+                        move_to: me + dir * 10.0,
+                        sprint: false,
+                        interact: true,
+                    }
+                }
+            }
+            1 | 3 | 5 => BrainCommand {
+                move_to: ball,
+                sprint: false,
+                interact: near && !has,
+            },
+            _ => BrainCommand {
+                move_to: center,
+                sprint: false,
+                interact: false,
+            },
+        };
+
+        self.prev_has = has;
+        out
+    }
+}
+
 /// Away: wait for Home kick + Home stam < 0.80, walk-tackle, then N/S carry.
 #[derive(Debug, Default)]
 pub struct Test2Brain {

@@ -1,8 +1,9 @@
 //! VM runtime values — no String registers (strings are compiler metadata).
 
-use bevy::prelude::Vec2;
+use bevy::prelude::{Vec2, Vec3};
 
 use crate::graph::GraphValue;
+use crate::graph::pitch_vec::{pitch_plane, vec3_from_pitch};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RegisterKind {
@@ -16,7 +17,8 @@ pub enum RegisterKind {
 pub enum VmValue {
     Float(f32),
     Bool(bool),
-    Vector(Vec2),
+    /// Full Unity Vector3 (X, Y height, Z).
+    Vector(Vec3),
     Null,
 }
 
@@ -40,7 +42,8 @@ impl VmValue {
         match v {
             GraphValue::Float(f) => VmValue::Float(*f),
             GraphValue::Bool(b) => VmValue::Bool(*b),
-            GraphValue::Vec(v) | GraphValue::Transform(v) => VmValue::Vector(*v),
+            GraphValue::Vec(v) => VmValue::Vector(*v),
+            GraphValue::Transform(v) => VmValue::Vector(vec3_from_pitch(*v)),
             GraphValue::String(_) | GraphValue::Null => VmValue::Null,
         }
     }
@@ -51,6 +54,13 @@ impl VmValue {
             VmValue::Bool(b) => GraphValue::Bool(b),
             VmValue::Vector(v) => GraphValue::Vec(v),
             VmValue::Null => GraphValue::Null,
+        }
+    }
+
+    pub fn pitch_plane(self) -> Vec2 {
+        match self {
+            VmValue::Vector(v) => pitch_plane(v),
+            _ => Vec2::ZERO,
         }
     }
 }

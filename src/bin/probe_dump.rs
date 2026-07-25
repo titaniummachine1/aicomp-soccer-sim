@@ -95,6 +95,7 @@ fn main() -> ExitCode {
 
     let mut last_discs = Vec::new();
     let mut last_lines = Vec::new();
+    let mut last_plots: Vec<(String, f32)> = Vec::new();
     for tick_idx in 0..ticks {
         // Inject ONCE, then let the ball roll naturally. Re-injecting every
         // tick pins the speed constant, which any airborne detector reasonably
@@ -114,11 +115,15 @@ fn main() -> ExitCode {
         let frame = aicomp_soccer_sim::debug_draw::snapshot();
         last_discs = frame.discs;
         last_lines = frame.lines;
+        last_plots = frame.plots;
         aicomp_soccer_sim::debug_draw::begin_frame();
         let away_out = away_brain.think(&away_api);
         world.step_with_commands(&home_out, &away_out, FIXED_DT);
     }
 
+    for (name, v) in &last_plots {
+        println!("PLOT	{name}	{v:.4}");
+    }
     for l in &last_lines {
         let name = disc_color_name(l.rgba);
         println!(

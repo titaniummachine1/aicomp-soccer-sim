@@ -1,6 +1,8 @@
 //! Intentionally dumb O0 interpreter — correctness / TRACE identity first.
 
-use bevy::prelude::Vec2;
+use bevy::prelude::{Vec2, Vec3};
+
+use crate::graph::pitch_vec::pitch_plane;
 
 use crate::brain::BrainCommand;
 use crate::graph_vm::context::ExecutionContext;
@@ -15,19 +17,19 @@ impl Backend for Interpreter {
     fn execute_settle(&mut self, program: &RuntimeProgram, ctx: &mut ExecutionContext) {
         ctx.frame.ensure_regs(program.register_count as usize);
         for inst in program.settle_ops() {
-            run_inst(inst, ctx);
+            run_inst(inst, ctx, &program.var_names);
         }
     }
 
     fn execute_controllers(&mut self, program: &RuntimeProgram, ctx: &mut ExecutionContext) {
         ctx.frame.ensure_regs(program.register_count as usize);
         for inst in program.controller_ops() {
-            run_inst(inst, ctx);
+            run_inst(inst, ctx, &program.var_names);
         }
     }
 }
 
-fn run_inst(inst: &Instruction, ctx: &mut ExecutionContext) {
+fn run_inst(inst: &Instruction, ctx: &mut ExecutionContext, names: &[String]) {
     let ops = inst.operands.as_slice();
     match inst.opcode {
         OpCode::ConstNull => {
@@ -51,7 +53,8 @@ fn run_inst(inst: &Instruction, ctx: &mut ExecutionContext) {
             if let Some(&dst) = ops.first() {
                 let x = ops.get(1).copied().map(f32::from_bits).unwrap_or(0.0);
                 let y = ops.get(2).copied().map(f32::from_bits).unwrap_or(0.0);
-                ctx.frame.registers[dst as usize] = VmValue::Vector(Vec2::new(x, y));
+                let z = ops.get(3).copied().map(f32::from_bits).unwrap_or(0.0);
+                ctx.frame.registers[dst as usize] = VmValue::Vector(Vec3::new(x, y, z));
             }
         }
         OpCode::LoadVar => {
@@ -167,11 +170,12 @@ fn run_inst(inst: &Instruction, ctx: &mut ExecutionContext) {
             }
         }
         OpCode::ConstructVec => {
-            if ops.len() >= 3 {
+            if ops.len() >= 4 {
                 let dst = ops[0] as usize;
                 let x = reg_f(ctx, ops[1] as usize);
-                let z = reg_f(ctx, ops[2] as usize);
-                ctx.frame.registers[dst] = VmValue::Vector(Vec2::new(x, z));
+                let y = reg_f(ctx, ops[2] as usize);
+                let z = reg_f(ctx, ops[3] as usize);
+                ctx.frame.registers[dst] = VmValue::Vector(Vec3::new(x, y, z));
             }
         }
         OpCode::SplitVec => {
@@ -181,8 +185,8 @@ fn run_inst(inst: &Instruction, ctx: &mut ExecutionContext) {
                 let axis = ops.get(2).copied().unwrap_or(0);
                 let f = match axis {
                     0 => v.x,
-                    1 => 0.0,
-                    _ => v.y,
+                    1 => v.y,
+                    _ => v.z,
                 };
                 ctx.frame.registers[dst] = VmValue::Float(f);
             }
@@ -213,7 +217,7 @@ fn run_inst(inst: &Instruction, ctx: &mut ExecutionContext) {
                 let v = reg_v(ctx, ops[1] as usize);
                 let len = v.length();
                 ctx.frame.registers[dst] =
-                    VmValue::Vector(if len > 1e-8 { v / len } else { Vec2::ZERO });
+                    VmValue::Vector(if len > 1e-8 { v / len } else { Vec3::ZERO });
             }
         }
         OpCode::Magnitude => {
@@ -268,7 +272,7 @@ fn run_inst(inst: &Instruction, ctx: &mut ExecutionContext) {
                     }),
                     2 => VmValue::Vector(match chosen {
                         VmValue::Vector(v) => v,
-                        _ => Vec2::ZERO,
+                        _ => Vec3::ZERO,
                     }),
                     _ => chosen,
                 };
@@ -279,7 +283,7 @@ fn run_inst(inst: &Instruction, ctx: &mut ExecutionContext) {
             if ops.len() >= 4 {
                 let slot = ops.get(3).copied().unwrap_or(0) as usize;
                 if slot < 4 {
-                    let move_to = reg_v(ctx, ops[0] as usize);
+                    let move_to = pitch_plane(reg_v(ctx, ops[0] as usize));
                     let sprint = reg_b(ctx, ops[1] as usize);
                     let interact = reg_b(ctx, ops[2] as usize);
                     ctx.output.commands[slot] = BrainCommand {
@@ -292,8 +296,8 @@ fn run_inst(inst: &Instruction, ctx: &mut ExecutionContext) {
         }
         OpCode::DebugDrawLine => {
             if ops.len() >= 7 {
-                let a = reg_v(ctx, ops[0] as usize);
-                let b = reg_v(ctx, ops[1] as usize);
+                let a = pitch_plane(reg_v(ctx, ops[0] as usize));
+                let b = pitch_plane(reg_v(ctx, ops[1] as usize));
                 let w = reg_f(ctx, ops[2] as usize);
                 let rgba = [
                     f32::from_bits(ops[3]),
@@ -304,9 +308,20 @@ fn run_inst(inst: &Instruction, ctx: &mut ExecutionContext) {
                 crate::debug_draw::line_rgba(a, b, w, rgba);
             }
         }
+        OpCode::TimePlot => {
+            // Record the channel so offline tooling can read a brain's own
+            // internal values. Previously TimePlot was dropped at load time,
+            // which left the sim unable to observe any graph-internal number.
+            // operands = [value_reg, name_id] -- immediates follow args.
+            if ops.len() >= 2 {
+                let v = reg_f(ctx, ops[0] as usize);
+                let name = names.get(ops[1] as usize).map(String::as_str).unwrap_or("?");
+                crate::debug_draw::plot(name, v);
+            }
+        }
         OpCode::DebugDrawDisc => {
             if ops.len() >= 7 {
-                let c = reg_v(ctx, ops[0] as usize);
+                let c = pitch_plane(reg_v(ctx, ops[0] as usize));
                 let r = reg_f(ctx, ops[1] as usize);
                 let w = reg_f(ctx, ops[2] as usize);
                 let rgba = [
@@ -331,7 +346,7 @@ fn bin_f(ctx: &mut ExecutionContext, ops: &[u32], f: impl Fn(f32, f32) -> f32) {
     ctx.frame.registers[ops[0] as usize] = VmValue::Float(f(a, b));
 }
 
-fn bin_v(ctx: &mut ExecutionContext, ops: &[u32], f: impl Fn(Vec2, Vec2) -> Vec2) {
+fn bin_v(ctx: &mut ExecutionContext, ops: &[u32], f: impl Fn(Vec3, Vec3) -> Vec3) {
     if ops.len() < 3 {
         return;
     }
@@ -372,10 +387,10 @@ fn reg_b(ctx: &ExecutionContext, i: usize) -> bool {
     }
 }
 
-fn reg_v(ctx: &ExecutionContext, i: usize) -> Vec2 {
+fn reg_v(ctx: &ExecutionContext, i: usize) -> Vec3 {
     match ctx.frame.registers.get(i).copied().unwrap_or(VmValue::Null) {
         VmValue::Vector(v) => v,
-        _ => Vec2::ZERO,
+        _ => Vec3::ZERO,
     }
 }
 

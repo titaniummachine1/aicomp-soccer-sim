@@ -6,6 +6,7 @@
 pub(crate) mod dropdowns;
 mod eval;
 pub(crate) mod load;
+pub(crate) mod pitch_vec;
 mod value;
 
 #[cfg(test)]

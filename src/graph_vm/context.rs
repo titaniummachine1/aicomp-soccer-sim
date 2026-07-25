@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::api::TeamApi;
 use crate::brain::BrainOutput;
+use crate::graph::pitch_vec::vec3_from_pitch;
 use crate::graph_vm::lower::{ApiKind, ApiSlotTable};
 use crate::graph_vm::trace::{ObservableTrace, VarCommit};
 use crate::graph_vm::value::VmValue;
@@ -39,11 +40,11 @@ impl ApiSnapshot {
         match self.slot_kinds.get(idx).copied().unwrap_or(ApiKind::Float) {
             ApiKind::Bool => VmValue::Bool(self.api.get_bool_id(dense).unwrap_or(false)),
             ApiKind::Float => VmValue::Float(self.api.get_float_id(dense).unwrap_or(0.0)),
-            ApiKind::Transform => {
-                VmValue::Vector(self.api.get_transform_id(dense).unwrap_or_default())
-            }
+            ApiKind::Transform => VmValue::Vector(vec3_from_pitch(
+                self.api.get_transform_id(dense).unwrap_or_default(),
+            )),
             ApiKind::Vector3 => match self.api.get_vector_id(dense) {
-                Some(Some(v)) => VmValue::Vector(v),
+                Some(Some(v)) => VmValue::Vector(vec3_from_pitch(v)),
                 _ => VmValue::Null,
             },
         }

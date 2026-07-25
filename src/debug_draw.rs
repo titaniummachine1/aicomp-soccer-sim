@@ -27,11 +27,14 @@ pub struct DebugDisc {
 pub struct DebugDrawFrame {
     pub lines: Vec<DebugLine>,
     pub discs: Vec<DebugDisc>,
+    /// (channel name, value) from TimePlot nodes this tick.
+    pub plots: Vec<(String, f32)>,
 }
 
 static FRAME: Mutex<DebugDrawFrame> = Mutex::new(DebugDrawFrame {
     lines: Vec::new(),
     discs: Vec::new(),
+    plots: Vec::new(),
 });
 
 fn lock() -> MutexGuard<'static, DebugDrawFrame> {
@@ -43,6 +46,12 @@ pub fn begin_frame() {
     let mut g = lock();
     g.lines.clear();
     g.discs.clear();
+    g.plots.clear();
+}
+
+/// Record one TimePlot sample for this tick.
+pub fn plot(name: &str, value: f32) {
+    lock().plots.push((name.to_string(), value));
 }
 
 pub fn line(a: Vec2, b: Vec2, width: f32, color: &str) {

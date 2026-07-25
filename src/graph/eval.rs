@@ -5,10 +5,11 @@
 
 use std::collections::HashMap;
 
-use bevy::prelude::Vec2;
+use bevy::prelude::{Vec2, Vec3};
 
 use crate::api::TeamApi;
 use crate::brain::{BrainCommand, BrainOutput, TeamBrain};
+use crate::graph::pitch_vec::{pitch_plane, vec3_from_components, vec3_from_pitch};
 use crate::graph_vm::trace::{ObservableTrace, VarCommit};
 use crate::graph_vm::value::VmValue;
 
@@ -157,7 +158,7 @@ impl<'a> EvalCtx<'a> {
     fn eval_controller(&mut self, node_sid: &str) -> BrainCommand {
         let move_to = self
             .input_named(node_sid, "Vector31")
-            .map(|v| v.as_vec())
+            .map(|v| pitch_plane(v.as_vec()))
             .unwrap_or(Vec2::ZERO);
         let sprint = self
             .input_named(node_sid, "Bool1")
@@ -182,11 +183,11 @@ impl<'a> EvalCtx<'a> {
             "DebugDrawLine" => {
                 let a = self
                     .input_named(node_sid, "Vector31")
-                    .map(|v| v.as_vec())
+                    .map(|v| pitch_plane(v.as_vec()))
                     .unwrap_or(Vec2::ZERO);
                 let b = self
                     .input_named(node_sid, "Vector32")
-                    .map(|v| v.as_vec())
+                    .map(|v| pitch_plane(v.as_vec()))
                     .unwrap_or(Vec2::ZERO);
                 let width = self
                     .input_named(node_sid, "Float1")
@@ -198,7 +199,7 @@ impl<'a> EvalCtx<'a> {
             "DebugDrawDisc" => {
                 let center = self
                     .input_named(node_sid, "Vector31")
-                    .map(|v| v.as_vec())
+                    .map(|v| pitch_plane(v.as_vec()))
                     .unwrap_or(Vec2::ZERO);
                 let radius = self
                     .input_named(node_sid, "Float1")
@@ -310,11 +311,11 @@ impl<'a> EvalCtx<'a> {
             "SoccerGetFloat" => {
                 GraphValue::Float(self.api.get_float(&node.modifier).unwrap_or(0.0))
             }
-            "SoccerGetTransform" => {
-                GraphValue::Transform(self.api.get_transform(&node.modifier).unwrap_or(Vec2::ZERO))
-            }
+            "SoccerGetTransform" => GraphValue::Transform(
+                self.api.get_transform(&node.modifier).unwrap_or(Vec2::ZERO),
+            ),
             "SoccerGetVector3" => match self.api.get_vector3(&node.modifier) {
-                Some(Some(v)) => GraphValue::Vec(v),
+                Some(Some(v)) => GraphValue::Vec(vec3_from_pitch(v)),
                 _ => GraphValue::Null,
             },
 
@@ -323,9 +324,8 @@ impl<'a> EvalCtx<'a> {
                     .input_named(node_sid, "Transform1")
                     .map(|v| v.as_transform_pos())
                     .unwrap_or(Vec2::ZERO);
-                GraphValue::Vec(crate::graph::dropdowns::apply_relative_position(
-                    pos,
-                    &node.modifier,
+                GraphValue::Vec(vec3_from_pitch(
+                    crate::graph::dropdowns::apply_relative_position(pos, &node.modifier),
                 ))
             }
 
@@ -334,7 +334,7 @@ impl<'a> EvalCtx<'a> {
                     .input_named(node_sid, "Float1")
                     .map(|v| v.as_float())
                     .unwrap_or(0.0);
-                let _y = self
+                let y = self
                     .input_named(node_sid, "Float2")
                     .map(|v| v.as_float())
                     .unwrap_or(0.0);
@@ -342,18 +342,18 @@ impl<'a> EvalCtx<'a> {
                     .input_named(node_sid, "Float3")
                     .map(|v| v.as_float())
                     .unwrap_or(0.0);
-                GraphValue::Vec(Vec2::new(x, z))
+                GraphValue::Vec(vec3_from_components(x, y, z))
             }
 
             "Vector3Split" => {
                 let v = self
                     .input_named(node_sid, "Vector31")
                     .map(|v| v.as_vec())
-                    .unwrap_or(Vec2::ZERO);
+                    .unwrap_or(Vec3::ZERO);
                 match port_name {
                     "Float1" => GraphValue::Float(v.x),
-                    "Float2" => GraphValue::Float(0.0), // Unity Y unused in 2D
-                    "Float3" => GraphValue::Float(v.y),
+                    "Float2" => GraphValue::Float(v.y),
+                    "Float3" => GraphValue::Float(v.z),
                     _ => GraphValue::Null,
                 }
             }
@@ -427,7 +427,7 @@ impl<'a> EvalCtx<'a> {
                 let v = self
                     .input_named(node_sid, "Vector31")
                     .map(|v| v.as_vec())
-                    .unwrap_or(Vec2::ZERO);
+                    .unwrap_or(Vec3::ZERO);
                 let s = self
                     .input_named(node_sid, "Float1")
                     .map(|v| v.as_float())
@@ -438,37 +438,37 @@ impl<'a> EvalCtx<'a> {
                 let v = self
                     .input_named(node_sid, "Vector31")
                     .map(|v| v.as_vec())
-                    .unwrap_or(Vec2::ZERO);
+                    .unwrap_or(Vec3::ZERO);
                 let len = v.length();
-                GraphValue::Vec(if len > 1e-8 { v / len } else { Vec2::ZERO })
+                GraphValue::Vec(if len > 1e-8 { v / len } else { Vec3::ZERO })
             }
             "Magnitude" => {
                 let v = self
                     .input_named(node_sid, "Vector31")
                     .map(|v| v.as_vec())
-                    .unwrap_or(Vec2::ZERO);
+                    .unwrap_or(Vec3::ZERO);
                 GraphValue::Float(v.length())
             }
             "Distance" => {
                 let a = self
                     .input_named(node_sid, "Vector31")
                     .map(|v| v.as_vec())
-                    .unwrap_or(Vec2::ZERO);
+                    .unwrap_or(Vec3::ZERO);
                 let b = self
                     .input_named(node_sid, "Vector32")
                     .map(|v| v.as_vec())
-                    .unwrap_or(Vec2::ZERO);
+                    .unwrap_or(Vec3::ZERO);
                 GraphValue::Float(a.distance(b))
             }
             "DotProduct" => {
                 let a = self
                     .input_named(node_sid, "Vector31")
                     .map(|v| v.as_vec())
-                    .unwrap_or(Vec2::ZERO);
+                    .unwrap_or(Vec3::ZERO);
                 let b = self
                     .input_named(node_sid, "Vector32")
                     .map(|v| v.as_vec())
-                    .unwrap_or(Vec2::ZERO);
+                    .unwrap_or(Vec3::ZERO);
                 GraphValue::Float(a.dot(b))
             }
 
@@ -557,11 +557,11 @@ impl<'a> EvalCtx<'a> {
                 let t = self
                     .input_named(node_sid, "Vector31")
                     .map(|v| v.as_vec())
-                    .unwrap_or(Vec2::ZERO);
+                    .unwrap_or(Vec3::ZERO);
                 let f = self
                     .input_named(node_sid, "Vector32")
                     .map(|v| v.as_vec())
-                    .unwrap_or(Vec2::ZERO);
+                    .unwrap_or(Vec3::ZERO);
                 GraphValue::Vec(if cond { t } else { f })
             }
 
@@ -601,10 +601,9 @@ impl<'a> EvalCtx<'a> {
     }
 
     fn eval_function_call(&mut self, fn_node: &super::load::GraphNode) -> GraphValue {
-        // Unity AIComp: custom functions cannot nest (Discord AIA bot). Calling
-        // Function from inside another CreateFunction body returns Null — pass
-        // values as parameters instead.
-        if !self.call_stack.is_empty() {
+        // Unity AIComp v0.63+ allows nested custom Function calls. Soft-cap
+        // depth so runaway recursion cannot blow the stack.
+        if self.call_stack.len() > 64 {
             return GraphValue::Null;
         }
 
@@ -657,15 +656,15 @@ fn bin_f(ctx: &mut EvalCtx<'_>, node_sid: &str, f: impl Fn(f32, f32) -> f32) -> 
     GraphValue::Float(f(a, b))
 }
 
-fn bin_v(ctx: &mut EvalCtx<'_>, node_sid: &str, f: impl Fn(Vec2, Vec2) -> Vec2) -> GraphValue {
+fn bin_v(ctx: &mut EvalCtx<'_>, node_sid: &str, f: impl Fn(Vec3, Vec3) -> Vec3) -> GraphValue {
     let a = ctx
         .input_named(node_sid, "Vector31")
         .map(|v| v.as_vec())
-        .unwrap_or(Vec2::ZERO);
+        .unwrap_or(Vec3::ZERO);
     let b = ctx
         .input_named(node_sid, "Vector32")
         .map(|v| v.as_vec())
-        .unwrap_or(Vec2::ZERO);
+        .unwrap_or(Vec3::ZERO);
     GraphValue::Vec(f(a, b))
 }
 
@@ -948,6 +947,164 @@ mod tests {
                     port1: "cfr".into(),
                 },
                 // call args
+                RawConnection {
+                    port0: "vxo".into(),
+                    port1: "cvx".into(),
+                },
+                RawConnection {
+                    port0: "vyo".into(),
+                    port1: "cvy".into(),
+                },
+                RawConnection {
+                    port0: "vzo".into(),
+                    port1: "cvz".into(),
+                },
+                RawConnection {
+                    port0: "cvo".into(),
+                    port1: "fni1".into(),
+                },
+                RawConnection {
+                    port0: "fno".into(),
+                    port1: "c1m".into(),
+                },
+                RawConnection {
+                    port0: "bfo".into(),
+                    port1: "c1s".into(),
+                },
+                RawConnection {
+                    port0: "bfo".into(),
+                    port1: "c1i".into(),
+                },
+            ],
+        };
+        let mut brain = GraphBrain::new(index_graph(raw, "test".into()));
+        let out = brain.think(&empty_api());
+        assert!((out.commands[0].move_to.x - 6.0).abs() < 1e-4);
+        assert!((out.commands[0].move_to.y - 8.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn nested_function_call_returns_scaled_vec() {
+        // CreateFunction "Outer" body calls Function("Scale2", Param1).
+        // Unity v0.63+ must return the nested result, not Null.
+        let mut scale_node = node(
+            "ScaleVector3",
+            "sc",
+            "",
+            vec![
+                port("Float1", "scf", 0, "sc"),
+                port("Vector31", "scvo", 1, "sc"),
+                port("Vector31", "scvi", 0, "sc"),
+            ],
+        );
+        scale_node.owner_function_sid = "cf".into();
+        let mut f2 = node("Float", "two", "2", vec![port("Float1", "twoo", 1, "two")]);
+        f2.owner_function_sid = "cf".into();
+
+        let mut inner_call = node(
+            "Function",
+            "inner",
+            "Scale2",
+            vec![
+                port("Any1", "ini1", 0, "inner"),
+                port("Any2", "ini2", 0, "inner"),
+                port("Any3", "ini3", 0, "inner"),
+                port("Any4", "ini4", 0, "inner"),
+                port("Any1", "ino", 1, "inner"),
+            ],
+        );
+        inner_call.owner_function_sid = "outer".into();
+
+        let raw = RawGraph {
+            nodes: vec![
+                node(
+                    "CreateFunction",
+                    "cf",
+                    "Scale2",
+                    vec![
+                        port("Any1", "cfr", 0, "cf"),
+                        port("String1", "cfs1", 0, "cf"),
+                        port("Any1", "cfp1", 1, "cf"),
+                        port("Any2", "cfp2", 1, "cf"),
+                        port("Any3", "cfp3", 1, "cf"),
+                        port("Any4", "cfp4", 1, "cf"),
+                    ],
+                ),
+                f2,
+                scale_node,
+                node(
+                    "CreateFunction",
+                    "outer",
+                    "Outer",
+                    vec![
+                        port("Any1", "outr", 0, "outer"),
+                        port("String1", "outs1", 0, "outer"),
+                        port("Any1", "outp1", 1, "outer"),
+                        port("Any2", "outp2", 1, "outer"),
+                        port("Any3", "outp3", 1, "outer"),
+                        port("Any4", "outp4", 1, "outer"),
+                    ],
+                ),
+                inner_call,
+                node("Float", "vx", "3", vec![port("Float1", "vxo", 1, "vx")]),
+                node("Float", "vz", "4", vec![port("Float1", "vzo", 1, "vz")]),
+                node("Float", "vy", "0", vec![port("Float1", "vyo", 1, "vy")]),
+                node(
+                    "ConstructVector3",
+                    "cv",
+                    "",
+                    vec![
+                        port("Vector31", "cvo", 1, "cv"),
+                        port("Float1", "cvx", 0, "cv"),
+                        port("Float2", "cvy", 0, "cv"),
+                        port("Float3", "cvz", 0, "cv"),
+                    ],
+                ),
+                node(
+                    "Function",
+                    "fn",
+                    "Outer",
+                    vec![
+                        port("Any1", "fni1", 0, "fn"),
+                        port("Any2", "fni2", 0, "fn"),
+                        port("Any3", "fni3", 0, "fn"),
+                        port("Any4", "fni4", 0, "fn"),
+                        port("Any1", "fno", 1, "fn"),
+                    ],
+                ),
+                node("Bool", "bf", "1", vec![port("Bool1", "bfo", 1, "bf")]),
+                node(
+                    "SoccerController1",
+                    "c1",
+                    "",
+                    vec![
+                        port("Vector31", "c1m", 0, "c1"),
+                        port("Bool1", "c1s", 0, "c1"),
+                        port("Bool2", "c1i", 0, "c1"),
+                    ],
+                ),
+            ],
+            connections: vec![
+                RawConnection {
+                    port0: "cfp1".into(),
+                    port1: "scvi".into(),
+                },
+                RawConnection {
+                    port0: "twoo".into(),
+                    port1: "scf".into(),
+                },
+                RawConnection {
+                    port0: "scvo".into(),
+                    port1: "cfr".into(),
+                },
+                RawConnection {
+                    port0: "outp1".into(),
+                    port1: "ini1".into(),
+                },
+                RawConnection {
+                    port0: "ino".into(),
+                    port1: "outr".into(),
+                },
                 RawConnection {
                     port0: "vxo".into(),
                     port1: "cvx".into(),

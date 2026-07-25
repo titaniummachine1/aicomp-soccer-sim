@@ -26,14 +26,18 @@ use aicomp_soccer_sim::graph_vm::RuntimeBrain;
 use aicomp_soccer_sim::keypress;
 use aicomp_soccer_sim::params::{default_params_path, SimParams};
 use aicomp_soccer_sim::player::PlayerId;
-use aicomp_soccer_sim::probe_brains::{PerfectControllerBrain, Test1Brain, Test2Brain};
+use aicomp_soccer_sim::probe_brains::{
+    KickRoutineBrain, PerfectControllerBrain, Test1Brain, Test2Brain,
+};
 use aicomp_soccer_sim::scenario::MatchScenario;
 use aicomp_soccer_sim::team_threads::{
     PersistentThinkBarrier, ResettableBrain, ThinkTimings,
 };
 use aicomp_soccer_sim::titanium::{
     apply_1v1_freeze, apply_4v1_freeze, repark_1v1_inactive, repark_4v1_inactive,
-    setup_1v1_harness, setup_4v1_harness,
+    repark_kick_routine_inactive, repark_perfect_prediction_inactive, setup_1v1_harness,
+    setup_4v1_harness, setup_kick_routine_harness, setup_perfect_prediction_harness,
+    PERFECT_PREDICTION_CASES,
 };
 #[cfg(feature = "nn_train")]
 use aicomp_soccer_sim::train::TrainedBrain;
@@ -106,6 +110,60 @@ struct ViewerArgs {
     titanium_1v1_attack_home: bool,
     /// Sideline bias for attacker spawn (±3).
     titanium_1v1_z_bias: f32,
+    /// Visible PerfectController prediction regression (parity harness).
+    perfect_regress: PerfectPredictionRegress,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PerfectPredictionRegress {
+    enabled: bool,
+    case_idx: usize,
+    compact: bool,
+}
+
+impl Default for PerfectPredictionRegress {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            case_idx: 0,
+            compact: false,
+        }
+    }
+}
+
+fn perfect_parity_graph(compact: bool) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("data")
+        .join("perfect_parity")
+        .join(if compact {
+            "PerfectController_compact.txt"
+        } else {
+            "PerfectController_baseline.txt"
+        })
+}
+
+fn perfect_regress_status(mode: PerfectPredictionRegress) -> String {
+    let (name, x, z, vx, vz) = PERFECT_PREDICTION_CASES[mode.case_idx];
+    format!(
+        "perfect regress [{}] {} ball=({},{},{},{}) | keys 1-4 case, B baseline, C compact, R restart",
+        if mode.compact { "compact" } else { "baseline" },
+        name,
+        x,
+        z,
+        vx,
+        vz
+    )
+}
+
+fn apply_perfect_regress_harness(world: &mut MatchWorld, case_idx: usize) {
+    let (_, x, z, vx, vz) = PERFECT_PREDICTION_CASES[case_idx];
+    setup_perfect_prediction_harness(world, x, z, vx, vz);
+}
+
+fn perfect_regress_case_index(name: &str) -> Option<usize> {
+    PERFECT_PREDICTION_CASES
+        .iter()
+        .position(|(label, ..)| *label == name)
 }
 
 fn print_viewer_help() {
@@ -129,10 +187,12 @@ OPTIONS:
   --seed <u64>          Opening from seed: even=home, odd=away
   --fast, -f            Zero idle (same as scrubber all the way right)
   --speed <0..1>        Scrubber: 0=1 tick/s … 1=no idle (default ≈ realtime)
+  --perfect-regress     Visible PerfectController prediction parity harness
+  --regress-case NAME   center_roll | diag_45 | wall_approach | low_speed
   -h, --help            Show this help
 
 BRAINS:
-  chase | idle | test1 | test2 | perfect (kb|keyboard) | aia | aia3 | titanium | graph:<path>
+  chase | idle | test1 | test2 | perfect (kb|keyboard) | kick | aia | aia3 | titanium | graph:<path>
 
   Default Full: AIA3.txt (else AIA.txt) from AIComp Saves; if missing, random chase/idle.
   GK duel: attacker = AIA default, GK side = Titanium.txt (override with --home/--away).
@@ -151,6 +211,12 @@ HOTKEYS:
   Space  pause / resume
   F      toggle Fast (zero idle)
   R      restart match (same opening / re-arms 1v1 harness)
+
+PERFECT REGRESS (--perfect-regress):
+  Purple path + disc = graph prediction; white ball = sim rollout.
+  1-4    switch parity case
+  B/C    baseline / compact graph
+  Debug checkbox (top-right) toggles overlay lines if missing.
 "
     );
 }
@@ -167,6 +233,7 @@ fn parse_viewer_args() -> ViewerArgs {
     let mut scenario = MatchScenario::Full;
     let mut titanium_1v1_attack_home = true;
     let mut titanium_1v1_z_bias = 1.0f32;
+    let mut perfect_regress = PerfectPredictionRegress::default();
     let mut i = 0usize;
     while i < argv.len() {
         match argv[i].as_str() {
@@ -212,6 +279,23 @@ fn parse_viewer_args() -> ViewerArgs {
                         std::process::exit(1);
                     }),
                 };
+            }
+            "--perfect-regress" => {
+                perfect_regress.enabled = true;
+            }
+            "--regress-case" => {
+                i += 1;
+                let v = argv.get(i).map(|s| s.as_str()).unwrap_or_else(|| {
+                    eprintln!(
+                        "error: --regress-case needs center_roll|diag_45|wall_approach|low_speed"
+                    );
+                    std::process::exit(1);
+                });
+                perfect_regress.enabled = true;
+                perfect_regress.case_idx = perfect_regress_case_index(v).unwrap_or_else(|| {
+                    eprintln!("error: unknown --regress-case {v}");
+                    std::process::exit(1);
+                });
             }
             "--speed" | "--timescale" => {
                 i += 1;
@@ -330,6 +414,10 @@ fn parse_viewer_args() -> ViewerArgs {
             home = BrainInput::Titanium;
         }
     }
+    if perfect_regress.enabled {
+        home = BrainInput::Graph(perfect_parity_graph(perfect_regress.compact));
+        away = BrainInput::Idle;
+    }
     ViewerArgs {
         fast,
         speed_t,
@@ -339,6 +427,7 @@ fn parse_viewer_args() -> ViewerArgs {
         scenario,
         titanium_1v1_attack_home,
         titanium_1v1_z_bias,
+        perfect_regress,
     }
 }
 
@@ -403,7 +492,9 @@ fn main() {
             DefaultPlugins
                 .set(WindowPlugin {
                     primary_window: Some(Window {
-                        title: if args.scenario.is_scenario1() {
+                        title: if args.perfect_regress.enabled {
+                            "AIComp Soccer Sim — Perfect Prediction Regress".into()
+                        } else if args.scenario.is_scenario1() {
                             "AIComp Soccer Sim — S1 Atk vs GK".into()
                         } else if args.scenario.is_scenario_4v1() {
                             "AIComp Soccer Sim — GK vs 4v1".into()
@@ -443,6 +534,10 @@ fn main() {
                 );
             } else if args.scenario.is_scenario_4v1() {
                 setup_4v1_harness(&mut world, !args.titanium_1v1_attack_home);
+            } else if matches!(args.home, BrainInput::Kick) {
+                setup_kick_routine_harness(&mut world);
+            } else if args.perfect_regress.enabled {
+                apply_perfect_regress_harness(&mut world, args.perfect_regress.case_idx);
             }
             ViewerWorld {
                 world,
@@ -455,7 +550,9 @@ fn main() {
         .insert_resource(TeamScripts {
             home_path,
             away_path,
-            status: if args.scenario.is_scenario1() || args.scenario.is_scenario_4v1() {
+            status: if args.perfect_regress.enabled {
+                perfect_regress_status(args.perfect_regress)
+            } else if args.scenario.is_scenario1() || args.scenario.is_scenario_4v1() {
                 format!(
                     "{} — pure game; GK capture = GK goal",
                     args.scenario.label()
@@ -463,6 +560,7 @@ fn main() {
             } else {
                 format!("cli home={} away={}", args.home.label(), args.away.label())
             },
+            perfect_regress: args.perfect_regress,
         })
         .insert_resource(DebugSelection::default())
         .insert_resource(SimPaused(false))
@@ -527,6 +625,7 @@ enum ActiveBrain {
     Test1(Test1Brain),
     Test2(Test2Brain),
     Perfect(PerfectControllerBrain),
+    Kick(KickRoutineBrain),
     #[cfg(feature = "nn_train")]
     Trained(TrainedBrain),
 }
@@ -541,6 +640,7 @@ impl ActiveBrain {
             ActiveBrain::Test1(_) => "test1",
             ActiveBrain::Test2(_) => "test2",
             ActiveBrain::Perfect(_) => "perfect",
+            ActiveBrain::Kick(_) => "kick",
             #[cfg(feature = "nn_train")]
             ActiveBrain::Trained(_) => "trained",
         }
@@ -549,6 +649,9 @@ impl ActiveBrain {
     fn reset_state(&mut self) {
         if let ActiveBrain::Runtime(brain) = self {
             brain.reset_state();
+        }
+        if let ActiveBrain::Kick(brain) = self {
+            *brain = KickRoutineBrain::default();
         }
     }
 }
@@ -568,6 +671,7 @@ impl TeamBrain for ActiveBrain {
             ActiveBrain::Test1(b) => b.think(api),
             ActiveBrain::Test2(b) => b.think(api),
             ActiveBrain::Perfect(b) => b.think(api),
+            ActiveBrain::Kick(b) => b.think(api),
             #[cfg(feature = "nn_train")]
             ActiveBrain::Trained(b) => b.think(api),
         }
@@ -590,6 +694,10 @@ fn resolve_brain(input: &BrainInput) -> (ActiveBrain, PathBuf) {
         BrainInput::Perfect => (
             ActiveBrain::Perfect(PerfectControllerBrain),
             PathBuf::from("perfect"),
+        ),
+        BrainInput::Kick => (
+            ActiveBrain::Kick(KickRoutineBrain::default()),
+            PathBuf::from("kick"),
         ),
         BrainInput::Aia => {
             let path = aicomp_soccer_sim::batch::soccer_aia_graph_path();
@@ -649,6 +757,7 @@ struct TeamScripts {
     home_path: PathBuf,
     away_path: PathBuf,
     status: String,
+    perfect_regress: PerfectPredictionRegress,
 }
 
 #[derive(Resource, Default)]
@@ -1770,6 +1879,7 @@ fn step_locked_tick(
     clock: &mut TickClock,
     interp: &mut InterpState,
     one_v_one: Titanium1v1Mode,
+    scripts: &TeamScripts,
 ) -> f32 {
     let tick0 = std::time::Instant::now();
     aicomp_soccer_sim::debug_draw::begin_frame();
@@ -1800,6 +1910,10 @@ fn step_locked_tick(
         repark_1v1_inactive(world, one_v_one.attack_home);
     } else if one_v_one.scenario.is_scenario_4v1() {
         repark_4v1_inactive(world, !one_v_one.attack_home);
+    } else if scripts.home_path.as_os_str() == "kick" {
+        repark_kick_routine_inactive(world);
+    } else if scripts.perfect_regress.enabled {
+        repark_perfect_prediction_inactive(world);
     }
     clock.physics_ms = phys0.elapsed().as_secs_f32() * 1000.0;
     interp.push_tick(world);
@@ -1827,6 +1941,7 @@ fn sim_tick_barrier(
     mut clock: ResMut<TickClock>,
     mut interp: ResMut<InterpState>,
     one_v_one: Res<Titanium1v1Mode>,
+    scripts: Res<TeamScripts>,
     mut round: ResMut<Scenario1Round>,
 ) {
     if !interp.primed {
@@ -1854,7 +1969,13 @@ fn sim_tick_barrier(
     if idle_budget <= 0.0 {
         let mut last_ms = 0.0f32;
         for _ in 0..MAX_TICKS_PER_FRAME_FAST {
-            last_ms = step_locked_tick(&mut viewer, &mut clock, &mut interp, *one_v_one);
+            last_ms = step_locked_tick(
+                &mut viewer,
+                &mut clock,
+                &mut interp,
+                *one_v_one,
+                &scripts,
+            );
             clock.ticks_this_frame += 1;
             apply_scenario1_scoring(&mut viewer.world, *one_v_one, &mut round);
         }
@@ -1873,7 +1994,13 @@ fn sim_tick_barrier(
     let mut ticks = 0u32;
     while clock.accumulator >= idle_budget && ticks < MAX_TICKS_PER_FRAME_PACED {
         clock.accumulator -= idle_budget;
-        last_ms = step_locked_tick(&mut viewer, &mut clock, &mut interp, *one_v_one);
+        last_ms = step_locked_tick(
+            &mut viewer,
+            &mut clock,
+            &mut interp,
+            *one_v_one,
+            &scripts,
+        );
         ticks += 1;
         apply_scenario1_scoring(&mut viewer.world, *one_v_one, &mut round);
     }
@@ -1959,8 +2086,52 @@ fn handle_hotkeys(
     mut clock: ResMut<TickClock>,
     opening: Res<ViewerOpening>,
     one_v_one: Res<Titanium1v1Mode>,
+    mut scripts: ResMut<TeamScripts>,
     mut round: ResMut<Scenario1Round>,
 ) {
+    let perfect = scripts.perfect_regress;
+    if perfect.enabled {
+        for (idx, key) in [
+            KeyCode::Digit1,
+            KeyCode::Digit2,
+            KeyCode::Digit3,
+            KeyCode::Digit4,
+        ]
+        .iter()
+        .enumerate()
+        {
+            if keys.just_pressed(*key) {
+                scripts.perfect_regress.case_idx = idx;
+                apply_perfect_regress_harness(&mut viewer.world, idx);
+                viewer.debug_draw = Default::default();
+                interp.reset_from(&viewer.world);
+                scripts.status = perfect_regress_status(scripts.perfect_regress);
+                info!(case = PERFECT_PREDICTION_CASES[idx].0, "perfect regress case");
+            }
+        }
+        if keys.just_pressed(KeyCode::KeyB) {
+            scripts.perfect_regress.compact = false;
+            let path = perfect_parity_graph(false);
+            viewer.brains.replace_home(load_graph_brain(&path));
+            scripts.home_path = path;
+            apply_perfect_regress_harness(&mut viewer.world, scripts.perfect_regress.case_idx);
+            viewer.debug_draw = Default::default();
+            interp.reset_from(&viewer.world);
+            scripts.status = perfect_regress_status(scripts.perfect_regress);
+            info!("perfect regress: baseline graph");
+        }
+        if keys.just_pressed(KeyCode::KeyC) {
+            scripts.perfect_regress.compact = true;
+            let path = perfect_parity_graph(true);
+            viewer.brains.replace_home(load_graph_brain(&path));
+            scripts.home_path = path;
+            apply_perfect_regress_harness(&mut viewer.world, scripts.perfect_regress.case_idx);
+            viewer.debug_draw = Default::default();
+            interp.reset_from(&viewer.world);
+            scripts.status = perfect_regress_status(scripts.perfect_regress);
+            info!("perfect regress: compact graph");
+        }
+    }
     if keys.just_pressed(KeyCode::KeyR) {
         restart_match(
             &mut viewer,
@@ -1968,6 +2139,7 @@ fn handle_hotkeys(
             &mut clock,
             opening.0,
             *one_v_one,
+            &scripts,
             &mut round,
         );
         selection.selected = None;
@@ -2082,6 +2254,7 @@ fn restart_match(
     clock: &mut TickClock,
     opening: TeamId,
     one_v_one: Titanium1v1Mode,
+    scripts: &TeamScripts,
     round: &mut Scenario1Round,
 ) {
     let mut params = viewer.world.params.clone();
@@ -2093,6 +2266,12 @@ fn restart_match(
     } else if one_v_one.scenario.is_scenario_4v1() {
         setup_4v1_harness(&mut viewer.world, !one_v_one.attack_home);
         *round = Scenario1Round::arm(&viewer.world);
+    } else if scripts.home_path.as_os_str() == "kick" {
+        setup_kick_routine_harness(&mut viewer.world);
+        *round = Scenario1Round::default();
+    } else if scripts.perfect_regress.enabled {
+        apply_perfect_regress_harness(&mut viewer.world, scripts.perfect_regress.case_idx);
+        *round = Scenario1Round::default();
     } else {
         *round = Scenario1Round::default();
     }
@@ -2219,6 +2398,7 @@ fn handle_ui_buttons(
                             &mut clock,
                             opening.0,
                             mode,
+                            &scripts,
                             &mut round,
                         );
                         paused.0 = false;
@@ -2242,6 +2422,7 @@ fn handle_ui_buttons(
                             &mut clock,
                             opening.0,
                             *one_v_one,
+                            &scripts,
                             &mut round,
                         );
                         paused.0 = false;

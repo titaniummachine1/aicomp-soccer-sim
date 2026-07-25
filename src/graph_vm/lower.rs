@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use bevy::prelude::Vec2;
+use bevy::prelude::{Vec2, Vec3};
+
+use crate::graph::pitch_vec::vec3_from_pitch;
 
 use crate::graph::load::{GraphNode, TeamGraph};
 use crate::graph_vm::context::VariableId;
@@ -300,6 +302,24 @@ impl Lowerer {
                     source_port: "DebugDrawLine".to_string(),
                 });
             }
+            "TimePlot" => {
+                // Channel name is a String constant; intern it so the id fits
+                // an immediate and `RuntimeProgram::var_names` gives it back.
+                let name = self.resolve_string_modifier(node_sid, "String1");
+                let id = self.vars.intern(&name).0 as u32;
+                let v = self
+                    .lower_input(node_sid, "Float1")
+                    .unwrap_or_else(|| self.emit_const_float(node_sid, "Float1", 0.0));
+                self.ir.push(IrInst {
+                    dest: None,
+                    kind: RegisterKind::Null,
+                    op: OpCode::TimePlot,
+                    args: vec![v],
+                    immediates: vec![id],
+                    source_sid: node_sid.to_string(),
+                    source_port: "TimePlot".to_string(),
+                });
+            }
             "DebugDrawDisc" => {
                 let center = self
                     .lower_input(node_sid, "Vector31")
@@ -321,6 +341,38 @@ impl Lowerer {
                 });
             }
             _ => {}
+        }
+    }
+
+    /// Walk Relay / CreateFunction params back to a String constant, the way
+    /// `resolve_color_rgba` does for Color. Used for the TimePlot channel name.
+    fn resolve_string_modifier(&self, node_sid: &str, port_name: &str) -> String {
+        let Some(in_sid) = self.graph.input_port_sid(node_sid, port_name) else {
+            return String::new();
+        };
+        self.resolve_string_from_port(&in_sid, 0)
+    }
+
+    fn resolve_string_from_port(&self, port_sid: &str, depth: u32) -> String {
+        if depth > 12 {
+            return String::new();
+        }
+        if let Some(src_out) = self.graph.input_source.get(port_sid) {
+            return self.resolve_string_from_port(src_out, depth + 1);
+        }
+        let Some(pref) = self.graph.ports.get(port_sid) else {
+            return String::new();
+        };
+        let Some(node) = self.graph.nodes.get(&pref.node_sid) else {
+            return String::new();
+        };
+        match node.id.as_str() {
+            "String" => node.modifier.clone(),
+            "Relay" => match self.graph.input_port_sid(&node.sid, "Any1") {
+                Some(in_sid) => self.resolve_string_from_port(&in_sid, depth + 1),
+                None => String::new(),
+            },
+            _ => String::new(),
         }
     }
 
@@ -527,7 +579,7 @@ impl Lowerer {
                 let x = self
                     .lower_input(node_sid, "Float1")
                     .unwrap_or_else(|| self.emit_const_float(node_sid, "Float1", 0.0));
-                let _y = self
+                let y = self
                     .lower_input(node_sid, "Float2")
                     .unwrap_or_else(|| self.emit_const_float(node_sid, "Float2", 0.0));
                 let z = self
@@ -538,7 +590,7 @@ impl Lowerer {
                     dest: Some(dst),
                     kind: RegisterKind::Vector,
                     op: OpCode::ConstructVec,
-                    args: vec![x, z],
+                    args: vec![x, y, z],
                     immediates: vec![],
                     source_sid: node_sid.to_string(),
                     source_port: port_name.to_string(),
@@ -822,9 +874,9 @@ impl Lowerer {
     }
 
     fn lower_function_call(&mut self, fn_node: &GraphNode) -> Reg {
-        // Unity AIComp: custom functions cannot nest (Discord AIA bot). Nested
-        // Function calls lower to Null — pass values as parameters instead.
-        if !self.call_stack.is_empty() {
+        // Unity AIComp v0.63+ allows nested custom Function calls. Soft-cap
+        // depth so runaway recursion cannot blow the stack / IR size.
+        if self.call_stack.len() > 64 {
             return self.emit_const_null(&fn_node.sid, "Any1");
         }
         let Some(def) = self.graph.create_functions.get(&fn_node.modifier).cloned() else {
@@ -992,13 +1044,17 @@ impl Lowerer {
     }
 
     fn emit_const_vec2(&mut self, node_sid: &str, port_name: &str, v: Vec2) -> Reg {
+        self.emit_const_vec3(node_sid, port_name, vec3_from_pitch(v))
+    }
+
+    fn emit_const_vec3(&mut self, node_sid: &str, port_name: &str, v: Vec3) -> Reg {
         let dst = self.fresh_reg(RegisterKind::Vector);
         self.ir.push(IrInst {
             dest: Some(dst),
             kind: RegisterKind::Vector,
             op: OpCode::ConstVec,
             args: vec![],
-            immediates: vec![v.x.to_bits(), v.y.to_bits()],
+            immediates: vec![v.x.to_bits(), v.y.to_bits(), v.z.to_bits()],
             source_sid: node_sid.to_string(),
             source_port: port_name.to_string(),
         });

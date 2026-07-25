@@ -17,7 +17,7 @@ pub struct IrInst {
     pub source_port: String,
 }
 
-pub const LOWERED_IR_VERSION: u32 = 1;
+pub const LOWERED_IR_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Default)]
 pub struct LoweredIR {

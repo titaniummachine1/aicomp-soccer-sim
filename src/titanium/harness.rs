@@ -167,6 +167,121 @@ fn safe_dir(v: Vec2) -> Vec2 {
     }
 }
 
+/// Kick-routine drill: Home P1 at center with ball in Play; Away parked idle.
+/// Skips kickoff walk-in so the scripted kick sequence starts immediately.
+pub fn setup_kick_routine_harness(world: &mut MatchWorld) {
+    let params = world.params.clone();
+    let hold = Vec2::new(params.hold_offset, 0.0);
+
+    world.match_state.phase = MatchPhase::Play;
+    world.match_state.phase_timer = 0.0;
+    world.match_state.kickoff_circle_lock = false;
+    world.match_state.kickoff_suppress_away_team_side = false;
+    world.match_state.clock_s = 0.0;
+
+    for p in &mut world.players {
+        p.shot_charge = 0.0;
+        p.charge_warmup_left = 0.0;
+        p.stamina = 1.0;
+        if p.team == TeamId::Home && p.id == PlayerId(1) {
+            p.pos = Vec2::ZERO;
+            p.vel = Vec2::ZERO;
+            p.facing = Vec2::X;
+        } else if p.team == TeamId::Away {
+            p.pos = park_off_pitch(p.team, p.id.0, &params);
+            p.vel = Vec2::ZERO;
+            p.facing = Vec2::NEG_X;
+        } else {
+            p.pos = park_off_pitch(p.team, p.id.0, &params);
+            p.vel = Vec2::ZERO;
+            p.facing = Vec2::X;
+        }
+    }
+
+    world.ball.pos = hold;
+    world.ball.vel = Vec2::ZERO;
+    world.ball.vel_y = 0.0;
+    world.ball.height = params.ball_rest_height;
+    world.ball.held = true;
+    world.possession.carrier = Some((TeamId::Home, 1));
+    world.possession.pickup_lockout = 0.0;
+    world.possession.kick_exclude_shooter = None;
+    world.possession.kick_exclude_left = 0.0;
+    world.possession.first_kick_done = true;
+    world.possession.kickoff_touch_done = true;
+    world.possession.opening_dump_hang = false;
+    world.possession.opening_hot_reclaim = false;
+    world.match_state.reset_stale_tracker(world.ball.pos);
+}
+
+/// Re-park Away + Home extras after physics in kick-routine drill.
+pub fn repark_kick_routine_inactive(world: &mut MatchWorld) {
+    let params = world.params.clone();
+    for p in &mut world.players {
+        if p.team == TeamId::Home && p.id == PlayerId(1) {
+            continue;
+        }
+        p.pos = park_off_pitch(p.team, p.id.0, &params);
+        p.vel = Vec2::ZERO;
+    }
+}
+
+/// Same four cases as `scripts/perfect_prediction_regress.py`.
+pub const PERFECT_PREDICTION_CASES: [(&str, f32, f32, f32, f32); 4] = [
+    ("center_roll", 0.0, 0.0, 12.0, 0.0),
+    ("diag_45", 0.0, 0.0, 21.0, 21.0),
+    ("wall_approach", 35.0, 0.0, -8.0, 0.0),
+    ("low_speed", 10.0, 5.0, 2.0, -1.0),
+];
+
+/// Free-ball prediction probe: Play phase, everyone parked, ball at `(x,z)` with `(vx,vz)`.
+pub fn setup_perfect_prediction_harness(world: &mut MatchWorld, x: f32, z: f32, vx: f32, vz: f32) {
+    let params = world.params.clone();
+
+    world.match_state.phase = MatchPhase::Play;
+    world.match_state.phase_timer = 0.0;
+    world.match_state.kickoff_circle_lock = false;
+    world.match_state.kickoff_suppress_away_team_side = false;
+    world.match_state.clock_s = 0.0;
+
+    for p in &mut world.players {
+        p.shot_charge = 0.0;
+        p.charge_warmup_left = 0.0;
+        p.stamina = 1.0;
+        p.pos = park_off_pitch(p.team, p.id.0, &params);
+        p.vel = Vec2::ZERO;
+        p.facing = if p.team == TeamId::Home {
+            Vec2::X
+        } else {
+            Vec2::NEG_X
+        };
+    }
+
+    world.ball.pos = Vec2::new(x, z);
+    world.ball.vel = Vec2::new(vx, vz);
+    world.ball.vel_y = 0.0;
+    world.ball.height = params.ball_rest_height;
+    world.ball.held = false;
+    world.possession.carrier = None;
+    world.possession.pickup_lockout = 0.0;
+    world.possession.kick_exclude_shooter = None;
+    world.possession.kick_exclude_left = 0.0;
+    world.possession.first_kick_done = true;
+    world.possession.kickoff_touch_done = true;
+    world.possession.opening_dump_hang = false;
+    world.possession.opening_hot_reclaim = false;
+    world.match_state.reset_stale_tracker(world.ball.pos);
+}
+
+/// Keep players off the pitch during prediction probes (ball rolls freely).
+pub fn repark_perfect_prediction_inactive(world: &mut MatchWorld) {
+    let params = world.params.clone();
+    for p in &mut world.players {
+        p.pos = park_off_pitch(p.team, p.id.0, &params);
+        p.vel = Vec2::ZERO;
+    }
+}
+
 /// Scripted attacker pair for Scenario 2 (2v1 passing drill): P1 starts with
 /// the ball and charges to full power. P2 runs continuously from its start
 /// spot toward the opposite flank (a real "making a run" pattern, not a

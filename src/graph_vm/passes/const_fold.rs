@@ -3,7 +3,7 @@
 //! Mirrors interpreter evaluation (including Select/Operation immediates and
 //! reg_f/reg_b/reg_v coercion). Does not DCE dead Const* producers.
 
-use bevy::prelude::Vec2;
+use bevy::prelude::Vec3;
 
 use crate::graph_vm::ir::{IrInst, LoweredIR, Reg};
 use crate::graph_vm::opcode::{OpCode, OpEffect};
@@ -75,7 +75,8 @@ fn const_value_of(inst: &IrInst) -> Option<VmValue> {
         OpCode::ConstVec => {
             let x = f32::from_bits(*inst.immediates.first()?);
             let y = f32::from_bits(*inst.immediates.get(1)?);
-            Some(VmValue::Vector(Vec2::new(x, y)))
+            let z = f32::from_bits(*inst.immediates.get(2)?);
+            Some(VmValue::Vector(Vec3::new(x, y, z)))
         }
         _ => None,
     }
@@ -111,7 +112,7 @@ fn make_const(
             kind: RegisterKind::Vector,
             op: OpCode::ConstVec,
             args: vec![],
-            immediates: vec![v.x.to_bits(), v.y.to_bits()],
+            immediates: vec![v.x.to_bits(), v.y.to_bits(), v.z.to_bits()],
             source_sid,
             source_port,
         },
@@ -195,16 +196,18 @@ fn try_fold(inst: &IrInst, known: &[Option<VmValue>]) -> Option<VmValue> {
             Some(VmValue::Bool(r))
         }
         OpCode::Ne if args.len() >= 2 => Some(VmValue::Bool(args[0] != args[1])),
-        OpCode::ConstructVec if args.len() >= 2 => {
-            Some(VmValue::Vector(Vec2::new(as_f(args[0]), as_f(args[1]))))
-        }
+        OpCode::ConstructVec if args.len() >= 3 => Some(VmValue::Vector(Vec3::new(
+            as_f(args[0]),
+            as_f(args[1]),
+            as_f(args[2]),
+        ))),
         OpCode::SplitVec if args.len() >= 1 => {
             let v = as_v(args[0]);
             let axis = inst.immediates.first().copied().unwrap_or(0);
             let f = match axis {
                 0 => v.x,
-                1 => 0.0,
-                _ => v.y,
+                1 => v.y,
+                _ => v.z,
             };
             Some(VmValue::Float(f))
         }
@@ -227,7 +230,7 @@ fn try_fold(inst: &IrInst, known: &[Option<VmValue>]) -> Option<VmValue> {
             Some(VmValue::Vector(if len > 1e-8 {
                 v / len
             } else {
-                Vec2::ZERO
+                Vec3::ZERO
             }))
         }
         OpCode::Magnitude if args.len() >= 1 => Some(VmValue::Float(as_v(args[0]).length())),
@@ -271,10 +274,10 @@ fn as_b(v: VmValue) -> bool {
     }
 }
 
-fn as_v(v: VmValue) -> Vec2 {
+fn as_v(v: VmValue) -> Vec3 {
     match v {
         VmValue::Vector(v) => v,
-        _ => Vec2::ZERO,
+        _ => Vec3::ZERO,
     }
 }
 
@@ -299,7 +302,7 @@ fn coerce_select(chosen: VmValue, mode: u32) -> VmValue {
         }),
         2 => VmValue::Vector(match chosen {
             VmValue::Vector(v) => v,
-            _ => Vec2::ZERO,
+            _ => Vec3::ZERO,
         }),
         _ => chosen,
     }
