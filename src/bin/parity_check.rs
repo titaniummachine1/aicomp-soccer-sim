@@ -144,14 +144,52 @@ fn run() -> ExitCode {
             // Both candidates see the SAME world state this tick.
             aicomp_soccer_sim::debug_draw::begin_frame();
             let out_a = a.think(&home_api);
+            let frame_a = aicomp_soccer_sim::debug_draw::snapshot();
             aicomp_soccer_sim::debug_draw::begin_frame();
             let out_b = b.think(&home_api);
+            let frame_b = aicomp_soccer_sim::debug_draw::snapshot();
             aicomp_soccer_sim::debug_draw::begin_frame();
             let out_away = opp.think(&away_api);
 
             if diverged_at.is_none() {
                 if let Some((slot, what)) = diff(&out_a, &out_b) {
                     diverged_at = Some((t, slot, what));
+                }
+            }
+            // Also diff the DRAWS and PLOTS. An optimiser that eats a brain's
+            // instrumentation while leaving play intact still passed the old
+            // check -- CSE silently destroyed every TimePlot and this reported
+            // "equivalent". Losing observability is a real regression.
+            if diverged_at.is_none() {
+                if frame_a.lines.len() != frame_b.lines.len()
+                    || frame_a.discs.len() != frame_b.discs.len()
+                    || frame_a.plots.len() != frame_b.plots.len()
+                {
+                    diverged_at = Some((
+                        t,
+                        0,
+                        format!(
+                            "debug output differs: lines {}/{} discs {}/{} plots {}/{}",
+                            frame_a.lines.len(),
+                            frame_b.lines.len(),
+                            frame_a.discs.len(),
+                            frame_b.discs.len(),
+                            frame_a.plots.len(),
+                            frame_b.plots.len()
+                        ),
+                    ));
+                } else if let Some((n, (pa, pb))) = frame_a
+                    .plots
+                    .iter()
+                    .zip(frame_b.plots.iter())
+                    .enumerate()
+                    .find(|(_, (x, y))| x.0 != y.0 || (x.1 - y.1).abs() > 1e-4)
+                {
+                    diverged_at = Some((
+                        t,
+                        0,
+                        format!("plot #{n} '{}'={} vs '{}'={}", pa.0, pa.1, pb.0, pb.1),
+                    ));
                 }
             }
             // A drives the world, so the trajectory stays well-defined even
