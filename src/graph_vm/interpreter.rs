@@ -325,6 +325,15 @@ fn exec_inst(inst: &Instruction, ctx: &mut ExecutionContext, names: &[String]) {
                 }
             }
         }
+        OpCode::EmitFaceoff => {
+            if !ops.is_empty() {
+                let slot = ops.get(1).copied().unwrap_or(0) as usize;
+                if slot < 4 {
+                    ctx.output.kickoff_positions[slot] =
+                        Some(pitch_plane(reg_v(ctx, ops[0] as usize)));
+                }
+            }
+        }
         OpCode::DebugDrawLine => {
             if ops.len() >= 7 {
                 let a = pitch_plane(reg_v(ctx, ops[0] as usize));

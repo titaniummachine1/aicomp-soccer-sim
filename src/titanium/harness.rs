@@ -533,7 +533,14 @@ pub fn setup_4v1_harness(world: &mut MatchWorld, gk_home: bool) {
     // actual bug: it skipped the real walk-in/first-touch sequence the sim
     // (and AIA's own graph) expects, which is what caused the opponent to
     // score almost instantly and identically every single trial.
-    place_kickoff(&mut world.ball, &mut world.players, opp_team, params.ball_rest_height);
+    let formations = world.kickoff_formations;
+    place_kickoff(
+        &mut world.ball,
+        &mut world.players,
+        opp_team,
+        &params,
+        &formations,
+    );
     reset_possession_for_kickoff(&mut world.possession);
     world.possession.carrier = if world.ball.held {
         Some((opp_team, 1))

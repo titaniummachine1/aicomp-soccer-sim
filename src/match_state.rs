@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use crate::ball::Ball;
 use crate::brain::TeamId;
 use crate::params::SimParams;
-use crate::player::{faceoff_world, kickoff_facing, Player};
+use crate::player::{kickoff_facing, kickoff_spawn, Player};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MatchPhase {
@@ -179,25 +179,59 @@ fn random_opening_kickoff() -> TeamId {
 /// reset. `place_kickoff` runs on every whistle *and* goal restart, so
 /// resetting stamina here (as an earlier revision of this comment claimed
 /// was correct) would incorrectly refill it on every goal.
+///
+/// Placement itself is `kickoff_spawn`: graph-declared spot, clamped to the
+/// team's own half, and pushed out of the center circle for whoever is NOT
+/// kicking off.
 pub fn place_kickoff(
     ball: &mut Ball,
     players: &mut [Player],
     kickoff_team: TeamId,
-    rest_height: f32,
+    params: &SimParams,
+    formations: &KickoffFormations,
 ) {
     ball.pos = Vec2::ZERO;
     ball.vel = Vec2::ZERO;
-    ball.height = rest_height;
+    ball.height = params.ball_rest_height;
     ball.vel_y = 0.0;
     // Free ball — kicking striker walks in via graph MoveTo(0,0) then picks up.
     // Auto-hold on (0,0) skipped the Unity first-second path (DB33).
     ball.held = false;
     for p in players.iter_mut() {
-        p.pos = faceoff_world(p.team, p.id, kickoff_team);
+        let declared = formations.get(p.team)[p.id.0 as usize - 1];
+        p.pos = kickoff_spawn(p.team, p.id, kickoff_team, declared, params);
         p.vel = Vec2::ZERO;
         p.facing = kickoff_facing(p.team, p.id, kickoff_team);
         p.shot_charge = 0.0;
         p.charge_warmup_left = 0.0;
+    }
+}
+
+/// Faceoff spots a team's graph declared, indexed by player slot (team space).
+/// `None` anywhere means "use the engine default for that player".
+pub type KickoffFormation = [Option<Vec2>; 4];
+
+/// Both sides' declared faceoff spots. Default is empty, which reproduces the
+/// engine-default formation for every player.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct KickoffFormations {
+    pub home: KickoffFormation,
+    pub away: KickoffFormation,
+}
+
+impl KickoffFormations {
+    pub fn get(&self, team: TeamId) -> &KickoffFormation {
+        match team {
+            TeamId::Home => &self.home,
+            TeamId::Away => &self.away,
+        }
+    }
+
+    pub fn set(&mut self, team: TeamId, formation: KickoffFormation) {
+        match team {
+            TeamId::Home => self.home = formation,
+            TeamId::Away => self.away = formation,
+        }
     }
 }
 

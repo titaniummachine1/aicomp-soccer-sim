@@ -40,12 +40,21 @@ impl Default for BrainCommand {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BrainOutput {
     pub commands: [BrainCommand; 4],
+    /// Faceoff spots this tick's evaluation produced for
+    /// `ConstructSoccerProperties`, in team space (+X = attacking).
+    ///
+    /// Real graphs do not hand these in as constants — AIA computes them from
+    /// `TeamMultiplier` and a "is it our kickoff" conditional, so they are
+    /// only knowable by running the graph. `None` means the port is unwired
+    /// and the engine default stands.
+    pub kickoff_positions: [Option<Vec2>; 4],
 }
 
 impl Default for BrainOutput {
     fn default() -> Self {
         Self {
             commands: [BrainCommand::default(); 4],
+            kickoff_positions: [None; 4],
         }
     }
 }
@@ -59,11 +68,23 @@ impl BrainOutput {
 
 pub trait TeamBrain: Send + Sync {
     fn think(&mut self, api: &TeamApi) -> BrainOutput;
+
+    /// Faceoff spots this brain's graph declares via
+    /// `ConstructSoccerProperties`, in team space (+X = attacking). Slots left
+    /// `None` fall back to the engine default. Hand-written brains have no
+    /// graph to declare them, so the default is "no opinion".
+    fn kickoff_formation(&self) -> [Option<bevy::prelude::Vec2>; 4] {
+        [None; 4]
+    }
 }
 
 impl TeamBrain for Box<dyn TeamBrain> {
     fn think(&mut self, api: &TeamApi) -> BrainOutput {
         (**self).think(api)
+    }
+
+    fn kickoff_formation(&self) -> [Option<bevy::prelude::Vec2>; 4] {
+        (**self).kickoff_formation()
     }
 }
 

@@ -522,6 +522,9 @@ fn main() {
         .insert_resource(Scenario1Round::default())
         .insert_resource({
             let mut world = MatchWorld::new_kickoff_opening(params, args.opening);
+            // Faceoff spots come off each graph's ConstructSoccerProperties.
+            world.set_kickoff_formation(TeamId::Home, home_brain.kickoff_formation());
+            world.set_kickoff_formation(TeamId::Away, away_brain.kickoff_formation());
             // Viewer: no post-goal freeze (looks like lag on stream/demo).
             // Strip cosmetic GoalPause wait for playable viewer. Kickoff-phase
             // events (free ball, faceoff walk-in, hold, first kick) still run.

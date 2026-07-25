@@ -16,7 +16,8 @@ use crate::api::{build_team_api, first_clear_dir, TeamApi, WorldSensors};
 use crate::ball::{goal_at, step_free_ball, Ball, EndReason};
 use crate::brain::{BrainCommand, BrainOutput, TeamBrain, TeamId};
 use crate::match_state::{
-    kickoff_control_allowed, place_kickoff, receiving_team_circle_locked, MatchPhase, MatchState,
+    kickoff_control_allowed, place_kickoff, receiving_team_circle_locked, KickoffFormation,
+    KickoffFormations, MatchPhase, MatchState,
 };
 use crate::params::SimParams;
 use crate::player::{faceoff_world, kickoff_facing, step_mover, Player, PlayerId, SimpleMover};
@@ -35,6 +36,10 @@ pub struct MatchWorld {
     pub ball: Ball,
     pub players: Vec<Player>,
     pub mover: SimpleMover,
+    /// Faceoff spots each side's graph declared. Empty by default, which
+    /// keeps the engine-default formation — set it from the brains before the
+    /// first tick (see [`MatchWorld::set_kickoff_formation`]).
+    pub kickoff_formations: KickoffFormations,
 }
 
 impl MatchWorld {
@@ -74,14 +79,32 @@ impl MatchWorld {
             ball: Ball::default(),
             players,
             mover,
+            kickoff_formations: KickoffFormations::default(),
         };
-        place_kickoff(
-            &mut world.ball,
-            &mut world.players,
-            world.match_state.kickoff_team,
-            world.params.ball_rest_height,
-        );
+        world.reset_to_kickoff();
         world
+    }
+
+    /// Adopt a side's graph-declared faceoff spots and re-place the pitch.
+    ///
+    /// Call this after building the brains and before the first tick — the
+    /// world is constructed at a kickoff, so the opening formation is already
+    /// laid out by then and has to be redone once the spots are known.
+    pub fn set_kickoff_formation(&mut self, team: TeamId, formation: KickoffFormation) {
+        self.kickoff_formations.set(team, formation);
+        if self.match_state.phase == MatchPhase::Kickoff {
+            self.reset_to_kickoff();
+        }
+    }
+
+    fn reset_to_kickoff(&mut self) {
+        place_kickoff(
+            &mut self.ball,
+            &mut self.players,
+            self.match_state.kickoff_team,
+            &self.params,
+            &self.kickoff_formations,
+        );
     }
 
     pub fn build_apis(&self) -> (TeamApi, TeamApi) {
@@ -98,17 +121,46 @@ impl MatchWorld {
         )
     }
 
+    /// Adopt the faceoff spots this tick's brain evaluation produced.
+    ///
+    /// Cheap and idempotent while the pitch is laid out for a kickoff, so the
+    /// match loop can just call it every tick: a graph that recomputes its
+    /// formation per kickoff (AIA switches on whose kickoff it is) then gets
+    /// the placement it asked for, without the world needing to own a brain.
+    /// Adopt the faceoff spots this tick's brain evaluation produced.
+    ///
+    /// Re-read at EVERY kickoff, not latched. Measured 2026-07-26 with a probe
+    /// declaring `(0,0) if we are kicking off else (25,0)`: the spawn followed
+    /// the branch both ways — (0,0) when that side took the kickoff, (25,0)
+    /// when it received. So the engine evaluates the properties node with the
+    /// kickoff flags already set, and a graph can legitimately field a
+    /// different shape for its own kickoff than for the opponent's.
+    pub fn observe_brain_outputs(&mut self, home: &BrainOutput, away: &BrainOutput) {
+        let mut changed = false;
+        for (team, out) in [(TeamId::Home, home), (TeamId::Away, away)] {
+            if *self.kickoff_formations.get(team) != out.kickoff_positions {
+                self.kickoff_formations.set(team, out.kickoff_positions);
+                changed = true;
+            }
+        }
+        // Re-place only while still on the opening tick of a kickoff. Later
+        // ticks must not: players are already walking in by then, and yanking
+        // them back onto their marks mid-run would show up as a teleport.
+        if changed
+            && self.match_state.phase == MatchPhase::Kickoff
+            && self.match_state.phase_timer <= 0.0
+        {
+            self.reset_to_kickoff();
+        }
+    }
+
     /// One fixed tick. `home` / `away` brains evaluated by caller (or inline).
     pub fn step_with_commands(&mut self, home: &BrainOutput, away: &BrainOutput, dt: f32) {
+        self.observe_brain_outputs(home, away);
         if self.match_state.phase == MatchPhase::GoalPause {
             self.match_state.phase_timer -= dt;
             if self.match_state.phase_timer <= 0.0 {
-                place_kickoff(
-                    &mut self.ball,
-                    &mut self.players,
-                    self.match_state.kickoff_team,
-                    self.params.ball_rest_height,
-                );
+                self.reset_to_kickoff();
                 reset_possession_for_kickoff(&mut self.possession);
                 self.possession.carrier = if self.ball.held {
                     Some((self.match_state.kickoff_team, 1))

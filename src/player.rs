@@ -233,6 +233,96 @@ pub fn faceoff_world(team: TeamId, slot: PlayerId, kickoff_team: TeamId) -> Vec2
     Vec2::new(base.x * tm, base.y * tm)
 }
 
+/// Clearance past the kickoff circle a receiving player is pushed to.
+/// Measured 7.75 against a 7.25 circle (Test1/Test2 probes, 2026-07-26).
+pub const KICKOFF_PUSH_CLEARANCE: f32 = 0.50;
+
+/// Faceoff space → world. **Identity for both sides — there is no mirroring.**
+///
+/// Measured, Test1/Test2 probes 2026-07-26. Home declared (0,20) spawns at
+/// (0,20) and (-30,0) at (-30,0); Away declared (25,0) spawns at (25,0),
+/// (0,-20) at (0,-20), (18,8) at (18,8). Both sides, unchanged, in world
+/// coordinates.
+///
+/// So a faceoff position is NOT written in the team's own frame: a graph that
+/// wants its keeper at the back has to know which end it is defending, and the
+/// same numbers played from the other side put that keeper in the opponent's
+/// half (where rule 2 below drags it onto the halfway line).
+pub fn team_space_to_world(_team: TeamId, v: Vec2) -> Vec2 {
+    v
+}
+
+/// Where a player actually stands when the whistle goes.
+///
+/// Three rules, in order:
+///
+/// 1. The graph picks the spot. `ConstructSoccerProperties` declares one per
+///    player; a slot the graph left unwired keeps the engine default. This is
+///    also what decides who takes the kickoff — there is no "kicker" field,
+///    whoever you place on the ball takes it, so it need not be player 1.
+/// 2. A team may only place inside its OWN half. Anything past the halfway
+///    line is pulled back to it, and everything is kept inside the pitch.
+/// 3. Only the team kicking off may stand in the center circle. The other
+///    side is pushed straight out to the edge — observed in-game: at a
+///    kickoff that is not theirs, players inside the circle get shoved out
+///    of it while the kicking team's stay put.
+pub fn kickoff_spawn(
+    team: TeamId,
+    slot: PlayerId,
+    kickoff_team: TeamId,
+    declared: Option<Vec2>,
+    params: &SimParams,
+) -> Vec2 {
+    let mut pos = match declared {
+        Some(v) => team_space_to_world(team, v),
+        None => faceoff_world(team, slot, kickoff_team),
+    };
+    pos = clamp_to_own_half(team, pos, params);
+    if team != kickoff_team {
+        pos = push_out_of_kickoff_circle(pos, team, params);
+    }
+    pos
+}
+
+/// Keep a spawn inside the pitch and on the team's own side of halfway.
+/// Home defends −X, Away defends +X.
+///
+/// Measured: an opponent-half spot is pulled to the halfway line EXACTLY —
+/// Home's (30,0) and Away's (-25,0) both spawn at (0,0) — and Z is left
+/// alone. No body-radius standoff, and no rejection back to a default.
+fn clamp_to_own_half(team: TeamId, pos: Vec2, params: &SimParams) -> Vec2 {
+    let r = params.body_radius;
+    let x_limit = (params.x_max - r).max(0.0);
+    let z_limit = (params.z_max - r).max(0.0);
+    let x = match team {
+        TeamId::Home => pos.x.clamp(-x_limit, 0.0),
+        TeamId::Away => pos.x.clamp(0.0, x_limit),
+    };
+    Vec2::new(x, pos.y.clamp(-z_limit, z_limit))
+}
+
+/// Shove a receiving player out of the kickoff circle.
+///
+/// Measured 2026-07-26: a receiving player on the centre spot lands at
+/// (0, 7.75) — radius `kickoff_circle_r + 0.50`, along +Z — for BOTH sides.
+/// The 0.5 is not the body radius (0.655), and 7.75 is also exactly where
+/// TimePlot DB33 put AIA's receiving striker, so two independent runs agree
+/// on the distance.
+///
+/// The direction is only half measured. Both probe cases started from the
+/// centre, where there is no radial direction to preserve, and both resolved
+/// to +Z — so the degenerate case is known. Whether an off-centre player is
+/// pushed radially (assumed here) or also snapped to +Z is NOT measured.
+fn push_out_of_kickoff_circle(pos: Vec2, _team: TeamId, params: &SimParams) -> Vec2 {
+    let edge = params.kickoff_circle_r + KICKOFF_PUSH_CLEARANCE;
+    let d = pos.length();
+    if d >= edge {
+        return pos;
+    }
+    let dir = if d > 1e-4 { pos / d } else { Vec2::Y };
+    dir * edge
+}
+
 pub fn default_facing(team: TeamId) -> Vec2 {
     match team {
         // Home attacks +X (Away goal), Away attacks −X (Home goal).
@@ -404,5 +494,111 @@ mod tests {
             "vel.x={} want {expected}",
             player.vel.x
         );
+    }
+
+    // Every expectation below is a measured value from the Test1/Test2
+    // kickoff probes run in the real game on 2026-07-26, not a derivation.
+
+    #[test]
+    fn declared_spots_are_world_absolute_for_both_sides() {
+        let params = SimParams::default();
+        // Home declared (0,20) spawned at (0,20); (-30,0) at (-30,0).
+        // Away declared (0,-20) spawned at (0,-20); (18,8) at (18,8).
+        let cases = [
+            (TeamId::Home, Vec2::new(0.0, 20.0)),
+            (TeamId::Home, Vec2::new(-30.0, 0.0)),
+            (TeamId::Away, Vec2::new(0.0, -20.0)),
+            (TeamId::Away, Vec2::new(18.0, 8.0)),
+            (TeamId::Away, Vec2::new(25.0, 0.0)),
+        ];
+        for (team, spot) in cases {
+            // Kicking off, so the circle push cannot be what keeps it in place.
+            let got = kickoff_spawn(team, PlayerId(1), team, Some(spot), &params);
+            assert!(
+                got.distance(spot) < 1e-4,
+                "{team:?} declared {spot} should spawn unchanged, got {got}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_opponent_half_spot_is_dragged_to_the_halfway_line() {
+        let params = SimParams::default();
+        // Home's (30,0) and Away's (-25,0) both spawned at exactly (0,0):
+        // X clamped to the halfway line, Z untouched, no body-radius standoff.
+        for (team, spot) in [
+            (TeamId::Home, Vec2::new(30.0, 0.0)),
+            (TeamId::Away, Vec2::new(-25.0, 0.0)),
+        ] {
+            let got = kickoff_spawn(team, PlayerId(1), team, Some(spot), &params);
+            assert!(
+                got.distance(Vec2::ZERO) < 1e-4,
+                "{team:?} illegal {spot} should land on (0,0), got {got}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_receiving_team_is_pushed_out_of_the_circle() {
+        let params = SimParams::default();
+        let edge = params.kickoff_circle_r + KICKOFF_PUSH_CLEARANCE;
+        let centre = Vec2::ZERO;
+        for team in [TeamId::Home, TeamId::Away] {
+            // Kicking off: allowed to stand on the centre spot.
+            let kicking = kickoff_spawn(team, PlayerId(1), team, Some(centre), &params);
+            assert!(
+                kicking.distance(centre) < 1e-4,
+                "{team:?} kicking off was pushed off the spot: {kicking}"
+            );
+            // Receiving: pushed to 7.75, and the degenerate direction is world
+            // +Z for BOTH sides — the fallback is not mirrored per team.
+            let receiving = kickoff_spawn(team, PlayerId(1), team.other(), Some(centre), &params);
+            assert!(
+                receiving.distance(Vec2::new(0.0, edge)) < 1e-3,
+                "{team:?} receiving should land on (0,{edge}), got {receiving}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_receiver_already_clear_of_the_circle_is_left_alone() {
+        let params = SimParams::default();
+        let spot = Vec2::new(0.0, 20.0);
+        let got = kickoff_spawn(TeamId::Home, PlayerId(3), TeamId::Away, Some(spot), &params);
+        assert!(got.distance(spot) < 1e-4, "moved a clear receiver: {got}");
+    }
+
+    #[test]
+    fn unwired_slot_keeps_the_engine_default() {
+        let params = SimParams::default();
+        for team in [TeamId::Home, TeamId::Away] {
+            for slot in PlayerId::ALL {
+                let got = kickoff_spawn(team, slot, TeamId::Home, None, &params);
+                let want = faceoff_world(team, slot, TeamId::Home);
+                // 1e-3, not tighter: the AIA striker default sits at radius
+                // 7.7503 against a 7.75 push edge, so the push does touch it —
+                // by 3e-4. That the measured default lands within a thousandth
+                // of the measured push edge is itself a cross-check.
+                assert!(
+                    got.distance(want) < 1e-3,
+                    "{team:?} {slot:?}: default moved {want} -> {got}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_spot_outside_the_pitch_is_pulled_inside() {
+        let params = SimParams::default();
+        let r = params.body_radius;
+        let p = kickoff_spawn(
+            TeamId::Home,
+            PlayerId(1),
+            TeamId::Home,
+            Some(Vec2::new(-999.0, 999.0)),
+            &params,
+        );
+        assert!(p.x >= -(params.x_max - r) - 1e-4, "off the back line: {p}");
+        assert!(p.y <= params.z_max - r + 1e-4, "off the touchline: {p}");
     }
 }

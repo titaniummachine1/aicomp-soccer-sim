@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+use bevy::prelude::Vec2;
 use serde::Deserialize;
 
 use super::dropdowns;
@@ -90,6 +91,12 @@ pub struct TeamGraph {
     pub root_functions: Vec<String>,
     /// Function name → CreateFunction definition.
     pub create_functions: HashMap<String, CreateFunctionDef>,
+    /// Faceoff spot each player is placed on at kickoff, declared by the
+    /// graph's `ConstructSoccerProperties` (`Vector31..Vector34`), in TEAM
+    /// space: +X is the direction this team attacks. `None` where the graph
+    /// left the port unwired or fed it something that is not a constant, in
+    /// which case the engine default stands.
+    pub kickoff_positions: [Option<Vec2>; 4],
     pub path: String,
 }
 
@@ -229,7 +236,7 @@ pub fn index_graph(raw: RawGraph, path: String) -> TeamGraph {
         }
     }
 
-    TeamGraph {
+    let mut graph = TeamGraph {
         nodes,
         ports,
         input_source,
@@ -238,8 +245,11 @@ pub fn index_graph(raw: RawGraph, path: String) -> TeamGraph {
         debug_draws,
         root_functions,
         create_functions,
+        kickoff_positions: [None; 4],
         path,
-    }
+    };
+    graph.kickoff_positions = graph.resolve_kickoff_positions();
+    graph
 }
 
 fn normalize_modifier(node_id: &str, value: &serde_json::Value) -> String {
@@ -290,5 +300,75 @@ impl TeamGraph {
             .iter()
             .find(|p| p.id == port_name && p.polarity != 0)
             .map(|p| p.sid.clone())
+    }
+
+    /// Faceoff spots off `ConstructSoccerProperties`, in team space.
+    ///
+    /// These are read once at load, not per tick: the engine consumes them
+    /// when it places the teams, so only a compile-time constant is
+    /// meaningful. Anything that needs the live graph to run (a SoccerGet, a
+    /// variable, arithmetic on either) resolves to `None` and leaves that
+    /// player on the engine default.
+    fn resolve_kickoff_positions(&self) -> [Option<Vec2>; 4] {
+        let Some(props) = self
+            .nodes
+            .values()
+            .find(|n| n.id == "ConstructSoccerProperties")
+        else {
+            return [None; 4];
+        };
+        let mut out = [None; 4];
+        for (slot, port) in ["Vector31", "Vector32", "Vector33", "Vector34"]
+            .iter()
+            .enumerate()
+        {
+            out[slot] = self
+                .input_port_sid(&props.sid, port)
+                .and_then(|in_sid| self.input_source.get(&in_sid).cloned())
+                .and_then(|src| self.const_vec2(&src, 0));
+        }
+        out
+    }
+
+    /// Constant-fold an output port down to a pitch-plane (X, Z) vector.
+    fn const_vec2(&self, port_sid: &str, depth: u32) -> Option<Vec2> {
+        if depth > 12 {
+            return None;
+        }
+        // Relay / CreateFunction params forward their source.
+        if let Some(src) = self.input_source.get(port_sid) {
+            return self.const_vec2(src, depth + 1);
+        }
+        let pref = self.ports.get(port_sid)?;
+        let node = self.nodes.get(&pref.node_sid)?;
+        match node.id.as_str() {
+            "ConstructVector3" => {
+                // Float2 is height — the pitch plane is (Float1, Float3).
+                let x = self.const_float(&node.sid, "Float1", depth)?;
+                let z = self.const_float(&node.sid, "Float3", depth)?;
+                Some(Vec2::new(x, z))
+            }
+            "Relay" => {
+                let in_sid = self.input_port_sid(&node.sid, "Any1")?;
+                let src = self.input_source.get(&in_sid)?;
+                self.const_vec2(src, depth + 1)
+            }
+            _ => None,
+        }
+    }
+
+    fn const_float(&self, node_sid: &str, port_name: &str, depth: u32) -> Option<f32> {
+        if depth > 12 {
+            return None;
+        }
+        let in_sid = self.input_port_sid(node_sid, port_name)?;
+        let src = self.input_source.get(&in_sid)?;
+        let pref = self.ports.get(src)?;
+        let node = self.nodes.get(&pref.node_sid)?;
+        match node.id.as_str() {
+            "Float" => node.modifier.trim().parse::<f32>().ok(),
+            "Relay" => self.const_float(&node.sid, "Any1", depth + 1),
+            _ => None,
+        }
     }
 }

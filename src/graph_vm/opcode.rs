@@ -47,6 +47,8 @@ pub enum OpCode {
     Call,
     Return,
     EmitController,
+    /// Faceoff spot for one player, read off `ConstructSoccerProperties`.
+    EmitFaceoff,
     Debug,
     TimePlot,
     OpaqueEffect,
@@ -94,7 +96,8 @@ impl OpCode {
             LoadApi | LoadVar | Keypress => OpEffect::ReadOnly,
             StoreVar => OpEffect::Write,
             Call | Return => OpEffect::Write,
-            EmitController | Debug | TimePlot | OpaqueEffect | DebugDrawLine | DebugDrawDisc => {
+            EmitController | EmitFaceoff | Debug | TimePlot | OpaqueEffect | DebugDrawLine
+            | DebugDrawDisc => {
                 OpEffect::External
             }
         }

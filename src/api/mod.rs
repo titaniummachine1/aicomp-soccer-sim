@@ -50,6 +50,7 @@ impl TeamControllers {
     pub fn to_brain_output(&self) -> BrainOutput {
         BrainOutput {
             commands: self.commands,
+            ..BrainOutput::default()
         }
     }
 }

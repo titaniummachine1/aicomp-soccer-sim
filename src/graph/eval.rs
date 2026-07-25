@@ -46,6 +46,10 @@ impl GraphBrain {
 }
 
 impl TeamBrain for GraphBrain {
+    fn kickoff_formation(&self) -> [Option<Vec2>; 4] {
+        self.graph.kickoff_positions
+    }
+
     fn think(&mut self, api: &TeamApi) -> BrainOutput {
         let set_vars = self.graph.set_variables.clone();
         let controllers = self.graph.controllers.clone();
@@ -97,6 +101,23 @@ impl TeamBrain for GraphBrain {
                 continue;
             };
             out.commands[i] = ctx.eval_controller(sid);
+        }
+        // Faceoff spots come out of the same evaluation — real graphs compute
+        // them rather than declaring constants.
+        if let Some(props) = ctx
+            .graph
+            .nodes
+            .values()
+            .find(|n| n.id == "ConstructSoccerProperties" && n.owner_function_sid.is_empty())
+            .map(|n| n.sid.clone())
+        {
+            for (slot, port) in ["Vector31", "Vector32", "Vector33", "Vector34"]
+                .iter()
+                .enumerate()
+            {
+                out.kickoff_positions[slot] =
+                    ctx.input_named(&props, port).map(|v| pitch_plane(v.as_vec()));
+            }
         }
 
         if let Some(mut trace) = ctx.trace.take() {

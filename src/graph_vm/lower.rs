@@ -97,6 +97,10 @@ pub struct CompileResult {
     pub vars: VariableTable,
     pub apis: ApiSlotTable,
     pub set_variable_sids: Vec<String>,
+    /// `ConstructSoccerProperties` faceoff spots, team space. Not code — the
+    /// engine reads these when it places the teams, so they ride along beside
+    /// the IR rather than through it.
+    pub kickoff_positions: [Option<Vec2>; 4],
 }
 
 #[derive(Debug, Clone)]
@@ -134,6 +138,7 @@ pub struct Lowerer {
 impl Lowerer {
     pub fn compile(graph: TeamGraph) -> CompileResult {
         let set_variable_sids = graph.set_variables.clone();
+        let kickoff_positions = graph.kickoff_positions;
         let mut lowerer = Self {
             graph,
             next_reg: 0,
@@ -194,6 +199,14 @@ impl Lowerer {
                 lowerer.lower_controller(i, sid);
             }
         }
+        // Faceoff spots are graph OUTPUTS like a controller command is, not
+        // constants: AIA derives them from TeamMultiplier and a "whose
+        // kickoff" conditional, so they only exist once the graph has run.
+        if let Some(props) = lowerer.properties_node_sid() {
+            for slot in 0..4 {
+                lowerer.lower_faceoff(slot, &props);
+            }
+        }
         let controllers = lowerer.take_ir();
 
         CompileResult {
@@ -202,6 +215,7 @@ impl Lowerer {
             vars: lowerer.vars,
             apis: lowerer.apis,
             set_variable_sids,
+            kickoff_positions,
         }
     }
 
@@ -267,6 +281,34 @@ impl Lowerer {
             immediates: vec![slot as u32],
             source_sid: node_sid.to_string(),
             source_port: "controller".to_string(),
+        });
+    }
+
+    fn properties_node_sid(&self) -> Option<String> {
+        self.graph
+            .nodes
+            .values()
+            .find(|n| n.id == "ConstructSoccerProperties" && n.owner_function_sid.is_empty())
+            .map(|n| n.sid.clone())
+    }
+
+    /// Emit one faceoff spot. An unwired port emits nothing at all, which is
+    /// what leaves that player on the engine default — distinct from a port
+    /// wired to something that evaluates to zero, which really does mean the
+    /// center spot.
+    fn lower_faceoff(&mut self, slot: usize, props_sid: &str) {
+        let port = ["Vector31", "Vector32", "Vector33", "Vector34"][slot];
+        let Some(value) = self.lower_input(props_sid, port) else {
+            return;
+        };
+        self.ir.push(IrInst {
+            dest: None,
+            kind: RegisterKind::Null,
+            op: OpCode::EmitFaceoff,
+            args: vec![value],
+            immediates: vec![slot as u32],
+            source_sid: props_sid.to_string(),
+            source_port: port.to_string(),
         });
     }
 

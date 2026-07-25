@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use bevy::prelude::Vec2;
+
 use crate::api::TeamApi;
 use crate::brain::{BrainOutput, TeamBrain};
 use crate::graph::TeamGraph;
@@ -20,6 +22,7 @@ pub struct CachedProgram {
     pub program: Arc<RuntimeProgram>,
     pub vars: VariableTable,
     pub apis: ApiSlotTable,
+    pub kickoff_positions: [Option<Vec2>; 4],
 }
 
 #[derive(Debug)]
@@ -30,6 +33,7 @@ pub struct RuntimeBrain {
     persistent_vars: Vec<VmValue>,
     backend: Interpreter,
     trace: Option<ObservableTrace>,
+    kickoff_positions: [Option<Vec2>; 4],
 }
 
 impl RuntimeBrain {
@@ -48,12 +52,15 @@ impl RuntimeBrain {
             program: Arc::new(ProgramBuilder.pack(&compiled)),
             vars: compiled.vars,
             apis: compiled.apis,
+            kickoff_positions: compiled.kickoff_positions,
         }
     }
 
     /// Spawn a fresh brain from a cached program — does **not** re-lower/re-opt.
     pub fn from_cached(cached: CachedProgram) -> Self {
-        Self::from_program(cached.program, cached.vars, cached.apis)
+        let mut brain = Self::from_program(cached.program, cached.vars, cached.apis);
+        brain.kickoff_positions = cached.kickoff_positions;
+        brain
     }
 
     /// Spawn a fresh brain from an already-packed program — own persistent_vars + Interpreter.
@@ -70,6 +77,7 @@ impl RuntimeBrain {
             persistent_vars,
             backend: Interpreter::default(),
             trace: None,
+            kickoff_positions: [None; 4],
         }
     }
 
@@ -92,6 +100,10 @@ impl RuntimeBrain {
 }
 
 impl TeamBrain for RuntimeBrain {
+    fn kickoff_formation(&self) -> [Option<Vec2>; 4] {
+        self.kickoff_positions
+    }
+
     fn think(&mut self, api: &TeamApi) -> BrainOutput {
         let mut ctx = ExecutionContext::new(
             api.clone(),

@@ -136,6 +136,11 @@ fn run() -> ExitCode {
 
         let opening = if seed % 2 == 0 { TeamId::Home } else { TeamId::Away };
         let mut world = MatchWorld::new_kickoff_opening(params.clone(), opening);
+        // A drives the world, so A's declared faceoff spots are the ones the
+        // pitch is laid out with. If B's differ, that is itself a divergence
+        // worth seeing rather than papering over.
+        world.set_kickoff_formation(TeamId::Home, a.kickoff_formation());
+        world.set_kickoff_formation(TeamId::Away, opp.kickoff_formation());
         let ticks = (secs / FIXED_DT) as u32;
         let mut diverged_at: Option<(u32, usize, String)> = None;
 

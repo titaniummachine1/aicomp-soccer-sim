@@ -389,6 +389,11 @@ pub fn run_match_job(
     let mut home = build_brain(&job.home, job.engine, cache)?;
     let mut away = build_brain(&job.away, job.engine, cache)?;
     let mut world = MatchWorld::new_kickoff_opening(job.params.clone(), job.opening);
+    // Faceoff spots come off each graph's ConstructSoccerProperties. Constant
+    // ones are known already; graphs that compute them (AIA) only report after
+    // a tick, so `observe_brain_outputs` picks those up in the loop below.
+    world.set_kickoff_formation(TeamId::Home, home.kickoff_formation());
+    world.set_kickoff_formation(TeamId::Away, away.kickoff_formation());
     // Batch / headless parity: never inherit a viewer-zeroed GoalPause.
     if world.params.kickoff_delay_s < 1.0 {
         world.params.kickoff_delay_s = 4.9;
