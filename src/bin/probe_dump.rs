@@ -121,6 +121,7 @@ fn main() -> ExitCode {
         world.step_with_commands(&home_out, &away_out, FIXED_DT);
     }
 
+    println!("{}", aicomp_soccer_sim::graph_vm::diagnostics::banner().trim_end());
     for (name, v) in &last_plots {
         println!("PLOT	{name}	{v:.4}");
     }

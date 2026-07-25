@@ -821,7 +821,16 @@ impl Lowerer {
             | "Spherecast"
             | "Country"
             | "Stat" => self.emit_const_null(node_sid, port_name),
-            _ => self.emit_const_null(node_sid, port_name),
+            // ANY node type we do not implement lands here and silently
+            // evaluates to Null. That is the most dangerous failure mode in
+            // the whole VM: the graph loads, the match runs, results look
+            // plausible, and a decision was quietly made on nothing. Record
+            // it so callers can report it loudly instead of inferring later
+            // from a scoreline that felt wrong.
+            other => {
+                crate::graph_vm::diagnostics::record_unimplemented(other);
+                self.emit_const_null(node_sid, port_name)
+            }
         }
     }
 

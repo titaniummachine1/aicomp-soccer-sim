@@ -6,6 +6,7 @@ pub mod builder;
 pub mod context;
 pub mod interpreter;
 pub mod ir;
+pub mod diagnostics;
 pub mod lower;
 pub mod opcode;
 pub mod passes;

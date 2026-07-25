@@ -175,6 +175,14 @@ fn run() -> ExitCode {
         }
     }
 
+    let bad = aicomp_soccer_sim::graph_vm::diagnostics::unsound();
+    if !bad.is_empty() {
+        // Equivalence proven over Null inputs is not equivalence.
+        println!("
+{}", aicomp_soccer_sim::graph_vm::diagnostics::banner().trim_end());
+        println!("REFUSING to certify parity: results are unsound.");
+        return ExitCode::from(3);
+    }
     if any_diff {
         println!("\nRESULT: NOT equivalent — the two graphs play differently.");
         ExitCode::from(1)
