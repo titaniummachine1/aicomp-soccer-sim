@@ -110,7 +110,7 @@
     "sprint_speed_mps": 8.0,
     "intercept_defaults_mps": { "max_speed": 8.0, "acceleration": 100.0 },
     "minimum_move_delta_m": 0.25,
-    "body_radius_m": 0.7618736,
+    "body_radius_m": 0.655,
     "nav_agent_radius_m": 0.5,
     "hold_offset_m": 1.67,
     "stopping_distance_m": 1.25,
