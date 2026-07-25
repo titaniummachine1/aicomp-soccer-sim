@@ -391,6 +391,7 @@ fn run() -> ExitCode {
                     "seed": result.seed,
                     "home": result.home,
                     "away": result.away,
+                    "mercy_stopped": result.mercy_stopped,
                     "score_home": result.score_home,
                     "score_away": result.score_away,
                     "possession_s_home": result.possession_s_home,

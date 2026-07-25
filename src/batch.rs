@@ -16,7 +16,7 @@ use crate::brain::{ChaseBallBrain, IdleBrain, TeamBrain, TeamId};
 use crate::graph::{load_team_graph, GraphBrain};
 use crate::graph_vm::{CachedProgram, RuntimeBrain};
 use crate::params::SimParams;
-use crate::probe_brains::{PerfectControllerBrain, Test1Brain, Test2Brain};
+use crate::probe_brains::{KickRoutineBrain, PerfectControllerBrain, Test1Brain, Test2Brain};
 #[cfg(feature = "nn_train")]
 use crate::train::TrainedBrain;
 
@@ -91,6 +91,7 @@ pub enum BrainInput {
     Test1,
     Test2,
     Perfect,
+    Kick,
     Aia,
     Titanium,
     #[cfg(feature = "nn_train")]
@@ -132,6 +133,7 @@ impl BrainInput {
             "test1" => Ok(Self::Test1),
             "test2" => Ok(Self::Test2),
             "perfect" | "kb" | "keyboard" => Ok(Self::Perfect),
+            "kick" | "kickroutine" | "kick_routine" => Ok(Self::Kick),
             "aia" | "aia3" => Ok(Self::Aia),
             "titanium" | "ti" => Ok(Self::Titanium),
             "trained" => {
@@ -145,7 +147,7 @@ impl BrainInput {
                 }
             }
             other => Err(format!(
-                "unknown brain '{other}' (chase|idle|test1|test2|perfect|aia|aia3|titanium|trained|graph:<path>)"
+                "unknown brain '{other}' (chase|idle|test1|test2|perfect|kick|aia|aia3|titanium|trained|graph:<path>)"
             )),
         }
     }
@@ -157,6 +159,7 @@ impl BrainInput {
             Self::Test1 => "test1".into(),
             Self::Test2 => "test2".into(),
             Self::Perfect => "perfect".into(),
+            Self::Kick => "kick".into(),
             Self::Aia => {
                 let p = soccer_aia_graph_path();
                 if p.file_name().and_then(|s| s.to_str()) == Some("AIA3.txt") {
@@ -198,8 +201,13 @@ pub struct MatchJob {
 }
 
 /// Match outcome — same fields as headless `MatchResult`, plus optional batch metadata.
+/// Goal difference that ends a match immediately (mercy rule).
+pub const MERCY_GOAL_DIFF: u32 = 7;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct BatchMatchResult {
+    /// True when the match ended early on the 7-goal mercy rule.
+    pub mercy_stopped: bool,
     pub ok: bool,
     pub fixed_dt: f32,
     pub secs_requested: f32,
@@ -330,6 +338,7 @@ fn build_brain(
         BrainInput::Test1 => Box::new(Test1Brain::default()),
         BrainInput::Test2 => Box::new(Test2Brain::default()),
         BrainInput::Perfect => Box::new(PerfectControllerBrain),
+        BrainInput::Kick => Box::new(KickRoutineBrain::default()),
         BrainInput::Aia => {
             let path = soccer_aia_graph_path();
             build_graph_brain(&path, engine, cache)?
@@ -405,6 +414,7 @@ pub fn run_match_job(
     let start_score = world.match_state.score_home + world.match_state.score_away;
     let mut ticks = 0u64;
     let mut goal_stopped = false;
+    let mut mercy_stopped = false;
     let mut last_total = start_score;
     let max_ticks = ((job.secs / FIXED_DT).ceil() as u64).max(1);
 
@@ -434,6 +444,14 @@ pub fn run_match_job(
                 break;
             }
         }
+        // Mercy rule: a 7-goal lead ends it immediately. Once a match is that
+        // one-sided the remaining minutes add no information to a gate result,
+        // and they cost real wall-clock across a round robin.
+        if sh.abs_diff(sa) >= MERCY_GOAL_DIFF {
+            mercy_stopped = true;
+            goal_stopped = true;
+            break;
+        }
         if !quiet && ticks % 2000 == 0 {
             eprintln!(
                 "  t={:.1}s score={sh}-{sa} phase={:?}",
@@ -444,6 +462,7 @@ pub fn run_match_job(
     }
 
     Ok(BatchMatchResult {
+        mercy_stopped,
         ok: true,
         fixed_dt: FIXED_DT,
         secs_requested: job.secs,
