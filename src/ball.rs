@@ -167,8 +167,11 @@ fn resolve_posts(ball: &mut Ball, params: &SimParams) {
 }
 
 fn resolve_walls(ball: &mut Ball, params: &SimParams) {
-    // `x_min`/`z_*` are already the playable *ball-center* AABB — do not
-    // inset by radius again.
+    // `x_min`/`x_max`/`z_*` are the TRUE pitch outline (+-40 / +-25, from the
+    // engine corner nodes). The ball is a sphere, so its CENTRE stops one
+    // radius short — inset here rather than by shrinking the pitch, so the
+    // same bounds stay valid for anything else that needs the real field.
+    // Measured: corners +-40.0/+-25.0, held ball flush at +-39.75/+-24.75.
     //
     // AIA observation (2026-07-22): when the ball is shoved/kicked into a solid
     // wall (endline outside the mouth, sidelines), Unity depenetrates back onto
@@ -176,30 +179,33 @@ fn resolve_walls(ball: &mut Ball, params: &SimParams) {
     // kicks still use e≈0.2 (TimePlot); low into-speed settles to rest.
     let e = params.wall_e;
     let mu = params.wall_mu;
+    let r = params.ball_radius;
+    let (x_lo, x_hi) = (params.x_min + r, params.x_max - r);
+    let (z_lo, z_hi) = (params.z_min + r, params.z_max - r);
 
-    if ball.pos.y < params.z_min {
-        ball.pos.y = params.z_min;
+    if ball.pos.y < z_lo {
+        ball.pos.y = z_lo;
         if ball.vel.y < 0.0 {
             wall_hit_axis(&mut ball.vel, 1, e, mu);
         }
-    } else if ball.pos.y > params.z_max {
-        ball.pos.y = params.z_max;
+    } else if ball.pos.y > z_hi {
+        ball.pos.y = z_hi;
         if ball.vel.y > 0.0 {
             wall_hit_axis(&mut ball.vel, 1, e, mu);
         }
     }
 
     // Open goal mouths — no wall when |z| <= goal_half_width.
-    if ball.pos.x < params.x_min {
+    if ball.pos.x < x_lo {
         if !in_goal_mouth(ball.pos.y, params.goal_half_width) {
-            ball.pos.x = params.x_min;
+            ball.pos.x = x_lo;
             if ball.vel.x < 0.0 {
                 wall_hit_axis(&mut ball.vel, 0, e, mu);
             }
         }
-    } else if ball.pos.x > params.x_max {
+    } else if ball.pos.x > x_hi {
         if !in_goal_mouth(ball.pos.y, params.goal_half_width) {
-            ball.pos.x = params.x_max;
+            ball.pos.x = x_hi;
             if ball.vel.x > 0.0 {
                 wall_hit_axis(&mut ball.vel, 0, e, mu);
             }
@@ -426,7 +432,9 @@ mod tests {
             held: false,
         };
         resolve_walls(&mut ball, &params);
-        assert!((ball.pos.y - params.z_max).abs() < 1e-4);
+        // Centre stops one radius short of the true pitch edge, not on it.
+        assert!((ball.pos.y - (params.z_max - params.ball_radius)).abs() < 1e-4,
+                "got {:?}", ball.pos);
         // Normal component reflects and scales by -e (0.2): 3.0 -> -0.6.
         assert!((ball.vel.y - (-0.6)).abs() < 1e-4, "got {:?}", ball.vel);
         assert!(ball.vel.y < 0.0, "must rebound off the wall");

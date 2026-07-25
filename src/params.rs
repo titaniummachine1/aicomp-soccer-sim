@@ -113,15 +113,13 @@ impl SimParams {
             wall_e: 0.2,
             wall_mu: 0.35,
             stop_speed_eps: 0.0001,
-            // Ball-CENTRE AABB (not the pitch outline). Pitch corners read
-            // +-40.0 / +-25.0 from the engine nodes; a held ball snaps flush to
-            // a wall at +-39.75 / +-24.75, so the ball's collision radius is
-            // 0.25 and the centre bound is corner - 0.25. Measured over 3177
-            // held samples, identical on both axes.
-            x_min: -39.75,
-            x_max: 39.75,
-            z_min: -24.75,
-            z_max: 24.75,
+            // TRUE pitch outline, from the engine corner nodes. The ball
+            // stops a radius short of these because of its own volume -- that
+            // inset happens in resolve_walls, NOT by shrinking the pitch.
+            x_min: -40.0,
+            x_max: 40.0,
+            z_min: -25.0,
+            z_max: 25.0,
             goal_half_width: 5.7,
             goal_line_x: 40.0,   // pitch end line, from corner nodes
             posts_x: 40.2,
