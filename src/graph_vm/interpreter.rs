@@ -89,6 +89,18 @@ fn run_inst(inst: &Instruction, ctx: &mut ExecutionContext, names: &[String]) {
                     VmValue::Bool(crate::keypress::is_pressed_id(kid));
             }
         }
+        // Clamp was in the OpCode enum but had no arm here, so it fell through
+        // to the no-op catch-all and left its destination register untouched --
+        // declared, but dead. Haialand-v2 uses ClampFloat throughout.
+        OpCode::Clamp => {
+            if ops.len() >= 4 {
+                let v = reg_f(ctx, ops[1] as usize);
+                let (lo, hi) = (reg_f(ctx, ops[2] as usize), reg_f(ctx, ops[3] as usize));
+                // Tolerate inverted bounds instead of producing NaN.
+                let (lo, hi) = if lo <= hi { (lo, hi) } else { (hi, lo) };
+                ctx.frame.registers[ops[0] as usize] = VmValue::Float(v.max(lo).min(hi));
+            }
+        }
         OpCode::Add => bin_f(ctx, ops, |a, b| a + b),
         OpCode::Sub => bin_f(ctx, ops, |a, b| a - b),
         OpCode::Mul => bin_f(ctx, ops, |a, b| a * b),

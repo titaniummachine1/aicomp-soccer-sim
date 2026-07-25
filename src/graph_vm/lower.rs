@@ -623,6 +623,31 @@ impl Lowerer {
             "SubtractFloats" => self.bin_f(node_sid, port_name, OpCode::Sub),
             "MultiplyFloats" => self.bin_f(node_sid, port_name, OpCode::Mul),
             "DivideFloats" => self.bin_f(node_sid, port_name, OpCode::Div),
+            // clamp(value, min, max). Was hitting the unknown-node fallback and
+            // evaluating to Null, which silently invalidated every result for
+            // any graph using it (Haialand-v2 does).
+            "ClampFloat" => {
+                let v = self
+                    .lower_input(node_sid, "Float1")
+                    .unwrap_or_else(|| self.emit_const_float(node_sid, "Float1", 0.0));
+                let lo = self
+                    .lower_input(node_sid, "Float2")
+                    .unwrap_or_else(|| self.emit_const_float(node_sid, "Float2", 0.0));
+                let hi = self
+                    .lower_input(node_sid, "Float3")
+                    .unwrap_or_else(|| self.emit_const_float(node_sid, "Float3", 0.0));
+                let dst = self.fresh_reg(RegisterKind::Float);
+                self.ir.push(IrInst {
+                    dest: Some(dst),
+                    kind: RegisterKind::Float,
+                    op: OpCode::Clamp,
+                    args: vec![v, lo, hi],
+                    immediates: vec![],
+                    source_sid: node_sid.to_string(),
+                    source_port: port_name.to_string(),
+                });
+                dst
+            }
             "Power" => self.bin_f(node_sid, port_name, OpCode::Pow),
             "Modulo" => self.bin_f(node_sid, port_name, OpCode::Mod),
             "Lerp" => {
