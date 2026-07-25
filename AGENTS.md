@@ -101,6 +101,19 @@ Exit `0` = steal seen; `2` = failed assert.
 | `data/reference/`             | API / Frida dumps (read-only)             |
 | `README.md`                   | Human entry points                        |
 
+## Physics constants live in TWO places
+
+`SimParams::fallback()` in `src/params.rs` **and** `bevy_sim_params_v05.json`.
+The JSON **overrides** the Rust defaults at load, so editing only `params.rs`
+changes nothing at runtime. This has caused silent no-op "fixes" three times
+(`bounce_e`, `body_radius`, the field AABB).
+
+`params::measured_constants_tests` guards it: it loads params the way the sim
+does and asserts the values measured from real-game TimePlots. If it fails,
+**re-measure — do not edit the expected value to match.** Those numbers come
+from recordings, and several sim defaults that looked authoritative (prefab
+colliders, Unity's 9.81) were simply wrong.
+
 ## Don't
 
 - Don't block on Unity for “does my brain score?” — use `soccer_headless`.

@@ -499,3 +499,59 @@ struct RawIntercept {
     max_speed: Option<f32>,
     acceleration: Option<f32>,
 }
+
+#[cfg(test)]
+mod measured_constants_tests {
+    use super::*;
+
+    /// Every physics constant lives in TWO places: the `fallback()` defaults
+    /// here and `bevy_sim_params_v05.json`, which OVERRIDES them at load. Edit
+    /// only one and the change silently does nothing at runtime — that has now
+    /// bitten us three times (`bounce_e`, `body_radius`, the field AABB).
+    ///
+    /// This test loads params the way the sim actually does and asserts the
+    /// values that were MEASURED from real-game TimePlot recordings. If either
+    /// source drifts, this fails and names the constant.
+    ///
+    /// Do not "fix" a failure by editing the expected value — these came from
+    /// measurement. Re-measure first, then change both sources together.
+    #[test]
+    fn measured_constants_survive_the_json_load() {
+        let p = SimParams::load_from_disk(&default_params_path())
+            .expect("bevy_sim_params_v05.json must load");
+
+        // (name, actual, expected, how it was measured)
+        let checks: &[(&str, f32, f32, &str)] = &[
+            ("gravity", p.gravity, 17.0, "Ball.Y 2nd differences, n=1845, IQR 0.002"),
+            ("ball_radius", p.ball_radius, 0.25, "held ball flush to wall, n=3177"),
+            ("body_radius", p.body_radius, 0.655, "player flush to both sidelines"),
+            ("interact_radius", p.interact_radius, 1.75, "4 pickups, max 1.7367"),
+            ("slide_accel", p.slide_accel, 5.95, "n=11056 straight rolls, IQR 0.0005"),
+            ("wall_e", p.wall_e, 0.2, "33 position-filtered wall bounces"),
+            ("ball_rest_height", p.ball_rest_height, 0.3864, "Ball.Y mode, n=695"),
+            ("ball_bounce_e", p.ball_bounce_e, 0.0, "no hop on landing"),
+            ("x_max", p.x_max, 40.0, "Upper/Lower Corner nodes + Field Depth 80"),
+            ("z_max", p.z_max, 25.0, "corner nodes + Field Width 50"),
+            ("goal_half_width", p.goal_half_width, 5.7, "Goal Width node = 11.4"),
+            ("player_walk_speed", p.player_walk_speed, 7.0, "measured"),
+            ("player_max_speed", p.player_max_speed, 8.0, "measured"),
+            ("player_sprint_empty_speed", p.player_sprint_empty_speed, 7.65, "measured"),
+            ("kickoff_circle_r", p.kickoff_circle_r, 7.25, "Kickoff Circle Radius node"),
+        ];
+
+        let mut bad = Vec::new();
+        for (name, actual, expected, how) in checks {
+            if (actual - expected).abs() > 1e-4 {
+                bad.push(format!(
+                    "  {name}: loaded {actual}, measured {expected}  ({how})"
+                ));
+            }
+        }
+        assert!(
+            bad.is_empty(),
+            "measured constants changed. Check BOTH src/params.rs and \
+             bevy_sim_params_v05.json — the JSON overrides the Rust default:\n{}",
+            bad.join("\n")
+        );
+    }
+}
