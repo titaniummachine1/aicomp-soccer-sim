@@ -85,3 +85,7 @@ opt-level = 3
 inherits = "release"
 lto = "thin"
 codegen-units = 1
+
+[[bin]]
+name = "parity_check"
+path = "src/bin/parity_check.rs"
