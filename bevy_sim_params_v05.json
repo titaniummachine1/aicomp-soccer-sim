@@ -9,7 +9,7 @@
     "scale": 0.8999999761581421,
     "radius_local": 0.45152485370635986,
     "radius_world": 0.40637235757053247,
-    "rest_y": 0.3499999940395355,
+    "rest_y": 0.3864,
     "linear_damping": 0.0,
     "angular_damping": 0.0,
     "use_gravity": true,
@@ -41,17 +41,17 @@
   },
   "pitch": {
     "playable_ball_center_aabb": {
-      "x_min": -39.5,
-      "x_max": 39.5,
-      "z_min": -24.7,
-      "z_max": 24.7
+      "x_min": -40.0,
+      "x_max": 40.0,
+      "z_min": -25.0,
+      "z_max": 25.0
     },
     "goal": {
       "posts_x": 40.2,
       "post_z": [-6.0, 6.0],
       "post_radius_world": 0.3,
       "post_contact_radius": 0.7063723683357239,
-      "half_width": 6.0,
+      "half_width": 5.7,
       "line_x": 39.5,
       "terminal": true,
       "open_mouth": true,
@@ -91,8 +91,8 @@
     "speed_per_charge_mps": 32.222222,
     "lift_base_mps": -0.323,
     "lift_per_charge_mps": 6.6667,
-    "gravity_mps2": 9.81,
-    "bounce_e": 0.23,
+    "gravity_mps2": 17.0,
+    "bounce_e": 0.0,
     "bounce_settle_mps": 0.5,
     "apex_height_m": 1.4,
     "hang_before_first_bounce_s": "varies_with_lift_not_fixed_1s",

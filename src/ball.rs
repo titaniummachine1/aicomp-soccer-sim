@@ -207,31 +207,17 @@ fn resolve_walls(ball: &mut Ball, params: &SimParams) {
     }
 }
 
-/// Soft shove / body-push into a wall: snap + full stop. Fast free kicks bounce.
-const WALL_SETTLE_INTO_SPEED: f32 = 5.0;
-
+/// Every wall contact bounces. There is NO low-speed "settle and stop" case:
+/// a slow ball rebounds off the wall like a fast one, just with less energy
+/// (user-confirmed against the real game, 2026-07-25). The former
+/// `into <= 5.0 => vel = ZERO` rule killed slow balls that actually bounce.
 fn wall_hit_axis(vel: &mut Vec2, normal_axis: usize, e: f32, mu: f32) {
-    let into = if normal_axis == 0 {
-        vel.x.abs()
-    } else {
-        vel.y.abs()
-    };
-    if into <= WALL_SETTLE_INTO_SPEED {
-        // Depenetration already placed the center on the wall; kill all motion
-        // (AIA: no explosion, ball rests on the face it was shoved into).
-        *vel = Vec2::ZERO;
-        return;
-    }
     bounce_axis(vel, normal_axis, e, mu);
 }
 
 fn wall_hit_circle(vel: &mut Vec2, n: Vec2, e: f32, mu: f32) {
     let vn = vel.dot(n);
     if vn >= 0.0 {
-        return;
-    }
-    if (-vn) <= WALL_SETTLE_INTO_SPEED {
-        *vel = Vec2::ZERO;
         return;
     }
     bounce_circle(vel, n, e, mu);
@@ -427,17 +413,22 @@ mod tests {
     }
 
     #[test]
-    fn soft_wall_shove_stops_dead_not_explode() {
+    fn slow_wall_contact_bounces_it_does_not_stop_dead() {
+        // There is no low-speed settle case: a slow ball rebounds like a fast
+        // one, just with less energy (real-game confirmed 2026-07-25). This
+        // previously asserted vel == ZERO, encoding a rule that does not exist.
         let params = SimParams::default();
         let mut ball = Ball {
             pos: Vec2::new(0.0, params.z_max + 0.5),
-            vel: Vec2::new(1.0, 3.0), // into sideline, below settle threshold
+            vel: Vec2::new(1.0, 3.0), // gently into the sideline
             height: params.ball_rest_height,
             vel_y: 0.0,
             held: false,
         };
         resolve_walls(&mut ball, &params);
         assert!((ball.pos.y - params.z_max).abs() < 1e-4);
-        assert_eq!(ball.vel, Vec2::ZERO);
+        // Normal component reflects and scales by -e (0.2): 3.0 -> -0.6.
+        assert!((ball.vel.y - (-0.6)).abs() < 1e-4, "got {:?}", ball.vel);
+        assert!(ball.vel.y < 0.0, "must rebound off the wall");
     }
 }

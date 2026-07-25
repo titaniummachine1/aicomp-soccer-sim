@@ -108,11 +108,11 @@ impl SimParams {
             wall_e: 0.2,
             wall_mu: 0.35,
             stop_speed_eps: 0.0001,
-            x_min: -39.5,
-            x_max: 39.5,
-            z_min: -24.7,
-            z_max: 24.7,
-            goal_half_width: 6.0,
+            x_min: -40.0,
+            x_max: 40.0,
+            z_min: -25.0,
+            z_max: 25.0,
+            goal_half_width: 5.7,
             goal_line_x: 39.5,
             posts_x: 40.2,
             post_radius: 0.3,
@@ -127,10 +127,12 @@ impl SimParams {
             kick_horiz_cap: 29.42,
             kick_lift_base: -0.323,
             kick_lift_per_charge: 6.6667,
-            gravity: 9.81,
-            ball_rest_height: 0.33,
-            // TimePlot landings median e≈0.23 (material 0.4 is too high).
-            ball_bounce_e: 0.23,
+            gravity: 17.0,
+            ball_rest_height: 0.3864,
+            // 0.0 — the ball does NOT hop on landing. Confirmed in the real
+            // game (user, 2026-07-25): it lands once, compresses ~5.6cm, and
+            // stays down. Ball.Y traces show no rebound into flight.
+            ball_bounce_e: 0.0,
             ball_bounce_settle: 0.5,
             angular_speed_deg: 2500.0,
             stamina_regen_delay_s: 0.0,
