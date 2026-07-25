@@ -59,7 +59,13 @@ pub fn project_hold_into_playable(hold: Vec2, params: &SimParams) -> Vec2 {
 
 #[derive(Component, Debug, Clone, Copy)]
 pub struct SimpleMover {
+    /// Sprint cap with stamina remaining (measured 8.0).
     pub max_speed: f32,
+    /// Cruise / non-sprint (measured 7.0).
+    pub walk_speed: f32,
+    /// Sprint held with stamina at zero (measured 7.65) — faster than a walk,
+    /// slower than a real sprint.
+    pub sprint_empty_speed: f32,
     pub accel: f32,
     /// Frida mover.stoppingDistance — arrive epsilon before braking to stop.
     pub stopping_distance: f32,
@@ -69,6 +75,8 @@ impl SimpleMover {
     pub fn from_params(params: &SimParams) -> Self {
         Self {
             max_speed: params.player_max_speed,
+            walk_speed: params.player_walk_speed,
+            sprint_empty_speed: params.player_sprint_empty_speed,
             accel: params.player_accel,
             stopping_distance: params.stopping_distance_m.max(0.05),
         }
@@ -89,18 +97,25 @@ pub fn step_mover(
     angular_speed_deg: f32,
     dt: f32,
 ) {
+    // Measured (user, 2026-07-25): walk 7.0, sprint 8.0, sprint on EMPTY
+    // stamina 7.65. The old code used max_speed*0.95 (=7.6) for every
+    // non-sprint case and ignored player_walk_speed entirely, so walking was
+    // 8.6% too fast; sprinting also ignored stamina and always gave 8.0.
     let max_speed = if sprint {
-        mover.max_speed
+        if player.stamina <= 0.0 {
+            mover.sprint_empty_speed
+        } else {
+            mover.max_speed
+        }
     } else if is_carrier || !opp_has_ball || !first_kick_done {
-        // Carriers, loose ball, and pre-first-kick press: near cruise.
-        mover.max_speed * 0.95
+        mover.walk_speed
     } else {
         // After the match opening kick, both sides close an opponent carrier
         // at the same near-cruise rate. An older Home-only 0.45 scale was for
         // the opening Away Clear lane; leaving it on for the whole match made
         // every post-goal Home kickoff a free Away goal (and flipped cleanly
         // when Away took kickoffs).
-        mover.max_speed * 0.95
+        mover.walk_speed
     };
 
     let to = move_to - player.pos;

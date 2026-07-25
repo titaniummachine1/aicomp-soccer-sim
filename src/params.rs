@@ -27,6 +27,8 @@ pub struct SimParams {
     pub post_contact_radius: f32,
     pub kickoff_circle_r: f32,
     pub player_max_speed: f32,
+    /// Sprint speed once stamina hits zero (measured 7.65).
+    pub player_sprint_empty_speed: f32,
     pub player_accel: f32,
     /// Soft cap on launch |v| (TimePlot ~29.94; ball maxSpeed ~30).
     pub kick_max_speed: f32,
@@ -127,6 +129,7 @@ impl SimParams {
             post_contact_radius: 0.3 + 0.25,
             kickoff_circle_r: 7.25,
             player_max_speed: 8.0,
+            player_sprint_empty_speed: 7.65,
             player_accel: 100.0,
             kick_max_speed: 29.94,
             // (10 + 290 c) / 9  — TimePlot charge sweep 2026-07-22
