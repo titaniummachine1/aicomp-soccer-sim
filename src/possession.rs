@@ -152,6 +152,8 @@ pub fn apply_interact(
     // The press history resets on a whistle — see `reset_interact_latch`,
     // called wherever positions are restarted for the next kickoff.
     let impulse = cmd.interact && !player.interact_held;
+    // Previous tick's press, needed below: a carrier kicks on the FALLING edge.
+    let was_pressing = player.interact_held;
     player.interact_held = cmd.interact;
     let is_carrier = matches!(
         poss.carrier,
@@ -177,7 +179,20 @@ pub fn apply_interact(
             return InteractOutcome::default();
         }
 
-        if player.shot_charge > 0.05 {
+        // Release = kick. There is NO minimum charge threshold: press for a
+        // single tick, release on the next, and the ball goes — weakly, because
+        // charge is barely above zero, but it goes.
+        //
+        // This used to gate on `shot_charge > 0.05`. One tick of charge adds
+        // exactly 0.0500, so a single-tick press failed that test by exactly
+        // zero: the ball stayed glued to the carrier and the charge was
+        // silently discarded. Measured with `pass_speed`, which is how it was
+        // found — the quickest possible pass simply did not happen.
+        //
+        // Firing on the falling edge (pressed last tick, not this tick) is what
+        // makes "release to shoot" mean release. A carrier that never presses
+        // just keeps the ball, which a bare `!cmd.interact` would not give.
+        if was_pressing {
             // On Interact→false, kick along that frame's move input.
             //
             // That IS `player.facing`: facing is set to the walk direction at
@@ -197,16 +212,14 @@ pub fn apply_interact(
                     TeamId::Away => -Vec2::X,
                 }
             };
-            // Baseline Away long release is Clear F (−X,−Z) at ~full charge
-            // (v≈(−21,−21)). Opening dump especially: AIA Clear often picks D
-            // (−X) and leaves a short Ball.X vs Unity DB33 (→ −8 by t=2).
-            if player.team == TeamId::Away && player.shot_charge >= 0.75 {
-                let opening = !poss.first_kick_done;
-                let near_west = dir.x < -0.55 && dir.y > -0.55;
-                if opening || near_west {
-                    dir = Vec2::new(-0.707, -0.707);
-                }
-            }
+            // (Removed: a hardcoded override that rewrote the kick direction to
+            // a fixed (-0.707, -0.707) diagonal for ANY Away player shooting at
+            // charge >= 0.75, either on the opening kick or whenever the aim was
+            // already vaguely west. It existed to reproduce one recording's
+            // opening dump, but it was not scoped to the opening — it silently
+            // hijacked every hard Away shot for the whole match, so an Away
+            // graph aiming at goal could have the ball sent somewhere else. The
+            // aim a graph chooses is the aim it gets.)
             let charge = player.shot_charge;
             let (horiz, lift) = crate::ball::kick_launch_speeds(charge, params);
             ball.held = false;
@@ -264,17 +277,28 @@ pub fn apply_interact(
     };
     let shooter_team = poss.kick_exclude_shooter.map(|(t, _)| t);
 
-    // Tackle/pickup exchange lockout. Opening dump alone may bypass via
-    // hot_opp (opponent reclaim after hang).
-    if poss.pickup_lockout > 0.0 {
-        let hot_opp = shooter_team.is_some_and(|t| t != player.team)
-            && since_kick < 0.25
-            && poss.opening_hot_reclaim
-            && !poss.opening_dump_hang;
-        if !hot_opp {
-            return InteractOutcome::default();
-        }
-    }
+    // NO possession lockout. There is no cooldown after a pickup or a tackle.
+    //
+    // What used to be here: `pickup_delay_after_exchange_s` (0.25 s) on every
+    // claim AND on a won tackle, 0.55 s when both duellists were spent, and
+    // 0.40 s on a FAILED tackle. All of it arrived in ffa398a — the same commit
+    // that gave tacklers a phantom 3.42 m reach from a second, non-existent
+    // hold-point origin. The project's own parity capture records
+    // "pickupDelayAfterExchange 0.25s reserved": the field was observed in the
+    // game, noted as RESERVED, and then wired up anyway. The 0.55 and 0.40 have
+    // no source at all. None of it was ever measured against a recording.
+    //
+    // It was not harmless. Measured with `pass_chain`: a player claims a pass,
+    // and the 0.25 s lockout then blocks the NEXT teammate from claiming the
+    // next pass for 13 ticks. A receiver cannot observe the lockout, so it
+    // presses, is refused, and — Interact being an impulse — burns its one
+    // rising edge and never claims at all. A simple four-player passing relay
+    // was impossible.
+    //
+    // The thing it was guarding against, instant re-steals, is already handled
+    // by the real mechanism: a tackler must RELEASE Interact before it can
+    // tackle again. That is the engine's own anti-ping-pong rule, confirmed by
+    // the game's author, and this was a second invented layer on top of it.
 
     // Contested tackle (same rules in Scenario 1 and full match — one code path).
     // `player` here is the tackler (person pressing Interact without the ball).
@@ -285,7 +309,20 @@ pub fn apply_interact(
     // parity: probes/build_tackle_empty_stam.py (confirm ping-pong vs lockout).
     if ball.held {
         if let Some((ct, cid)) = poss.carrier {
-            if ct != player.team {
+            {
+                // YOU CAN TACKLE YOUR OWN TEAMMATES. Confirmed by the game's
+                // author. There is no team check here and no separate friendly
+                // path: the same reach and the same stamina duel apply whoever
+                // is holding the ball.
+                //
+                // This used to require `ct != player.team`, so a held ball
+                // returned nothing to a teammate and the only way to move the
+                // ball within a team was to kick it.
+                //
+                // It is not a free pass. The duel drains min(tackler, carrier)
+                // from BOTH, so two full-stamina teammates swapping the ball
+                // this way both end at zero.
+                //
                 // Body to ball, and nothing else. A tackle happens if you can
                 // reach the BALL, so the only distance that means anything is
                 // from the tackler's own position to it.
@@ -310,25 +347,18 @@ pub fn apply_interact(
                     player.stamina_regen_lock_left = params
                         .stamina_tackle_regen_delay_s
                         .max(player.stamina_regen_lock_left);
-                    let carrier_after = (carrier_stam - drain).max(0.0);
+                    let _carrier_after = (carrier_stam - drain).max(0.0);
                     // Pre-drain compare; equal (incl. 0/0) → tackler steals.
                     let tackler_wins = tackler_stam + eps >= carrier_stam;
                     if tackler_wins {
                         poss.carrier = Some((player.team, player.id.0));
                         player.shot_charge = 0.0;
                         player.charge_warmup_left = params.shot_charge_warmup_s;
-                        let both_spent = player.stamina <= eps && carrier_after <= eps;
-                        poss.pickup_lockout = if both_spent {
-                            0.55
-                        } else {
-                            params.pickup_delay_after_exchange_s
-                        };
                         trace(format!(
                             "STEAL {:?} P{} from {:?} P{} drain={drain:.2} tackler={tackler_stam:.2} carrier={carrier_stam:.2}",
                             player.team, player.id.0, ct, cid,
                         ));
                     } else {
-                        poss.pickup_lockout = 0.40;
                         trace(format!(
                             "TACKLE_FAIL {:?} P{} on {:?} P{} drain={drain:.2} tackler={tackler_stam:.2} carrier={carrier_stam:.2}",
                             player.team, player.id.0, ct, cid,
@@ -405,11 +435,24 @@ pub fn apply_interact(
             ball.pos = hold;
             player.shot_charge = 0.0;
             player.charge_warmup_left = params.shot_charge_warmup_s;
-            // Grace so the kicker can't instantly re-tackle the reclaim
-            // (sim Away stole back ~0.13s after Home claimed the opening dump).
-            poss.pickup_lockout = params
-                .pickup_delay_after_exchange_s
-                .max(poss.pickup_lockout);
+            // NO lockout on an uncontested pickup. `pickup_delay_after_exchange_s`
+            // is, by its own definition, `Ball.pickupDelayAfterExchange` — wired
+            // on a successful tackle EXCHANGE, which this is not. It was applied
+            // here as a grace period so the kicker could not instantly re-tackle
+            // a reclaim, inferred from one opening-dump observation.
+            //
+            // It made a passing relay impossible: measured with `pass_chain`,
+            // player 2 claims a pass and the 0.25 s lockout then blocks player 3
+            // from claiming the NEXT pass for 13 ticks. A receiver cannot see the
+            // lockout, so it presses, gets refused, and — since Interact is an
+            // impulse — burns its only rising edge and never claims at all.
+            //
+            // The concern it was guarding is now covered properly: a kicker
+            // cannot instantly re-take the ball because that needs a release and
+            // a fresh press, which is the impulse rule doing its job.
+            //
+            // UNCERTAIN: whether the real game also has some cooldown here is
+            // unmeasured. The tackle-exchange lockout is untouched.
             poss.opening_dump_hang = false;
             poss.opening_hot_reclaim = false;
             poss.kick_exclude_shooter = None;
@@ -626,7 +669,10 @@ mod tests {
         assert!(drain.attacker_wins);
         assert!(drain.drain.abs() < 1e-5);
         assert_eq!(poss.carrier, Some((TeamId::Away, 1)));
-        assert!(poss.pickup_lockout >= 0.55);
+        // No lockout is armed. This used to assert `pickup_lockout >= 0.55`,
+        // a constant with no source, which made the test a pin for invented
+        // behaviour rather than a check of the thing it is named after.
+        assert_eq!(poss.pickup_lockout, 0.0);
     }
 
     #[test]
