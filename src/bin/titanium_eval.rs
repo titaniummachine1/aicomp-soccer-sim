@@ -61,6 +61,7 @@ fn main() {
                 engine: GraphEngine::Runtime,
                 params: SimParams::default(),
                 job_index: Some(n),
+                mercy: true,
             })
             .collect::<Vec<_>>()
     };

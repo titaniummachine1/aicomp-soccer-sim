@@ -38,6 +38,8 @@ struct Args {
     /// When `Some`, run N matches and emit JSONL (even if N == 1).
     batch: Option<usize>,
     jobs: Option<usize>,
+    /// Stop a shutout blowout early. Off for goal-ranked promotion gates.
+    mercy: bool,
 }
 
 fn print_help() {
@@ -102,6 +104,9 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut until_goal = false;
     let mut win_goals = None;
     let mut quiet = false;
+    // Mercy stops a shutout blowout early. Promotion gates rank on goals
+    // scored, so they turn it off with --no-mercy.
+    let mut mercy = true;
     let mut batch = None;
     let mut jobs = None;
 
@@ -216,6 +221,12 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 }
                 win_goals = Some(n);
             }
+            "--no-mercy" => {
+                // Promotion gates rank on goals scored, so a runaway must be
+                // allowed to run: stopping at 7-0 records 7 for a build that
+                // would have scored 12.
+                mercy = false;
+            }
             "--quiet" => quiet = true,
             other => return Err(format!("unknown arg '{other}' (see --help)")),
         }
@@ -243,6 +254,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         until_goal,
         win_goals,
         quiet,
+        mercy,
         batch,
         jobs,
     })
@@ -280,6 +292,7 @@ fn run_single(args: &Args, params: SimParams) -> Result<BatchMatchResult, String
         engine: GraphEngine::Runtime,
         params,
         job_index: None,
+        mercy: args.mercy,
     };
     let cache = ProgramCache::new();
     run_match_job(&job, Some(&cache), args.quiet)
@@ -306,6 +319,7 @@ fn run_batch(args: &Args, params: SimParams) -> Vec<Result<BatchMatchResult, Str
                 engine: GraphEngine::Runtime,
                 params: params.clone(),
                 job_index: Some(i),
+                mercy: args.mercy,
             }
         })
         .collect();

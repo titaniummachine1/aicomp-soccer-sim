@@ -447,8 +447,19 @@ fn main() {
         eprintln!("params load failed ({e}); using fallbacks");
         SimParams::default()
     });
+    // Clear first so a stale flag cannot be blamed on this graph, then read it
+    // straight after each side compiles — that is what attributes the cycle to
+    // LEFT or RIGHT.
+    let _ = aicomp_soccer_sim::graph_vm::take_recursion_limit_hit();
     let (home_brain, home_path) = resolve_brain(&args.home);
+    let home_recursion = aicomp_soccer_sim::graph_vm::take_recursion_limit_hit();
     let (away_brain, away_path) = resolve_brain(&args.away);
+    let away_recursion = aicomp_soccer_sim::graph_vm::take_recursion_limit_hit();
+    if home_recursion || away_recursion {
+        error!(
+            "recursion depth reached (left={home_recursion} right={away_recursion})              — the graph has a dependency cycle and cannot be lowered"
+        );
+    }
 
     let asset_root = portable_asset_root();
     eprintln!(
@@ -523,6 +534,10 @@ fn main() {
                 }),
         )
         .insert_resource(ClearColor(Color::srgb(0.10, 0.40, 0.16)))
+        .insert_resource(RecursionAlert {
+            home: home_recursion,
+            away: away_recursion,
+        })
         .insert_resource(ViewerOpening(args.opening))
         .insert_resource(Titanium1v1Mode {
             scenario: args.scenario,
@@ -589,6 +604,7 @@ fn main() {
             Update,
             (
                 sync_player_number_visibility,
+                refresh_recursion_alert,
                 sim_tick_barrier,
                 tick_ui_pulse,
                 handle_hotkeys,
@@ -606,6 +622,29 @@ fn main() {
             ),
         )
         .run();
+}
+
+/// Show which side's graph could not be lowered, top-left, permanently.
+///
+/// Not a transient toast: the ports behind the cycle stay null for the whole
+/// run, so every decision built on them is unsimulated for as long as that
+/// graph is loaded. A message that faded would imply the problem had passed.
+fn refresh_recursion_alert(
+    alert: Res<RecursionAlert>,
+    mut q: Query<(&mut Text, &mut Visibility), With<RecursionAlertText>>,
+) {
+    let Ok((mut text, mut vis)) = q.single_mut() else {
+        return;
+    };
+    match alert.message() {
+        Some(msg) => {
+            if text.0 != msg {
+                *text = Text::new(msg);
+            }
+            *vis = Visibility::Inherited;
+        }
+        None => *vis = Visibility::Hidden,
+    }
 }
 
 /// Player numbers are debug output, not part of the normal view.
@@ -780,6 +819,31 @@ fn load_graph_brain(path: &Path) -> ActiveBrain {
         Err(e) => {
             warn!("graph load failed ({path:?}): {e} — using ChaseBallBrain");
             ActiveBrain::Chase(ChaseBallBrain::default())
+        }
+    }
+}
+
+#[derive(Component)]
+struct RecursionAlertText;
+
+/// Which side's graph hit the lowering recursion cap, if either.
+///
+/// A cycle has no base case, so the graph cannot be lowered and nothing built
+/// from it is a real decision. No salvage is attempted — the real game does not
+/// survive this either. The banner just says which side is broken.
+#[derive(Resource, Default)]
+struct RecursionAlert {
+    home: bool,
+    away: bool,
+}
+
+impl RecursionAlert {
+    fn message(&self) -> Option<String> {
+        match (self.home, self.away) {
+            (true, true) => Some("RECURSION DEPTH REACHED BY LEFT AND RIGHT".into()),
+            (true, false) => Some("RECURSION DEPTH REACHED BY LEFT".into()),
+            (false, true) => Some("RECURSION DEPTH REACHED BY RIGHT".into()),
+            (false, false) => None,
         }
     }
 }
@@ -1501,6 +1565,24 @@ fn setup_ui(
     timescale: Res<SimTimeScale>,
     scenario: Res<Titanium1v1Mode>,
 ) {
+    // Recursion banner: absolutely positioned top-left, above everything, and
+    // hidden until a graph actually trips the cap.
+    commands.spawn((
+        RecursionAlertText,
+        Text::new(""),
+        TextFont::from_font_size(16.0),
+        TextColor(Color::srgb(1.0, 0.45, 0.35)),
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(10.0),
+            top: Val::Px(72.0),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.05, 0.0, 0.0, 0.85)),
+        Visibility::Hidden,
+        ZIndex(50),
+    ));
+
     // Top bar: team pickers + transport (score lives behind the goals).
     commands
         .spawn((

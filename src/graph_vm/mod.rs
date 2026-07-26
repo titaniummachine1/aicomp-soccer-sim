@@ -20,7 +20,9 @@ pub mod verify;
 pub use builder::ProgramBuilder;
 pub use context::{ApiSnapshot, ExecutionContext, ExecutionFrame, RuntimeState, VariableId};
 pub use interpreter::Interpreter;
-pub use lower::{ApiKind, ApiSlotTable, CompileResult, Lowerer, VariableTable};
+pub use lower::{
+    take_recursion_limit_hit, ApiKind, ApiSlotTable, CompileResult, Lowerer, VariableTable,
+};
 pub use opcode::{Instruction, OpCode, OpEffect, OpInfo};
 pub use program::RuntimeProgram;
 pub use runtime_brain::{CachedProgram, RuntimeBrain};

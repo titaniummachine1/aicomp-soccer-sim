@@ -121,7 +121,31 @@ struct CallFrame {
 /// silently times out / skips that tick's decision for the affected player.
 /// Matching that (return a null constant and stop recursing) instead of a
 /// hard process crash is the correct behavior, not "make the cycle resolve."
-const MAX_LOWER_DEPTH: u32 = 5000;
+///
+/// 1500 is MEASURED, not chosen for roundness — see
+/// `a_cycle_reaches_the_depth_cap_without_overflowing`. On a 2 MB stack a true
+/// cycle survives at 1500 and overflows at 3000. This was 5000, which already
+/// overflowed: the cap meant to prevent a stack overflow was itself set past
+/// the overflow point, so a cyclic graph killed the process instead of being
+/// reported. A stack overflow aborts and cannot be caught, so the margin here
+/// is deliberate.
+const MAX_LOWER_DEPTH: u32 = 1_500;
+
+/// Set when a lowering hit [`MAX_LOWER_DEPTH`], i.e. the graph has a cycle.
+///
+/// No attempt is made to salvage the graph. A cycle means the dependency chain
+/// has no base case, so there is no correct value to produce and guessing one
+/// would fabricate a decision. The real game does not survive this either. The
+/// port resolves null, the flag is set, and the caller reports it — that is the
+/// whole contract.
+static RECURSION_LIMIT_HIT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Did any lowering hit the recursion cap? Clears the flag as it reads, so the
+/// caller sees each occurrence once.
+pub fn take_recursion_limit_hit() -> bool {
+    RECURSION_LIMIT_HIT.swap(false, std::sync::atomic::Ordering::Relaxed)
+}
 
 #[derive(Debug)]
 pub struct Lowerer {
@@ -501,6 +525,9 @@ impl Lowerer {
             return r;
         }
         if self.lower_depth >= MAX_LOWER_DEPTH {
+            // Stop. The chain has no base case; unwind with a null and let the
+            // caller report an unusable graph.
+            RECURSION_LIMIT_HIT.store(true, std::sync::atomic::Ordering::Relaxed);
             return self.emit_const_null(port_sid, "depth-limit");
         }
         let Some(pref) = self.graph.ports.get(port_sid).cloned() else {
@@ -1571,5 +1598,93 @@ mod tests {
         assert!((line.a.x - 1.0).abs() < 1e-4 && (line.a.y - 2.0).abs() < 1e-4);
         assert!((line.b.x - 5.0).abs() < 1e-4 && (line.b.y - 6.0).abs() < 1e-4);
         assert_eq!(line.rgba, crate::debug_draw::named_rgba("Orange"));
+    }
+
+    /// A true cycle must hit the cap WITHOUT overflowing the stack.
+    ///
+    /// This is the whole justification for whatever `MAX_LOWER_DEPTH` is set
+    /// to: two AddFloats nodes feeding each other recurse until the cap, so
+    /// this exercises the deepest path the lowerer can ever take. A stack
+    /// overflow here aborts the process (Rust cannot catch it), which in the
+    /// viewer means the game dies rather than reporting a bad graph — so the
+    /// cap has to be low enough that this test passes on a normal 2 MB test
+    /// thread, not merely on the 8 MB main thread.
+    #[test]
+    fn a_cycle_reaches_the_depth_cap_without_overflowing() {
+        // a.Float1 <- b.Float1out, b.Float1 <- a.Float1out : unbreakable loop.
+        let raw = RawGraph {
+            nodes: vec![
+                node(
+                    "AddFloats",
+                    "a",
+                    "",
+                    vec![
+                        port("Float1", "a_in1", 0, "a"),
+                        port("Float2", "a_in2", 0, "a"),
+                        port("Float1", "a_out", 1, "a"),
+                    ],
+                ),
+                node(
+                    "AddFloats",
+                    "b",
+                    "",
+                    vec![
+                        port("Float1", "b_in1", 0, "b"),
+                        port("Float2", "b_in2", 0, "b"),
+                        port("Float1", "b_out", 1, "b"),
+                    ],
+                ),
+                node("Bool", "bf", "1", vec![port("Bool1", "bfo", 1, "bf")]),
+                node("Float", "z", "0", vec![port("Float1", "zo", 1, "z")]),
+                node(
+                    "ConstructVector3",
+                    "cv",
+                    "",
+                    vec![
+                        port("Vector31", "cvo", 1, "cv"),
+                        port("Float1", "cvx", 0, "cv"),
+                        port("Float2", "cvy", 0, "cv"),
+                        port("Float3", "cvz", 0, "cv"),
+                    ],
+                ),
+                node(
+                    "SoccerController1",
+                    "c1",
+                    "",
+                    vec![
+                        port("Vector31", "c1m", 0, "c1"),
+                        port("Bool1", "c1s", 0, "c1"),
+                        port("Bool2", "c1i", 0, "c1"),
+                    ],
+                ),
+            ],
+            connections: vec![
+                RawConnection { port0: "b_out".into(), port1: "a_in1".into() },
+                RawConnection { port0: "a_out".into(), port1: "b_in1".into() },
+                RawConnection { port0: "a_out".into(), port1: "cvx".into() },
+                RawConnection { port0: "zo".into(), port1: "cvy".into() },
+                RawConnection { port0: "zo".into(), port1: "cvz".into() },
+                RawConnection { port0: "cvo".into(), port1: "c1m".into() },
+                RawConnection { port0: "bfo".into(), port1: "c1s".into() },
+                RawConnection { port0: "bfo".into(), port1: "c1i".into() },
+            ],
+        };
+        let graph = crate::graph::load::index_graph(raw, "cycle".into());
+        let _ = take_recursion_limit_hit();
+
+        // Run it on a thread with an explicitly SMALL stack. Passing here means
+        // the cap is safe with margin, not merely safe on this machine's main
+        // thread.
+        let handle = std::thread::Builder::new()
+            .stack_size(1 << 21) // 2 MB, the usual test-thread size
+            .spawn(move || {
+                let _ = Lowerer::compile(graph);
+            })
+            .expect("spawn");
+        assert!(handle.join().is_ok(), "lowering a cycle overflowed the stack");
+        assert!(
+            take_recursion_limit_hit(),
+            "a cycle must trip the recursion cap"
+        );
     }
 }

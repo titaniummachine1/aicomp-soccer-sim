@@ -198,6 +198,9 @@ pub struct MatchJob {
     pub engine: GraphEngine,
     pub params: SimParams,
     pub job_index: Option<usize>,
+    /// Stop early on a shutout blowout. Off for promotion gates that rank on
+    /// goals scored — see the mercy rule below.
+    pub mercy: bool,
 }
 
 /// Match outcome — same fields as headless `MatchResult`, plus optional batch metadata.
@@ -449,10 +452,17 @@ pub fn run_match_job(
                 break;
             }
         }
-        // Mercy rule: a 7-goal lead ends it immediately. Once a match is that
-        // one-sided the remaining minutes add no information to a gate result,
-        // and they cost real wall-clock across a round robin.
-        if sh.abs_diff(sa) >= MERCY_GOAL_DIFF {
+        // Mercy rule: a 7-goal lead ends it, but ONLY as a shutout. A 9-2 is
+        // still a contest — both sides are scoring and the remaining minutes
+        // carry information — whereas 7-0 has settled. Requiring the loser on
+        // zero also stops the rule firing in exactly the matches a goals-based
+        // gate cares most about.
+        //
+        // `mercy` is off for promotion gates: truncating a runaway at 7 makes
+        // a build that would have scored 12 record 7, so the metric saturates
+        // against weak opponents and a dominant candidate is punished for the
+        // clock rather than rewarded for the scoreline.
+        if job.mercy && sh.abs_diff(sa) >= MERCY_GOAL_DIFF && (sh == 0 || sa == 0) {
             mercy_stopped = true;
             goal_stopped = true;
             break;
@@ -544,6 +554,7 @@ mod tests {
                     engine: GraphEngine::Runtime,
                     params: params.clone(),
                     job_index: Some(i),
+                    mercy: true,
                 }
             })
             .collect();

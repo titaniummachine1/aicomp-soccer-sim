@@ -151,13 +151,26 @@ impl MatchState {
 }
 
 fn random_opening_kickoff() -> TeamId {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
     use std::time::{SystemTime, UNIX_EPOCH};
-    let bit = SystemTime::now()
+
+    // Do NOT use `nanos & 1`. That is what this did, and it always returned
+    // Home: the Windows system clock ticks in 100 ns units, so `as_nanos()` is
+    // always a multiple of 100 — always even — and the low bit is a constant
+    // zero. The coin flip was not biased, it was frozen, and every match
+    // opened with the left side kicking off.
+    //
+    // Hashing fixes it two ways: `RandomState` is seeded by the OS per process,
+    // and the hash diffuses the clock's high bits (which do vary) down into
+    // bit 0 instead of reading a bit the clock never sets.
+    let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos())
-        .unwrap_or(0)
-        & 1;
-    if bit == 0 {
+        .unwrap_or(0);
+    let mut hasher = RandomState::new().build_hasher();
+    hasher.write_u128(nanos);
+    if hasher.finish() & 1 == 0 {
         TeamId::Home
     } else {
         TeamId::Away
@@ -272,5 +285,31 @@ pub fn kickoff_control_allowed(
         // side stays out of the centre circle, and that is handled separately
         // by `clamp_receiving_team_outside_kickoff_circle`.
         MatchPhase::Kickoff => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{random_opening_kickoff, TeamId};
+
+    #[test]
+    fn opening_kickoff_is_actually_random() {
+        // Regression: this used `nanos & 1`, and on Windows the system clock
+        // ticks in 100 ns units, so `as_nanos()` is always a multiple of 100 —
+        // always even — and the low bit is a constant zero. The coin flip was
+        // not biased, it was frozen: every match opened with Home kicking off.
+        // 200 draws all landing on one side would be ~2^-200 if it is fair.
+        let mut home = 0;
+        let mut away = 0;
+        for _ in 0..200 {
+            match random_opening_kickoff() {
+                TeamId::Home => home += 1,
+                TeamId::Away => away += 1,
+            }
+        }
+        assert!(
+            home > 0 && away > 0,
+            "opening kickoff never varied over 200 draws: {home} home / {away} away"
+        );
     }
 }
