@@ -10,8 +10,8 @@
 //!     label after it. 14 of the 15 floats the champion reads resolved to the
 //!     wrong value — `Team Player 1 Stamina` returned the constant `Goal
 //!     Height`. Fixed 2026-07-26; every gate result before that is void.
-//!   * `Team Possession %` returns 0..100 here and 0..1 in the real game,
-//!     measured the same day. Still open.
+//!   * `Team Possession %` returned 0..100 here and 0..1 in the real game.
+//!     Measured and corrected the same day.
 //!
 //! Neither was caught by any test, because "returns a plausible float" is not
 //! a testable property. Naming the evidence is.
@@ -110,26 +110,23 @@ const FLOAT_GRADES: &[Graded] = &[
     },
     Graded {
         label: "Team Possession %",
-        confidence: Confidence::Unimplemented,
-        note: "SCALE MISMATCH: sim returns 0..100 starting at 50; game returns \
-               0..1 (read 1.000 at 100% possession). Decides a goalless \
-               tournament match, so this must be fixed before it is used.",
+        confidence: Confidence::Confirmed,
+        note: "0..1 FRACTION, not a percentage despite the label, and 0 before anyone touches it. A probe holding the ball all match read 1.000 while its opponent read 0.000 (MatchProbe 2026-07-26). Sim corrected from 0..100-starting-at-50.",
     },
     Graded {
         label: "Opponent Possession %",
-        confidence: Confidence::Unimplemented,
-        note: "same 0..100 vs 0..1 mismatch as Team Possession %",
+        confidence: Confidence::Confirmed,
+        note: "same 0..1 fraction as Team Possession %; read 0.000 in game throughout while the other side held the ball (MatchProbe 2026-07-26)",
     },
     Graded {
         label: "Team Attacking %",
-        confidence: Confidence::Unimplemented,
-        note: "sim returns 50.0 at kickoff, game returns 0.000 — scale and \
-               baseline both unverified",
+        confidence: Confidence::Confirmed,
+        note: "0..1 fraction with a 0 baseline; read 0.000 for both sides across the reference recording (MatchProbe 2026-07-26). Sim corrected from 50.0-at-kickoff.",
     },
     Graded {
         label: "Opponent Attacking %",
-        confidence: Confidence::Unimplemented,
-        note: "same as Team Attacking %",
+        confidence: Confidence::Confirmed,
+        note: "same 0..1 fraction and 0 baseline as Team Attacking %; read 0.000 in game throughout (MatchProbe 2026-07-26)",
     },
     Graded {
         label: "Ball Carrier Stamina",
@@ -139,14 +136,38 @@ const FLOAT_GRADES: &[Graded] = &[
     },
     Graded {
         label: "Goal Height",
-        confidence: Confidence::Uncertain,
-        note: "sim reports 2.44; no real-game reading captured yet",
+        confidence: Confidence::Confirmed,
+        note: "4.000 in game, constant (MatchProbe 2026-07-26). The sim had 2.44, a placeholder that outlived the TimePlot it was waiting for.",
     },
     Graded {
         label: "Kickoff Circle Radius",
-        confidence: Confidence::Uncertain,
-        note: "sim reports 7.25; matches the measured 7.75 standoff minus a body \
-               radius, but was never read from the game directly",
+        confidence: Confidence::Confirmed,
+        note: "7.250 in game and sim (MatchProbe 2026-07-26); also explains Titanium's measured 7.75 standoff: circle plus 0.5 clearance.",
+    },
+    Graded {
+        label: "Ball Carrier Shot Charge",
+        confidence: Confidence::Confirmed,
+        note: "0..1 in game, matching the sim's range (MatchProbe 2026-07-26)",
+    },
+    Graded {
+        label: "Teammate 1 Shot Charge",
+        confidence: Confidence::Confirmed,
+        note: "0..1 in game, matching the sim's range (MatchProbe 2026-07-26)",
+    },
+    Graded {
+        label: "Team Player 1 Stamina",
+        confidence: Confidence::Confirmed,
+        note: "1.000 at full in game, matching the sim's 0..1 (MatchProbe 2026-07-26)",
+    },
+    Graded {
+        label: "Opponent Player 1 Stamina",
+        confidence: Confidence::Confirmed,
+        note: "1.000 at full in game, matching the sim's 0..1 (MatchProbe 2026-07-26)",
+    },
+    Graded {
+        label: "Stamina of last defending opponent",
+        confidence: Confidence::Confirmed,
+        note: "1.000 at full in game (MatchProbe 2026-07-26)",
     },
 ];
 
@@ -219,11 +240,20 @@ mod tests {
     }
 
     #[test]
-    fn known_mismatches_are_flagged_not_forgotten() {
-        assert_eq!(
-            grade("Team Possession %").confidence,
-            Confidence::Unimplemented,
-            "the 0..100 vs 0..1 mismatch is unfixed; downgrade only when it is"
-        );
+    fn confirmed_grades_cite_their_evidence() {
+        // "Confirmed" claims somebody compared it to the real game, so it has
+        // to say which reading. Without that the grade is just an opinion with
+        // a nicer label, which is the failure mode this whole module exists to
+        // prevent.
+        for g in FLOAT_GRADES {
+            if g.confidence == Confidence::Confirmed {
+                assert!(
+                    g.note.contains("in game") || g.note.contains("MatchProbe"),
+                    "{:?} is marked Confirmed but cites no reading: {:?}",
+                    g.label,
+                    g.note
+                );
+            }
+        }
     }
 }

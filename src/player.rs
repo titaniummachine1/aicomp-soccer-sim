@@ -100,10 +100,6 @@ pub fn step_mover(
     is_carrier: bool,
     opp_has_ball: bool,
     first_kick_done: bool,
-    // When carrying, prefer Clear.Carrier over MoveTo for facing (baseline:
-    // hold stays on C while MoveTo already tracks H).
-    face_aim: Option<Vec2>,
-    angular_speed_deg: f32,
     dt: f32,
 ) {
     // Measured (user, 2026-07-25): walk 7.0, sprint 8.0, sprint on EMPTY
@@ -140,12 +136,35 @@ pub fn step_mover(
     // Arrive / brake-to-rest: target reached, or within the distance needed
     // to stop at decel 200. Kinematic update matches continuous s=v²/(2a)
     // (same form as ball Coulomb slide).
-    // Order within a tick is MOVEMENT, then ROTATION, then interaction (the
-    // caller applies interaction afterwards). Rotation used to run first, and
-    // the arrive/brake path returned before reaching it at all, so a player
-    // coming to rest never turned.
-    let braking = dist <= 1e-3 || dist <= brake_dist;
-    if braking {
+    // 1. DIRECTION. There is no look direction: facing IS walk direction, set
+    // instantly and unconditionally. Measured from a real-game TimePlot over
+    // 3858 ticks of a player carrying the ball while moving — the angle between
+    // (ball - player) and the movement delta had median 0.00 deg and p90
+    // 0.00 deg. The 51 ticks above 10 deg were all braking at a turnaround
+    // (speed 3.2 -> 1.3 -> 0.6 m/s, the same three values every reversal),
+    // i.e. the movement delta shrinking below the point where it defines a
+    // direction — not the ball pointing anywhere on its own.
+    //
+    // Two mechanisms used to decouple the two and are gone:
+    //   * `face_aim` forced the Away carrier onto Clear F for the opening
+    //     kickoff. A hardcoded parity hack for one recording.
+    //   * a `sticky` guard blocked turns over ~90 deg during charge warmup.
+    // Both invented a state the recording says does not exist, and both broke
+    // the invariant every anti-tackle prediction rests on: a held ball is at
+    // player.pos + walk_direction * hold_offset, no exceptions, so the ball
+    // rotates WITH the chosen heading before that heading is walked along.
+    //
+    // The removed `angular_speed_deg` rate limit is what made anti-tackle
+    // unfixable: a carrier that chose a new heading had its ball swing out
+    // along the OLD facing, misplaced by up to 3.2 m (2x the 1.67 m hold
+    // offset), so every escape angle was planned for a ball position the tick
+    // never produced.
+    if dist > 1e-6 {
+        player.facing = to.normalize();
+    }
+
+    // 2. MOVEMENT. Arrive / brake-to-rest first, then the accelerating case.
+    if dist <= 1e-3 || dist <= brake_dist {
         if speed > 1e-6 {
             let dir = player.vel.normalize();
             let decel = mover.decel.max(1e-6);
@@ -161,39 +180,13 @@ pub fn step_mover(
         } else {
             player.vel = Vec2::ZERO;
         }
-    }
-
-    // Facing follows MoveTo (held ball sits on facing × hold_offset). Carriers
-    // only override via `face_aim` during charge warmup (Clear sticky, quirk #24).
-    let want_move = if dist > 1e-6 { to.normalize() } else { player.facing };
-    let want_face = face_aim
-        .filter(|d| d.length_squared() > 1e-8)
-        .map(|d| d.normalize())
-        .unwrap_or(want_move);
-    let sticky = is_carrier
-        && player.charge_warmup_left > 0.0
-        // Away opening must be allowed to yaw from walk-in +Z onto Clear F;
-        // the generic sticky reject of ~90° flips blocked exactly that turn.
-        && !(player.team == TeamId::Away && !first_kick_done);
-    let allow_turn = !(sticky && want_face.dot(player.facing) < 0.25);
-    if allow_turn {
-        // INSTANT. Setting a direction turns you by the time the tick is
-        // finalised; there is no per-tick angular speed limit.
-        //
-        // The rate limit that was here (`angular_speed_deg`) is what made
-        // anti-tackle unfixable. A held ball sits at facing * hold_offset, so a
-        // carrier that chose a new heading had its ball swing out along the OLD
-        // facing instead — measured misplacement of up to 3.2 m, which is 2x the
-        // 1.67 m hold offset. Every escape angle was planned for a ball position
-        // the tick never produced.
-        player.facing = want_face;
-    }
-
-    if braking {
         return;
     }
 
-    let desired = want_move * max_speed;
+    // Movement follows the heading set above. Reaching here implies dist > 1e-3,
+    // so `player.facing` is exactly `to.normalize()` — you walk where you look
+    // because they are the same vector.
+    let desired = player.facing * max_speed;
     let delta = desired - player.vel;
     let max_delta = mover.accel * dt;
     if delta.length() <= max_delta {
@@ -372,6 +365,51 @@ mod tests {
     }
 
     #[test]
+    fn facing_is_walk_direction_with_no_turn_rate_limit() {
+        // The invariant the whole anti-tackle model rests on: choose a heading,
+        // and by the time the tick is finalised you are facing it exactly — so
+        // the held ball (facing * hold_offset) is where the solver placed it.
+        //
+        // Measured over 3858 real-game ticks of a carrier moving with the ball:
+        // median angle between (ball - player) and the movement delta 0.00 deg.
+        let params = SimParams::default();
+        let mover = SimpleMover::from_params(&params);
+        let mut player = test_player(Vec2::ZERO, Vec2::new(7.0, 0.0));
+        assert_eq!(player.facing, Vec2::X);
+
+        // A full 180 reversal, the worst case a turn cap would smear over
+        // several ticks. One tick is enough.
+        let target = Vec2::new(-50.0, 0.0);
+        step_mover(&mut player, &mover, target, false, true, false, true, 0.019);
+        assert!(
+            (player.facing - Vec2::NEG_X).length() < 1e-5,
+            "facing {:?} did not reach the chosen heading in one tick",
+            player.facing
+        );
+
+        // And an arbitrary angle, while charging a shot — the old `sticky`
+        // guard blocked exactly this turn.
+        let mut charging = test_player(Vec2::ZERO, Vec2::new(7.0, 0.0));
+        charging.charge_warmup_left = 0.2;
+        let want = Vec2::new(-3.0, 4.0).normalize();
+        step_mover(
+            &mut charging,
+            &mover,
+            want * 50.0,
+            false,
+            true,
+            false,
+            true,
+            0.019,
+        );
+        assert!(
+            (charging.facing - want).length() < 1e-5,
+            "charge warmup still rate-limits facing: {:?} want {want:?}",
+            charging.facing
+        );
+    }
+
+    #[test]
     fn held_ball_projects_onto_sideline_without_changing_facing() {
         let params = SimParams::default();
         let facing = Vec2::Y;
@@ -437,8 +475,6 @@ mod tests {
                 false,
                 false,
                 true,
-                None,
-                params.angular_speed_deg,
                 dt,
             );
             t += dt;
@@ -473,8 +509,6 @@ mod tests {
             false,
             false,
             true,
-            None,
-            params.angular_speed_deg,
             dt,
         );
         let expected = 8.0 - 200.0 * dt;
@@ -500,8 +534,6 @@ mod tests {
             false,
             false,
             true,
-            None,
-            params.angular_speed_deg,
             dt,
         );
         let expected = 100.0 * dt; // 2.0 m/s after one tick from rest

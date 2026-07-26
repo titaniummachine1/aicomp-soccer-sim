@@ -71,10 +71,6 @@ pub struct SimParams {
     /// Vertical bounce restitution (TimePlot landings ≈0.23; material 0.4 high).
     pub ball_bounce_e: f32,
     pub ball_bounce_settle: f32,
-    /// Facing turn cap (deg/s). TimePlot DB18: yaw steps **exactly 2500**
-    /// (47.5° / FixedDt 0.019s). Forward.X looks nonlinear because it is cos(θ);
-    /// do not use |dForward.X/dt| as deg/s (~40 peak ≠ 4014).
-    pub angular_speed_deg: f32,
     /// Idle seconds after sprint before regen starts (Frida staminaRegenDelay).
     pub stamina_regen_delay_s: f32,
     /// Extra regen lockout after a tackle (Frida tackleStaminaRegenDelay).
@@ -177,7 +173,6 @@ impl SimParams {
             // stays down. Ball.Y traces show no rebound into flight.
             ball_bounce_e: 0.0,
             ball_bounce_settle: 0.5,
-            angular_speed_deg: 2500.0,
             stamina_regen_delay_s: 0.0,
             stamina_tackle_regen_delay_s: 0.0,
             // TimePlot 17-05-04 DebugBuild=14 continuous sprint/has segments.

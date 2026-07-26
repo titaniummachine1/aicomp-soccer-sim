@@ -262,8 +262,10 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
     floats.insert("Field Depth", 80.0);
     floats.insert("Kickoff Circle Radius", params.kickoff_circle_r);
     floats.insert("Goal Width", params.goal_half_width * 2.0);
-    // Visual/API height; pitch physics is 2D XZ. FIFA-ish default until TimePlot.
-    floats.insert("Goal Height", 2.44);
+    // MEASURED from a real-game TimePlot export (timeplot_2026-07-26_13-55-55):
+    // the game reports 4.000, constant. Was 2.44, a "FIFA-ish default until
+    // TimePlot" placeholder that outlived the TimePlot.
+    floats.insert("Goal Height", 4.0);
     floats.insert("Pi", std::f32::consts::PI);
     floats.insert("ground_line", 5.0);
     floats.insert("Area Depth", 12.5);
@@ -293,21 +295,17 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
         ),
     };
     let poss_tot = poss_team + poss_opp;
+    // MEASURED: the real game reports these as a FRACTION 0..1, not a
+    // percentage, and starts at 0 rather than an even 50/50 split. A probe
+    // holding the ball for a whole match read 1.000 while its opponent read
+    // 0.000 (timeplot_2026-07-26_13-55-55). Despite the "%" in the label.
     floats.insert(
         "Team Possession %",
-        if poss_tot > 1e-6 {
-            100.0 * poss_team / poss_tot
-        } else {
-            50.0
-        },
+        if poss_tot > 1e-6 { poss_team / poss_tot } else { 0.0 },
     );
     floats.insert(
         "Opponent Possession %",
-        if poss_tot > 1e-6 {
-            100.0 * poss_opp / poss_tot
-        } else {
-            50.0
-        },
+        if poss_tot > 1e-6 { poss_opp / poss_tot } else { 0.0 },
     );
 
     let (atk_team, atk_opp) = match team {
@@ -321,21 +319,15 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
         ),
     };
     let atk_tot = atk_team + atk_opp;
+    // Same 0..1 fraction and 0 baseline as possession above; the real game read
+    // 0.000 for both sides throughout the reference recording.
     floats.insert(
         "Team Attacking %",
-        if atk_tot > 1e-6 {
-            100.0 * atk_team / atk_tot
-        } else {
-            50.0
-        },
+        if atk_tot > 1e-6 { atk_team / atk_tot } else { 0.0 },
     );
     floats.insert(
         "Opponent Attacking %",
-        if atk_tot > 1e-6 {
-            100.0 * atk_opp / atk_tot
-        } else {
-            50.0
-        },
+        if atk_tot > 1e-6 { atk_opp / atk_tot } else { 0.0 },
     );
 
     floats.insert("Ball Speed", world.ball.vel.length());

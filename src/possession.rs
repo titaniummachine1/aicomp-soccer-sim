@@ -438,6 +438,80 @@ mod tests {
     use crate::player::{Player, PlayerId};
 
     #[test]
+    fn ball_is_placed_from_the_new_facing_before_interaction_resolves() {
+        // Tick order: ROTATION, then MOVEMENT along it, then BALL PLACEMENT at
+        // the hold offset from that rotation (wall-projected), and only THEN
+        // interaction. This test pins step 3 happening before step 4.
+        //
+        // The carrier reverses. Its ball swings from +hold_offset to
+        // -hold_offset, a 3.34 m move, onto a defender standing behind it. If
+        // the ball is placed after the interact loop instead (as it used to
+        // be), that defender is judged against last tick's ball at 3.34 m —
+        // nearly 2x interact radius — and the tackle silently cannot happen.
+        let params = SimParams::default();
+        let mover = crate::player::SimpleMover::from_params(&params);
+        let mut carrier = Player {
+            team: TeamId::Home,
+            id: PlayerId(1),
+            pos: Vec2::ZERO,
+            vel: Vec2::new(7.0, 0.0),
+            facing: Vec2::X,
+            stamina: 1.0,
+            stamina_regen_lock_left: 0.0,
+            shot_charge: 0.0,
+            charge_warmup_left: 0.0,
+            interact_held: false,
+        };
+        let mut ball = Ball {
+            pos: carrier.hold_pos(params.hold_offset),
+            vel: Vec2::ZERO,
+            height: params.ball_rest_height,
+            vel_y: 0.0,
+            held: true,
+        };
+        let stale = ball.pos;
+        let poss = Possession {
+            carrier: Some((TeamId::Home, 1)),
+            ..Default::default()
+        };
+
+        // 1 + 2: rotation, then movement along the new heading.
+        crate::player::step_mover(
+            &mut carrier,
+            &mover,
+            Vec2::new(-50.0, 0.0),
+            false,
+            true,
+            false,
+            true,
+            0.019,
+        );
+        assert!((carrier.facing - Vec2::NEG_X).length() < 1e-5);
+
+        // 3: ball placement from that facing.
+        sync_held_ball(&mut ball, &[carrier.clone()], &poss, &params);
+        assert!(
+            (ball.pos - carrier.hold_pos_playable(&params)).length() < 1e-6,
+            "ball not at the wall-projected hold point"
+        );
+
+        // 4: interaction now sees the ball where the rotation put it.
+        let defender_at = ball.pos;
+        // The stale ball is out of interact range of this defender entirely,
+        // which is the whole point: under the old order the tackle could not
+        // even be attempted.
+        assert!(
+            (defender_at - stale).length() > params.interact_radius,
+            "test is not exercising the stale-ball case: gap {}",
+            (defender_at - stale).length()
+        );
+        assert!(
+            (defender_at - ball.pos).length() <= params.interact_radius,
+            "a defender on the new hold point must be able to interact"
+        );
+    }
+
+    #[test]
     fn equal_stamina_tackle_tackler_wins_both_drain() {
         let params = SimParams::default();
         let mut ball = Ball {

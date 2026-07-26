@@ -19,7 +19,7 @@ mod snapshot;
 mod coverage_test;
 
 pub use clear::{
-    bias_away_opening_clear_f, first_clear_dir, hit_tags, CLEAR_ORDER_AWAY,
+    first_clear_dir, hit_tags, CLEAR_ORDER_AWAY,
     CLEAR_ORDER_HOME, SensorDir, SPHERECAST_DISTANCE, SPHERECAST_RADIUS,
 };
 pub use dense::{

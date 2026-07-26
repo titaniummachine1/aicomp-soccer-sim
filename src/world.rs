@@ -12,7 +12,7 @@
 
 use bevy::prelude::Vec2;
 
-use crate::api::{build_team_api, first_clear_dir, TeamApi, WorldSensors};
+use crate::api::{build_team_api, TeamApi, WorldSensors};
 use crate::ball::{goal_at, step_free_ball, Ball, EndReason};
 use crate::brain::{BrainCommand, BrainOutput, TeamBrain, TeamId};
 use crate::match_state::{
@@ -208,27 +208,22 @@ impl MatchWorld {
 
         tick_possession_timers(&mut self.possession, dt);
 
-        // Index loop so we can re-read live carrier stamina and apply drain
-        // immediately — a frame-start snapshot let later tacklers duel a stale
-        // (often 0) carrier stam and ping-pong steals every tick.
+        // ---------------------------------------------------------------
+        // PHASE 1 — DIRECTION, then MOVEMENT, for EVERY player.
+        //
+        // Interaction cannot start until this loop finishes. A tackle resolved
+        // against half-moved opponents is a tackle against a world state that
+        // never existed, and it is exactly the state an anti-tackle solver
+        // cannot predict: the carrier would have to know its own index in the
+        // player array to know whose positions were already updated.
+        // ---------------------------------------------------------------
+        let mut cmds: Vec<BrainCommand> = Vec::with_capacity(self.players.len());
         for i in 0..self.players.len() {
             let (team, id) = (self.players[i].team, self.players[i].id);
             let raw = match team {
                 TeamId::Home => home.for_player(id),
                 TeamId::Away => away.for_player(id),
             };
-            let carrier_stam = self.possession.carrier.and_then(|(t, cid)| {
-                self.players
-                    .iter()
-                    .find(|p| p.team == t && p.id.0 == cid)
-                    .map(|p| p.stamina)
-            });
-            let carrier_charge = self.possession.carrier.and_then(|(t, cid)| {
-                self.players
-                    .iter()
-                    .find(|p| p.team == t && p.id.0 == cid)
-                    .map(|p| p.shot_charge)
-            });
             // Kickoff restrictions are engine rules, not AI substitution:
             // only the kicking striker may walk into the opening ball.
             let cmd = filter_kickoff(
@@ -268,46 +263,6 @@ impl MatchWorld {
                 self.possession.carrier,
                 Some((t, _)) if t != team
             );
-            let face_aim = if is_carrier
-                && (self.players[i].charge_warmup_left > 0.0
-                    || (team == TeamId::Away && !self.possession.first_kick_done))
-            {
-                // AIA quirk #24: during charge warmup, hold faces Clear
-                // (MoveTo may already track H). Opening Away dump (DB35): keep
-                // facing Clear F for the whole hold so Ball.Z stays −Z; warmup
-                // alone left facing on MoveTo−X and Ball.Z sat +Z of O1.
-                let origin = self.players[i].pos;
-                let is_home = team == TeamId::Home;
-                let blockers: Vec<Vec2> = self
-                    .players
-                    .iter()
-                    .enumerate()
-                    .filter(|(j, _)| *j != i)
-                    .map(|(_, p)| p.pos)
-                    .collect();
-                let blocker_r = self.params.body_radius + crate::api::SPHERECAST_RADIUS;
-                let raw = first_clear_dir(
-                    origin,
-                    is_home,
-                    &blockers,
-                    blocker_r,
-                    crate::api::SPHERECAST_DISTANCE,
-                    true,
-                    true,
-                    self.params.x_min,
-                    self.params.x_max,
-                    self.params.z_min,
-                    self.params.z_max,
-                );
-                crate::api::bias_away_opening_clear_f(
-                    is_home,
-                    self.possession.first_kick_done,
-                    true,
-                    raw,
-                )
-            } else {
-                None
-            };
             step_mover(
                 &mut self.players[i],
                 &self.mover,
@@ -316,8 +271,6 @@ impl MatchWorld {
                 is_carrier,
                 opp_has_ball,
                 self.possession.first_kick_done,
-                face_aim,
-                self.params.angular_speed_deg,
                 dt,
             );
             clamp_player_to_pitch(&mut self.players[i], &self.params);
@@ -327,6 +280,44 @@ impl MatchWorld {
                 &self.params,
             );
             tick_stamina(&mut self.players[i], cmd.sprint, dt, &self.params);
+            cmds.push(cmd);
+        }
+
+        // The held ball rides the carrier's NEW facing and NEW position. It has
+        // to be here, before any interaction is resolved: a tackle is decided on
+        // where the ball is, and the ball rotates with the walk direction that
+        // was just chosen. Syncing only after the interact loop (as this used
+        // to) judged every tackle against last tick's ball — up to 2*hold_offset
+        // = 3.34 m stale on a reversal.
+        sync_held_ball(
+            &mut self.ball,
+            &self.players,
+            &self.possession,
+            &self.params,
+        );
+
+        // ---------------------------------------------------------------
+        // PHASE 2 — INTERACTION, on the fully settled positions above.
+        //
+        // Still an index loop so we can re-read live carrier stamina and apply
+        // drain immediately — a frame-start snapshot let later tacklers duel a
+        // stale (often 0) carrier stam and ping-pong steals every tick.
+        // ---------------------------------------------------------------
+        for i in 0..self.players.len() {
+            let team = self.players[i].team;
+            let cmd = cmds[i];
+            let carrier_stam = self.possession.carrier.and_then(|(t, cid)| {
+                self.players
+                    .iter()
+                    .find(|p| p.team == t && p.id.0 == cid)
+                    .map(|p| p.stamina)
+            });
+            let carrier_charge = self.possession.carrier.and_then(|(t, cid)| {
+                self.players
+                    .iter()
+                    .find(|p| p.team == t && p.id.0 == cid)
+                    .map(|p| p.shot_charge)
+            });
             let kickoff_elapsed = if self.match_state.phase == MatchPhase::Kickoff {
                 Some(self.match_state.phase_timer)
             } else {
