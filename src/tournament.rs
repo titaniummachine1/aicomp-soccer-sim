@@ -15,13 +15,17 @@
 //!
 //! With the default T = 180 that is decision points at 90, 180, 270, 360, 450.
 //!
-//! UNRESOLVED, and deliberately not hidden: a real-game recording
-//! (`timeplot_2026-07-26_14-49-59.json`) shows kickoff restarts at exactly
-//! 180 / 360 / 540 s — every `T`, not every `T/2` — while `Max Simulation Time`
-//! read 180.0 the whole run. The author describes the blocks as half-time each,
-//! which is what is implemented here. Either those restarts are not decision
-//! points, or the recording's display/API factor differs from the assumed one.
-//! `block_s` is the single knob that reconciles it.
+//! CONFIRMED by the author. The half-time blocks are the decision points, and
+//! attrition only begins after FULL time — so the whole of `0..T` is 4v4, and
+//! the first removal lands on `T`. That matches the real-game recording
+//! (`timeplot_2026-07-26_14-49-59.json`), whose first kickoff restart is at
+//! exactly 180 s with `Max Simulation Time` = 180.
+//!
+//! One loose end from that same recording: restarts also appear at 360 and
+//! 540. 360 is the 2v2 boundary, but the ladder ends at 450, so the 540 restart
+//! is something else — most likely a fresh match after the tournament concluded
+//! (`Current Simulation Time` ran on monotonically past `Max`, so the session
+//! did not reset). Not load-bearing for the schedule.
 //!
 //! Removal is RANDOM, not ordered. That matters beyond fairness: it is a real
 //! source of run-to-run variance, so any match reaching attrition genuinely
