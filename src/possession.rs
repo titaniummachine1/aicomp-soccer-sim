@@ -133,8 +133,8 @@ pub fn apply_interact(
     dt: f32,
     carrier_stamina: Option<f32>,
     _carrier_shot_charge: Option<f32>,
-    // Some(elapsed) in Kickoff: free-ball claim waits until ≈1.0s (Unity DB33).
-    kickoff_elapsed_s: Option<f32>,
+    // Retained for callers; the claim path no longer gates on it.
+    _kickoff_elapsed_s: Option<f32>,
 ) -> InteractOutcome {
     let hold = player.hold_pos_playable(params);
     // Interact is an IMPULSE. Holding it charges a shot (handled in the carrier
@@ -345,8 +345,6 @@ pub fn apply_interact(
             && since_kick < 0.25
             && poss.opening_hot_reclaim
             && !poss.opening_dump_hang;
-        // Unity DB33 Away claim ~0.95–1.0s (Is_Kickoff already 0.37 by t=1.0).
-        let kickoff_claim_ok = kickoff_elapsed_s.map(|t| t >= 0.95).unwrap_or(true);
         let can_claim = if player.id.0 == 4 {
             dist <= params.interact_radius
         } else if hot_opp_window {
@@ -358,7 +356,18 @@ pub fn apply_interact(
             false
         } else {
             // Mid-air OK: Interact is XZ-only; Y is bounce sim only.
-            kickoff_claim_ok
+            //
+            // NO KICKOFF GATE. This used to require `elapsed >= 0.95s` (exactly
+            // 50 ticks) before anyone but a slot-4 keeper could claim a free
+            // ball during a kickoff, so the kicking striker stood ON the ball
+            // for 50 of the kickoff's 53 ticks unable to pick it up. Nothing
+            // supported it: a real-game recording
+            // (timeplot_2026-07-26_14-45-28) shows a player spawned on the
+            // centre spot carrying by t=0.09, and 50 vs 53 was two constants
+            // describing one event. The rule is simply: pick the ball up and
+            // play starts; otherwise the kickoff ends on its own after
+            // KICKOFF_TICKS.
+            true
         };
         if can_claim {
             let speed_before = ball.vel.length();
