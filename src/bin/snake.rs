@@ -119,36 +119,42 @@ fn predict(pos: Vec2, vel: Vec2, move_to: Vec2, facing: Vec2, p: &SimParams, dt:
     (pos + v * dt, new_facing)
 }
 
-/// Where a free ball will be after `t` seconds.
+/// Where the ball will be after `t` seconds.
 ///
-/// Coulomb slide: constant deceleration `slide_accel` along the current
-/// heading, stopping dead once the speed reaches zero. Same model the engine
-/// integrates, evaluated in closed form.
-fn ball_at(pos: Vec2, vel: Vec2, t: f32, slide: f32) -> Vec2 {
+/// Two cases, one formula. A LOOSE ball is a Coulomb slide: constant
+/// deceleration `decel` along its heading, stopping dead at zero. A HELD ball
+/// simply rides its carrier, so it keeps that carrier's velocity and `decel` is
+/// zero. Both are "the ball has a velocity and I should aim where it ends up".
+fn ball_at(pos: Vec2, vel: Vec2, t: f32, decel: f32) -> Vec2 {
     let speed = vel.length();
     if speed < 1e-4 {
         return pos;
     }
-    let stop_t = speed / slide.max(1e-4);
+    if decel <= 1e-4 {
+        return pos + vel * t; // held: travels with the carrier
+    }
+    let stop_t = speed / decel;
     let tt = t.min(stop_t);
-    pos + vel.normalize() * (speed * tt - 0.5 * slide * tt * tt)
+    pos + vel.normalize() * (speed * tt - 0.5 * decel * tt * tt)
 }
 
-/// Earliest point on a loose ball's path this player can actually get to.
+/// Earliest point on the ball's path this player can actually get to.
 ///
-/// Chasing the ball's CURRENT position is chasing where it has already left.
-/// This walks forward in time and takes the first moment the player can be
-/// within interact range of the ball, which is a cut-off, not a tail-chase.
-fn intercept_point(me: Vec2, ball: Vec2, bvel: Vec2, p: &SimParams, dt: f32) -> Vec2 {
-    for k in 0..120 {
+/// Running at where the ball IS is running at where it has already left —
+/// a tail chase that never closes on anything moving away. This walks forward
+/// in time and takes the first moment the player can be within interact range,
+/// which is a cut-off rather than a pursuit.
+fn intercept_point(me: Vec2, ball: Vec2, bvel: Vec2, decel: f32, p: &SimParams, dt: f32) -> Vec2 {
+    for k in 0..160 {
         let t = k as f32 * dt;
-        let bp = ball_at(ball, bvel, t, p.slide_accel);
-        // How far we can have travelled by then, plus the reach we arrive with.
+        let bp = ball_at(ball, bvel, t, decel);
+        // Where we can have got to by then, plus the reach we arrive with.
         if (bp - me).length() <= p.player_walk_speed * t + p.interact_radius {
-            return bp;
+            return Vec2::new(bp.x.clamp(-p.x_max, p.x_max), bp.y.clamp(-p.z_max, p.z_max));
         }
     }
-    ball_at(ball, bvel, 120.0 * dt, p.slide_accel)
+    let bp = ball_at(ball, bvel, 160.0 * dt, decel);
+    Vec2::new(bp.x.clamp(-p.x_max, p.x_max), bp.y.clamp(-p.z_max, p.z_max))
 }
 
 fn main() {
@@ -270,9 +276,24 @@ fn main() {
         // exposed that spot is. Simple and good enough to choose among 16.
         let mut taken: Vec<usize> = Vec::new();
         let mut slot_for = [Vec2::ZERO; 4];
-        // A loose ball is the only thing that matters: go where it WILL be.
-        let loose_target = if ball_free && intercept {
-            Some(ball)
+        // If we do not hold the ball, nothing else matters: go and get it.
+        // Loose -> intercept the sliding ball. Enemy-held -> intercept the ball
+        // travelling with its carrier, which is what a tackle has to reach.
+        let we_hold = matches!(carrier, Some((TeamId::Home, _)));
+        let chase = if !we_hold && intercept {
+            let (bvel, decel) = match carrier {
+                Some((TeamId::Away, id)) => {
+                    // A held ball rides the carrier: same velocity, no slide.
+                    let c = w
+                        .players
+                        .iter()
+                        .find(|q| q.team == TeamId::Away && q.id.0 == id)
+                        .unwrap();
+                    (c.vel, 0.0)
+                }
+                _ => (w.ball.vel, params.slide_accel),
+            };
+            Some((bvel, decel))
         } else {
             None
         };
@@ -284,9 +305,9 @@ fn main() {
                 slot_for[p.id.0 as usize - 1] = goal_for(p.pos);
                 continue;
             }
-            if loose_target.is_some() {
+            if let Some((bvel, decel)) = chase {
                 slot_for[p.id.0 as usize - 1] =
-                    intercept_point(p.pos, ball, w.ball.vel, &params, FIXED_DT);
+                    intercept_point(p.pos, ball, bvel, decel, &params, FIXED_DT);
                 continue;
             }
             let mut best = (f32::NEG_INFINITY, Vec2::ZERO, usize::MAX);
