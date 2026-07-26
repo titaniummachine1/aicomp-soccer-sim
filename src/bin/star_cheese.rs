@@ -1,4 +1,4 @@
-//! SNAKE / STAR: a team that keeps the ball by making it unreachable.
+//! STAR CHEESE: a team that keeps the ball by making it unreachable.
 //!
 //! The chain idea, with Titanium's anti-tackle model deciding where the ball
 //! goes. Three pieces:
@@ -24,7 +24,7 @@
 //!    approach widens the arc they block, which drops that player's score below
 //!    a spoke they are not covering.
 //!
-//!     cargo run --release --bin snake -- --away graph:<path> --secs 180
+//!     cargo run --release --bin star_cheese -- --away graph:<path> --secs 180
 
 use std::env;
 
@@ -429,7 +429,7 @@ fn main() {
         BrainInput::Graph(p) => p.file_stem().unwrap_or_default().to_string_lossy().to_string(),
         other => format!("{other:?}"),
     };
-    println!("SNAKE vs {name}");
+    println!("STAR CHEESE vs {name}");
     println!(
         "  possession     {:.1}%   balls lost {lost}   goals {gf} for / {ga} against",
         100.0 * held as f32 / ticks as f32
