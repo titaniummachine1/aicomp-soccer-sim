@@ -597,22 +597,30 @@ pub fn clamp_player_to_pitch(player: &mut Player, params: &SimParams) {
 
 /// Non-kicking team stays outside the center circle until the ball leaves it.
 fn clamp_receiving_team_outside_kickoff_circle(
-    _player: &mut Player,
-    _match_state: &MatchState,
-    _params: &SimParams,
+    player: &mut Player,
+    match_state: &MatchState,
+    params: &SimParams,
 ) {
-    // DELIBERATELY EMPTY — the real game does not do this (issue #5).
-    //
-    // This used to shove any receiving-team player out to `kickoff_circle_r`
-    // and cancel their inward velocity, holding them off until the kicking side
-    // touched the ball. The real game lets them enter the centre circle at any
-    // point, whether or not it is their kickoff and whether or not the kicking
-    // team has touched it yet.
-    //
-    // Kept as a no-op function rather than deleted so the call site still reads
-    // as "kickoff placement rules apply here" and anything genuinely enforced
-    // in future has an obvious home — and so this comment stays attached to the
-    // behaviour it is explaining.
+    if player.team == match_state.kickoff_team {
+        return;
+    }
+    if !receiving_team_circle_locked(match_state) {
+        return;
+    }
+    let min_r = params.kickoff_circle_r;
+    let d = player.pos.length();
+    if d < min_r && d > 1e-4 {
+        let n = player.pos / d;
+        player.pos = n * min_r;
+        let inward = player.vel.dot(n);
+        if inward < 0.0 {
+            player.vel -= n * inward;
+        }
+    } else if d <= 1e-4 {
+        // Degenerate: push to +Z edge.
+        player.pos = Vec2::new(0.0, min_r);
+        player.vel = Vec2::ZERO;
+    }
 }
 
 /// TimePlot 17-05-04 DB14: ~34.5s full drain while sprinting with ball,
