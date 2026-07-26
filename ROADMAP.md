@@ -71,10 +71,11 @@ settle, and several feed the tackle economy directly.
 
 ## Open issues
 
-- [#7](https://github.com/titaniummachine1/aicomp-soccer-sim/issues/7) ur ball stealing system doesnt work like in game
+None open.
 
-## Closed (5)
+## Closed (6)
 
+- ~~[#7](https://github.com/titaniummachine1/aicomp-soccer-sim/issues/7) ur ball stealing system doesnt work like in game~~
 - ~~[#6](https://github.com/titaniummachine1/aicomp-soccer-sim/issues/6) ur ball stealing system doesnt work like in game~~
 - ~~[#5](https://github.com/titaniummachine1/aicomp-soccer-sim/issues/5) players when its not their kickoff should be able to go into that middle circle even if its not their kickoff and even if the team whose kickoff it is hasnt touched the ball yet...~~
 - ~~[#4](https://github.com/titaniummachine1/aicomp-soccer-sim/issues/4) Incorrect node is able to crush the sim~~
