@@ -48,6 +48,13 @@ use bevy::ui::{FocusPolicy, RelativeCursorPosition};
 use bevy::window::PresentMode;
 
 const PPM: f32 = 10.0;
+/// Number glyph size as a multiple of the player's BODY radius in pixels.
+///
+/// Scaled to the physics body (`body_radius`, the filled disc), NOT to the
+/// interaction radius — the interaction ring is reach, not the player. At
+/// PPM 10 the body is a 6.5 px disc, so the old fixed 20 px font drew a glyph
+/// about three times the player's own diameter and swallowed the model.
+const NUM_FONT_PER_BODY_PX: f32 = 1.6;
 /// Fast / zero-idle: burst this many FIXED_DT ticks per render frame.
 const MAX_TICKS_PER_FRAME_FAST: u32 = 64;
 /// Paced catch-up when idle budget < one render frame (needed for >realtime).
@@ -581,6 +588,7 @@ fn main() {
         .add_systems(
             Update,
             (
+                sync_player_number_visibility,
                 sim_tick_barrier,
                 tick_ui_pulse,
                 handle_hotkeys,
@@ -598,6 +606,23 @@ fn main() {
             ),
         )
         .run();
+}
+
+/// Player numbers are debug output, not part of the normal view.
+fn sync_player_number_visibility(
+    show_debug: Res<SimDebugDraw>,
+    mut q_num: Query<&mut Visibility, With<PlayerNum>>,
+) {
+    let want = if show_debug.0 {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    for mut vis in &mut q_num {
+        if *vis != want {
+            *vis = want;
+        }
+    }
 }
 
 /// `…/AppData/LocalLow/Unicorn One/AIComp/Saves/Soccer` on any Windows user.
@@ -1206,8 +1231,11 @@ fn setup_board(
     let interaction_ring_mesh = meshes.add(Annulus::new((interact_px - 1.5).max(0.5), interact_px));
     let ball_px = p.ball_radius * PPM;
     let ball_mesh = meshes.add(Circle::new(1.0));
-    let home_mat = materials.add(Color::srgb(0.85, 0.88, 0.95));
-    let away_mat = materials.add(Color::srgb(0.12, 0.12, 0.14));
+    // Blue vs RED. Away used to be near-black (0.12), which read as a shadow
+    // against the dark grass and was hard to pick apart from the ball's own
+    // shading at a glance. Two saturated, opposed hues separate cleanly.
+    let home_mat = materials.add(Color::srgb(0.20, 0.45, 0.92));
+    let away_mat = materials.add(Color::srgb(0.90, 0.22, 0.20));
     let ball_mat = materials.add(Color::WHITE);
     let stamina_empty_mat = materials.add(Color::BLACK);
     let stamina_fill_mat = materials.add(Color::WHITE);
@@ -1218,10 +1246,10 @@ fn setup_board(
             TeamId::Home => home_mat.clone(),
             TeamId::Away => away_mat.clone(),
         };
-        let num_color = match player.team {
-            TeamId::Home => Color::srgb(0.1, 0.1, 0.15),
-            TeamId::Away => Color::WHITE,
-        };
+        // Pure white on both. Both fills are now mid-tone saturated colours,
+        // so white is the maximum-contrast choice against either without
+        // needing a per-team rule.
+        let num_color = Color::WHITE;
         let z = player_z(player.team, player.id);
         let pos = Vec3::new(player.pos.x * PPM, player.pos.y * PPM, z);
         // Arc in unit-disc space, scaled locally to the interaction radius.
@@ -1289,11 +1317,13 @@ fn setup_board(
                 id: player.id,
             },
             Text2d::new(format!("{}", player.id.0)),
-            TextFont::from_font_size(20.0),
+            TextFont::from_font_size(body_px * NUM_FONT_PER_BODY_PX),
             TextColor(num_color),
             TextLayout::new(Justify::Center, LineBreak::NoWrap),
             // Same stack as disc so an occluding player covers both circle and number.
             Transform::from_translation(pos + Vec3::Z * NUM_Z_EPS),
+            // Debug-only: hidden until the debug toggle is on.
+            Visibility::Hidden,
         ));
     }
 
