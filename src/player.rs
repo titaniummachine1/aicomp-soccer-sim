@@ -140,28 +140,32 @@ pub fn step_mover(
     // Arrive / brake-to-rest: target reached, or within the distance needed
     // to stop at decel 200. Kinematic update matches continuous s=v²/(2a)
     // (same form as ball Coulomb slide).
-    if dist <= 1e-3 || dist <= brake_dist {
-        if speed <= 1e-6 {
-            player.vel = Vec2::ZERO;
-            return;
-        }
-        let dir = player.vel.normalize();
-        let decel = mover.decel.max(1e-6);
-        let dv = decel * dt;
-        if speed <= dv {
-            // Coast the residual stop distance, then rest.
-            player.pos += dir * (speed * speed / (2.0 * decel));
-            player.vel = Vec2::ZERO;
+    // Order within a tick is MOVEMENT, then ROTATION, then interaction (the
+    // caller applies interaction afterwards). Rotation used to run first, and
+    // the arrive/brake path returned before reaching it at all, so a player
+    // coming to rest never turned.
+    let braking = dist <= 1e-3 || dist <= brake_dist;
+    if braking {
+        if speed > 1e-6 {
+            let dir = player.vel.normalize();
+            let decel = mover.decel.max(1e-6);
+            let dv = decel * dt;
+            if speed <= dv {
+                // Coast the residual stop distance, then rest.
+                player.pos += dir * (speed * speed / (2.0 * decel));
+                player.vel = Vec2::ZERO;
+            } else {
+                player.pos += dir * (speed * dt - 0.5 * decel * dt * dt);
+                player.vel = dir * (speed - dv);
+            }
         } else {
-            player.pos += dir * (speed * dt - 0.5 * decel * dt * dt);
-            player.vel = dir * (speed - dv);
+            player.vel = Vec2::ZERO;
         }
-        return;
     }
 
     // Facing follows MoveTo (held ball sits on facing × hold_offset). Carriers
     // only override via `face_aim` during charge warmup (Clear sticky, quirk #24).
-    let want_move = to.normalize();
+    let want_move = if dist > 1e-6 { to.normalize() } else { player.facing };
     let want_face = face_aim
         .filter(|d| d.length_squared() > 1e-8)
         .map(|d| d.normalize())
@@ -173,18 +177,20 @@ pub fn step_mover(
         && !(player.team == TeamId::Away && !first_kick_done);
     let allow_turn = !(sticky && want_face.dot(player.facing) < 0.25);
     if allow_turn {
-        let max_rad = angular_speed_deg.to_radians() * dt;
-        let cur = player.facing;
-        let cross = cur.x * want_face.y - cur.y * want_face.x;
-        let dot = cur.dot(want_face).clamp(-1.0, 1.0);
-        let ang = cross.atan2(dot);
-        let step = ang.clamp(-max_rad, max_rad);
-        if step.abs() > 1e-6 {
-            let (s, c) = step.sin_cos();
-            player.facing = Vec2::new(cur.x * c - cur.y * s, cur.x * s + cur.y * c).normalize();
-        } else if dot < 0.999 {
-            player.facing = want_face;
-        }
+        // INSTANT. Setting a direction turns you by the time the tick is
+        // finalised; there is no per-tick angular speed limit.
+        //
+        // The rate limit that was here (`angular_speed_deg`) is what made
+        // anti-tackle unfixable. A held ball sits at facing * hold_offset, so a
+        // carrier that chose a new heading had its ball swing out along the OLD
+        // facing instead — measured misplacement of up to 3.2 m, which is 2x the
+        // 1.67 m hold offset. Every escape angle was planned for a ball position
+        // the tick never produced.
+        player.facing = want_face;
+    }
+
+    if braking {
+        return;
     }
 
     let desired = want_move * max_speed;

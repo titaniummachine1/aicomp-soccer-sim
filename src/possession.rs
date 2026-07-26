@@ -279,9 +279,21 @@ pub fn apply_interact(
     if ball.held {
         if let Some((ct, cid)) = poss.carrier {
             if ct != player.team {
-                let dist = (hold - ball.pos)
-                    .length()
-                    .min((player.pos - ball.pos).length());
+                // Body to ball, and nothing else. A tackle happens if you can
+                // reach the BALL, so the only distance that means anything is
+                // from the tackler's own position to it.
+                //
+                // This used to be min(tackler_hold_to_ball, body_to_ball),
+                // where the hold point sits hold_offset (1.67 m) ahead of the
+                // tackler along their facing - handing them up to 3.42 m of
+                // reach instead of 1.75 m. That second origin does not exist in
+                // the real game. It arrived in ffa398a inside a large
+                // "Frida-measured Unity physics" commit with no note, no test,
+                // and nothing in the diff showing it was measured rather than
+                // assumed - and it is what made Titanium's anti-tackle wrong:
+                // measured against Poponeta over 180 s, 19 balls lost, ZERO
+                // unavoidable, ~90% on headings the model had judged safe.
+                let dist = (player.pos - ball.pos).length();
                 if dist <= params.interact_radius {
                     let tackler_stam = player.stamina;
                     let carrier_stam = carrier_stamina.unwrap_or(0.0);
@@ -332,9 +344,14 @@ pub fn apply_interact(
 
     // Pickup: XZ interact only — ball height is bounce physics, not a claim gate
     // (Unity catch works mid-air; game is planar for Interact).
-    let body_dist = (player.pos - ball.pos).length();
-    let hold_dist = (hold - ball.pos).length();
-    let dist = hold_dist.min(body_dist);
+    // Interact distance from the player's POSITION to the ball, and nothing
+    // else. Same rule as the tackle above: reach is granted by interact radius
+    // alone. Body radius is wall collision only and plays no part here.
+    //
+    // This carried the same phantom second origin the tackle did - the
+    // tackler's hold point, 1.67 m ahead along their facing - which let a
+    // player claim a ball up to 3.42 m away instead of 1.75 m.
+    let dist = (player.pos - ball.pos).length();
     if dist <= params.interact_radius {
         // Claim paths:
         //   - goalie in interact (always)
