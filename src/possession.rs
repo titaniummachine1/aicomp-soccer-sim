@@ -178,12 +178,18 @@ pub fn apply_interact(
         }
 
         if player.shot_charge > 0.05 {
-            // AIA / engine: on Interact→false, kick along that frame's *move
-            // input* (controller MoveTo), not facing / hold axis.
-            let dir = (cmd.move_to - player.pos).normalize_or_zero();
-            let mut dir = if dir.length_squared() > 1e-6 {
-                dir
-            } else if player.facing.length_squared() > 1e-6 {
+            // On Interact→false, kick along that frame's move input.
+            //
+            // That IS `player.facing`: facing is set to the walk direction at
+            // the top of the tick, from `move_to - pos` taken BEFORE movement.
+            //
+            // This used to recompute `cmd.move_to - player.pos` here instead —
+            // but interaction runs AFTER movement, so a player that reached or
+            // overshot its target got a degenerate or REVERSED vector and
+            // kicked backwards. Measured with `pass_speed`: a stationary passer
+            // aiming +X at a teammate launched the ball along -X, away from
+            // them, because it had crept 0.1 m past the move_to it was given.
+            let mut dir = if player.facing.length_squared() > 1e-6 {
                 player.facing.normalize()
             } else {
                 match player.team {

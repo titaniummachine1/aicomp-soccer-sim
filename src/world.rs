@@ -299,11 +299,47 @@ impl MatchWorld {
         // ---------------------------------------------------------------
         // PHASE 2 — INTERACTION, on the fully settled positions above.
         //
-        // Still an index loop so we can re-read live carrier stamina and apply
-        // drain immediately — a frame-start snapshot let later tacklers duel a
-        // stale (often 0) carrier stam and ping-pong steals every tick.
+        // ORDER: whoever HOLDS THE BALL resolves first, always and under all
+        // circumstances. Everyone else follows, nearest to the ball first.
+        //
+        // This is not cosmetic. Interaction used to run in player-array order,
+        // so a pass only completed on the release tick when the passer happened
+        // to hold a lower array index than the receiver. Measured with
+        // `pass_speed`: passer at index 0 -> received in 3 ticks (0.057 s);
+        // the SAME pass with the roles swapped -> never received at all, the
+        // ball rolled straight past a receiver that was standing in its path.
+        // Whether a pass works cannot depend on which slot a player occupies.
+        //
+        // Resolving the carrier first is also what makes a kick meaningful:
+        // the shot leaves before anyone else gets to act on the ball, so a
+        // teammate in range can take it on that same tick, and a defender
+        // cannot tackle a ball that has already been kicked away.
+        //
+        // Still index-based inside the loop so we can re-read live carrier
+        // stamina and apply drain immediately — a frame-start snapshot let
+        // later tacklers duel a stale (often 0) carrier stam and ping-pong
+        // steals every tick.
         // ---------------------------------------------------------------
-        for i in 0..self.players.len() {
+        let ball_pos = self.ball.pos;
+        let carrier_now = self.possession.carrier;
+        let is_carrier_idx = |i: usize| -> bool {
+            matches!(carrier_now, Some((t, id))
+                if t == self.players[i].team && id == self.players[i].id.0)
+        };
+        let mut order: Vec<usize> = (0..self.players.len()).collect();
+        order.sort_by(|&a, &b| {
+            // Carrier first (true sorts before false), then by distance to the
+            // ball, then by index so the order is total and deterministic.
+            is_carrier_idx(b)
+                .cmp(&is_carrier_idx(a))
+                .then_with(|| {
+                    let da = (self.players[a].pos - ball_pos).length_squared();
+                    let db = (self.players[b].pos - ball_pos).length_squared();
+                    da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| a.cmp(&b))
+        });
+        for i in order {
             let team = self.players[i].team;
             let cmd = cmds[i];
             let carrier_stam = self.possession.carrier.and_then(|(t, cid)| {
