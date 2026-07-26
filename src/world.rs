@@ -804,23 +804,88 @@ mod tests {
         );
     }
 
+    /// Interact is an impulse: you cannot tackle or pick up the ball if you
+    /// already used Interact on the prior tick. Confirmed by the game's author.
+    ///
+    /// This REPLACES `scripted_test1_test2_steal_in_sim`, which asserted that
+    /// `Test1Brain`/`Test2Brain` produce a steal. Those are hand-written Rust
+    /// imitations of what someone believed two scripts did — not a recording,
+    /// not the graphs (`Test1.txt`/`Test2.txt` exist and were never run by it).
+    /// `Test2Brain` pins Interact true while chasing, so the old test could only
+    /// pass under level-triggering: it encoded the very assumption in question
+    /// and then failed when that assumption was dropped. Circular, so deleted.
+    ///
+    /// This test asserts the rule directly instead of inferring it from an
+    /// imitation.
     #[test]
-    fn scripted_test1_test2_steal_in_sim() {
+    fn interact_pinned_true_claims_exactly_once() {
         let params = SimParams::default();
+        let hold = params.hold_offset;
         let mut world = MatchWorld::new_kickoff_opening(params, TeamId::Home);
-        let mut home = crate::probe_brains::Test1Brain::default();
-        let mut away = crate::probe_brains::Test2Brain::default();
-        let mut stole = false;
-        for _ in 0..(50.0 / FIXED_DT) as u32 {
-            world.step_brains(&mut home, &mut away, FIXED_DT);
-            if matches!(world.possession.carrier, Some((TeamId::Away, 1))) {
-                stole = true;
-                break;
-            }
+        world.possession.carrier = None;
+        world.ball.held = false;
+        world.ball.pos = Vec2::ZERO;
+        world.ball.vel = Vec2::ZERO;
+        for p in world.players.iter_mut() {
+            p.pos = Vec2::new(0.0, 20.0);
+        }
+        // One Home player standing on the ball, holding Interact forever.
+        world.players[0].pos = Vec2::ZERO;
+        let press = BrainOutput {
+            commands: [BrainCommand { move_to: Vec2::ZERO, sprint: false, interact: true }; 4],
+            ..Default::default()
+        };
+        let release = BrainOutput {
+            commands: [BrainCommand { move_to: Vec2::ZERO, sprint: false, interact: false }; 4],
+            ..Default::default()
+        };
+
+        world.step_with_commands(&press, &release, FIXED_DT);
+        assert!(
+            world.possession.carrier.is_some(),
+            "the press tick must claim the ball"
+        );
+
+        // Lose it, while STILL holding Interact. A pinned press is spent.
+        world.possession.carrier = None;
+        world.ball.held = false;
+        world.ball.pos = world.players[0].pos + world.players[0].facing * hold;
+        for _ in 0..20 {
+            world.step_with_commands(&press, &release, FIXED_DT);
         }
         assert!(
-            stole,
-            "Test1/Test2 scripted brains must produce a steal in-sim"
+            world.possession.carrier.is_none(),
+            "holding Interact must NOT re-claim: the press was already used"
+        );
+
+        // Release for one tick, then press again — that is a new press.
+        world.step_with_commands(&release, &release, FIXED_DT);
+        world.ball.pos = world.players[0].pos + world.players[0].facing * hold;
+        world.step_with_commands(&press, &release, FIXED_DT);
+        assert!(
+            world.possession.carrier.is_some(),
+            "a release followed by a press must claim again"
+        );
+    }
+
+    /// The press history is per-kickoff: a whistle or goal restarts positions
+    /// and the input context with them. Without this, a graph still holding
+    /// Interact when the whistle goes carries a spent press into the restart
+    /// and can never claim the new kickoff.
+    #[test]
+    fn whistle_clears_the_spent_press() {
+        let mut params = SimParams::default();
+        params.kickoff_delay_s = 0.0;
+        let mut world = MatchWorld::new_kickoff_opening(params, TeamId::Home);
+        for p in world.players.iter_mut() {
+            p.interact_held = true;
+        }
+        world.apply_goal(EndReason::GoalHome);
+        world.step_with_commands(&BrainOutput::default(), &BrainOutput::default(), FIXED_DT);
+        assert_eq!(world.match_state.phase, MatchPhase::Kickoff);
+        assert!(
+            world.players.iter().all(|p| !p.interact_held),
+            "the spent press must not survive the restart"
         );
     }
 

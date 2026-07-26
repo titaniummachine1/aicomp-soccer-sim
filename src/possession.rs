@@ -137,20 +137,21 @@ pub fn apply_interact(
     _kickoff_elapsed_s: Option<f32>,
 ) -> InteractOutcome {
     let hold = player.hold_pos_playable(params);
-    // Interact is an IMPULSE. Holding it charges a shot (handled in the carrier
-    // branch below, which is genuinely level-triggered), but a claim or a
-    // tackle fires only on the press. Level-triggering them let a graph that
-    // simply pinned Interact true re-attempt a steal every single tick, which
-    // the real game does not allow.
-    // Interact is an IMPULSE for claims and tackles: one only counts if the
-    // PREVIOUS tick was not pressing. Holding it down produces exactly one, the
-    // same anti-bunnyhop latch games use for jump. Charging a shot is
-    // unaffected — that is level-triggered and lives in the carrier branch.
-    let impulse = if params.interact_is_impulse {
-        cmd.interact && !player.interact_held
-    } else {
-        cmd.interact
-    };
+    // THE ENTIRE RULE: you cannot tackle or pick up the ball if you already
+    // used Interact on the prior tick.
+    //
+    // Confirmed by the game's author. Holding Interact down therefore yields
+    // exactly one attempt, the same anti-bunnyhop latch games use for jump —
+    // a graph that simply pins Interact true never steals again after its
+    // first tick. This is not optional and has no toggle: a flag here would
+    // only let someone run a simulator that is knowingly wrong.
+    //
+    // Charging a shot is untouched. That is genuinely level-triggered and
+    // lives in the carrier branch below: hold to charge, release to shoot.
+    //
+    // The press history resets on a whistle — see `reset_interact_latch`,
+    // called wherever positions are restarted for the next kickoff.
+    let impulse = cmd.interact && !player.interact_held;
     player.interact_held = cmd.interact;
     let is_carrier = matches!(
         poss.carrier,
