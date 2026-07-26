@@ -55,7 +55,8 @@ OPTIONS:
   --home <brain>            Home brain (default: chase)
   --away <brain>            Away brain (default: chase)
   --opening home|away       Opening kickoff side (default: home)
-  --seed <u64>              Deterministic opening: even=home, odd=away
+  --seed <u64>              Deterministic opening when --opening is absent:
+                            even=home, odd=away. --opening always wins.
                             With --batch: base seed; match i uses seed+i
   --params <path>           Params JSON (default: bevy_sim_params_v05.json)
   --json <path>             Also write result JSON to this file (single match)
@@ -98,6 +99,8 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut home = BrainInput::Chase;
     let mut away = BrainInput::Chase;
     let mut opening = TeamId::Home;
+    // Did the caller actually say --opening? If so the seed must not override it.
+    let mut opening_explicit = false;
     let mut seed = None;
     let mut params = None;
     let mut json_out = None;
@@ -134,6 +137,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
                 away = BrainInput::parse(argv.get(i).ok_or("--away needs a value")?)?;
             }
             "--opening" => {
+                opening_explicit = true;
                 i += 1;
                 opening = match argv
                     .get(i)
@@ -233,7 +237,12 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         i += 1;
     }
 
-    if batch.is_none() {
+    // A seed picks the opening side ONLY when the caller did not choose one.
+    // This used to be unconditional, so `--seed 1 --opening home` silently
+    // played an away kickoff: the flag looked supported and was inert, and the
+    // seed's only observable effect was flipping the kickoff rather than
+    // driving anything random.
+    if batch.is_none() && !opening_explicit {
         if let Some(s) = seed {
             opening = if s % 2 == 0 {
                 TeamId::Home
