@@ -1,49 +1,19 @@
-//! STAR CHEESE: a team that keeps the ball by making it unreachable.
+//! Reference implementation of STAR CHEESE, for parity checking.
 //!
-//! The chain idea, with Titanium's anti-tackle model deciding where the ball
-//! goes. Three pieces:
+//! This is the SIMULATOR-SIDE reference only. The actual competition AI is the
+//! node graph built by `titanim-socker-engine/scripts/build_star_cheese.py`;
+//! this exists so `star_parity` can run both against the same world state and
+//! report the exact first tick where the graph disagrees with the design.
 //!
-//! 1. FREEDOM SCORE (Titanium's blocked-arc math, reused). A held ball traces a
-//!    circle of radius `hold_offset` around its carrier, so an opponent at
-//!    distance `d` denies an ARC of that circle, half-width
-//!        acos((hold^2 + d^2 - r_int^2) / (2 * hold * d))
-//!    An opponent further than `hold + r_int` denies nothing; one closer than
-//!    `r_int - hold` denies everything. Sum the arcs and you have exactly how
-//!    much of a player's ball-circle is unusable. A player with zero blocked
-//!    arc CANNOT be tackled, whatever it does. That number, not distance, is
-//!    what "safe" means.
-//!
-//! 2. STAR FORMATION. Non-carriers stand one chain-spacing from the carrier, so
-//!    every one of them can take the ball off it instantly. They pick their
-//!    direction to trade forward progress against their own blocked arc — which
-//!    is what makes the shape zigzag around pressure instead of walking into
-//!    it, and collapse to a defensive star when the whole team is marked.
-//!
-//! 3. RELAY. The ball moves to the freest player in reach, every tick. An
-//!    opponent closing on the ball is what pushes the ball away from it: their
-//!    approach widens the arc they block, which drops that player's score below
-//!    a spoke they are not covering.
-//!
-//!     cargo run --release --bin star_cheese -- --away graph:<path> --secs 180
-
-use std::env;
+//! Keep it a faithful statement of the intended behaviour. When the graph and
+//! this disagree, one of them is wrong — the point of the parity bin is to say
+//! which tick, with the inputs, rather than guessing from a scoreline.
 
 use bevy::prelude::Vec2;
 
-use aicomp_soccer_sim::batch::{BrainInput, ProgramCache};
-use aicomp_soccer_sim::brain::{BrainCommand, BrainOutput, TeamBrain, TeamId};
-use aicomp_soccer_sim::graph_vm::RuntimeBrain;
-use aicomp_soccer_sim::params::SimParams;
-use aicomp_soccer_sim::world::{MatchWorld, FIXED_DT};
-
-fn brain(input: &BrainInput, cache: &ProgramCache) -> Box<dyn TeamBrain> {
-    match input {
-        BrainInput::Graph(p) => Box::new(RuntimeBrain::from_cached(
-            cache.get_or_compile(p).expect("compile"),
-        )),
-        _ => Box::new(aicomp_soccer_sim::brain::ChaseBallBrain::default()),
-    }
-}
+use crate::brain::{BrainCommand, BrainOutput, TeamId};
+use crate::params::SimParams;
+use crate::world::{MatchWorld, FIXED_DT};
 
 /// An opponent that matters: predicted position after this tick, and stamina.
 #[derive(Clone, Copy)]
@@ -183,47 +153,22 @@ fn intercept_point(me: Vec2, ball: Vec2, bvel: Vec2, decel: f32, p: &SimParams, 
     Vec2::new(bp.x.clamp(-p.x_max, p.x_max), bp.y.clamp(-p.z_max, p.z_max))
 }
 
-fn main() {
-    let argv: Vec<String> = env::args().skip(1).collect();
-    let get = |k: &str| -> Option<String> {
-        argv.iter()
-            .position(|a| a == k)
-            .and_then(|i| argv.get(i + 1).cloned())
-    };
-    let away_in =
-        BrainInput::parse(&get("--away").unwrap_or_else(|| "chase".into())).expect("away brain");
-    let secs: f32 = get("--secs").unwrap_or_else(|| "180".into()).parse().unwrap();
-    // Walk at the CLOSEST point on the goal line rather than the centre spot.
-    // OFF by default because it MEASURED WORSE: 45-19 against 44-16 on its own,
-    // and it costs 3 goals on top of interception (72-11 against 75-11).
-    // The centre spot is not a detour, it is the one place the chain can be
-    // fed from every angle; drifting to a corner of the mouth trades a shorter
-    // walk for spokes that no longer have room behind them.
-    let nearest_goal = argv.iter().any(|a| a == "--nearest");
-    // GRAPH-FEASIBLE mode. A node graph has no loops, no sorting and no acos,
-    // so every construct here has to survive being unrolled into fixed nodes:
-    //   * freedom score becomes an acos-free proxy (penetration depth into the
-    //     blocking annulus) instead of a summed arc width
-    //   * 16 greedily-assigned spokes become 3 fixed angular offsets
-    //   * the 200-step interception walk becomes 12 sampled times
-    //   * opponent-carrier velocity becomes Ball Velocity, which the engine
-    //     reports as tracking the carrier while held
-    let lite = argv.iter().any(|a| a == "--lite");
-    // Chase where a loose ball WILL be, not where it is.
-    let intercept = !argv.iter().any(|a| a == "--no-intercept");
 
-    let cache = ProgramCache::default();
-    let mut away = brain(&away_in, &cache);
-    let params = SimParams::default();
+/// Star Cheese's commands for Home, given the current world.
+///
+/// `pressed` is the caller-owned press history: Interact is an impulse, so a
+/// pinned press spends its one rising edge and every later attempt is refused.
+pub fn decide(
+    w: &MatchWorld,
+    params: &SimParams,
+    pressed: &mut [bool; 4],
+    lite: bool,
+    nearest_goal: bool,
+) -> BrainOutput {
     let hold = params.hold_offset;
     let r_int = params.interact_radius;
-    // 1 cm inside maximum reach: at exactly hold + r_int the f32 gap lands on
-    // 1.7500001 and the engine's `dist <= interact_radius` refuses.
     let spacing = hold + r_int - 0.01;
     let goal_c = Vec2::new(params.goal_line_x, 0.0);
-    // Aim 2 m PAST the line: the player is clamped to the pitch at x_max, but
-    // its held ball sits hold_offset further on and is not clamped inside the
-    // mouth, so walking into the line carries the ball over it.
     let mouth = params.goal_half_width - 0.7;
     let goal_for = |from: Vec2| -> Vec2 {
         if nearest_goal {
@@ -232,26 +177,13 @@ fn main() {
             goal_c
         }
     };
-
-    let mut w = MatchWorld::new_kickoff_opening(params.clone(), TeamId::Home);
-
-    let (mut held, mut ticks, mut lost) = (0u32, 0u32, 0u32);
-    let (mut max_x, mut gf, mut ga) = (-100.0f32, 0u32, 0u32);
-    let (mut blocked_sum, mut blocked_n) = (0.0f64, 0u32);
-    let mut pressed = [false; 4];
-
-    // Candidate spoke directions for the star.
     let dirs: Vec<Vec2> = (0..16)
         .map(|k| {
             let a = k as f32 * std::f32::consts::TAU / 16.0;
             Vec2::new(a.cos(), a.sin())
         })
         .collect();
-
-    for _ in 0..((secs / FIXED_DT) as u32) {
-        let (_, away_api) = w.build_apis();
-        let away_out = away.think(&away_api);
-
+    let intercept_on = true;
         let ball = w.ball.pos;
         let ball_free = !w.ball.held;
         let carrier = w.possession.carrier;
@@ -301,10 +233,6 @@ fn main() {
             }
             _ => 1.0, /* placeholder, recomputed below at predicted state */ // loose or enemy-held: anything of ours is an improvement
         };
-        if carrier.is_some_and(|(t, _)| t == TeamId::Home) {
-            blocked_sum += ball_blocked as f64;
-            blocked_n += 1;
-        }
 
         // ---- STAR: pick a spoke for each non-carrier --------------------
         // Greedy, one direction each, scoring forward progress against how
@@ -315,7 +243,7 @@ fn main() {
         // Loose -> intercept the sliding ball. Enemy-held -> intercept the ball
         // travelling with its carrier, which is what a tackle has to reach.
         let we_hold = matches!(carrier, Some((TeamId::Home, _)));
-        let chase = if !we_hold && intercept {
+        let chase = if !we_hold && intercept_on {
             let (bvel, decel) = match carrier {
                 Some((TeamId::Away, id)) => {
                     // A held ball rides the carrier: same velocity, no slide.
@@ -449,39 +377,6 @@ fn main() {
             };
         }
 
-        let before = w.possession.carrier;
-        let (sh, sa) = (w.match_state.score_home, w.match_state.score_away);
-        w.step_with_commands(&out, &away_out, FIXED_DT);
-        gf += w.match_state.score_home - sh;
-        ga += w.match_state.score_away - sa;
 
-        ticks += 1;
-        match w.possession.carrier {
-            Some((TeamId::Home, _)) => {
-                held += 1;
-                max_x = max_x.max(w.ball.pos.x);
-            }
-            Some((TeamId::Away, _)) => {
-                if matches!(before, Some((TeamId::Home, _))) {
-                    lost += 1;
-                }
-            }
-            None => {}
-        }
-    }
-
-    let name = match &away_in {
-        BrainInput::Graph(p) => p.file_stem().unwrap_or_default().to_string_lossy().to_string(),
-        other => format!("{other:?}"),
-    };
-    println!("STAR CHEESE vs {name}");
-    println!(
-        "  possession     {:.1}%   balls lost {lost}   goals {gf} for / {ga} against",
-        100.0 * held as f32 / ticks as f32
-    );
-    println!(
-        "  deepest ball x {max_x:.1} (goal line {:.0})   mean blocked arc while carrying {:.3}",
-        params.goal_line_x,
-        if blocked_n == 0 { 0.0 } else { blocked_sum / blocked_n as f64 }
-    );
+    out
 }

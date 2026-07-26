@@ -21,6 +21,7 @@ pub mod possession;
 pub mod predict;
 pub mod probe_brains;
 pub mod scenario;
+pub mod star_cheese_ref;
 pub mod team_threads;
 pub mod titanium;
 pub mod tournament;
