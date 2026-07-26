@@ -238,7 +238,7 @@ fn parse_viewer_args() -> ViewerArgs {
     while i < argv.len() {
         match argv[i].as_str() {
             "--fast" | "-f" => fast = true,
-            "--titanium-1v1" => scenario = MatchScenario::Scenario1AtkVsGk,
+            "--titanium-1v1" => scenario = MatchScenario::GoalkeeperDuel,
             "--scenario" => {
                 i += 1;
                 let v = argv.get(i).map(|s| s.as_str()).unwrap_or_else(|| {
@@ -247,7 +247,10 @@ fn parse_viewer_args() -> ViewerArgs {
                     std::process::exit(1);
                 });
                 scenario = match v {
-                    "1" | "scenario1" | "Scenario1" => MatchScenario::Scenario1AtkVsGk,
+                    "1" | "scenario1" | "Scenario1" | "gk" => MatchScenario::GoalkeeperDuel,
+                    "3v3" => MatchScenario::ThreeV3,
+                    "2v2" => MatchScenario::TwoV2,
+                    "1v1" => MatchScenario::OneV1,
                     "3" | "scenario3" | "Scenario3" | "4v1" => MatchScenario::Scenario3Full4v1,
                     "full" | "Full" => MatchScenario::Full,
                     other => {
@@ -260,7 +263,7 @@ fn parse_viewer_args() -> ViewerArgs {
             }
             "--atk-away" => {
                 if matches!(scenario, MatchScenario::Full) {
-                    scenario = MatchScenario::Scenario1AtkVsGk;
+                    scenario = MatchScenario::GoalkeeperDuel;
                 }
                 titanium_1v1_attack_home = false;
             }

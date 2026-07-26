@@ -454,24 +454,18 @@ fn filter_kickoff(
     cmd: BrainCommand,
     match_state: &MatchState,
     params: &SimParams,
-    ball_pos: Vec2,
+    _ball_pos: Vec2,
 ) -> BrainCommand {
     if kickoff_control_allowed(player.team, player.id, match_state, params) {
         return cmd;
     }
-    // Engine-scripted kickoff walk-in (user 2026-07-23): empty team configs
-    // still send the kicking striker to the free ball; graph MoveTo is ignored
-    // until Play / pickup. Everyone else idles on faceoff.
-    if match_state.phase == MatchPhase::Kickoff
-        && player.team == match_state.kickoff_team
-        && player.id.0 == 1
-    {
-        return BrainCommand {
-            move_to: ball_pos,
-            sprint: false,
-            interact: true,
-        };
-    }
+    // Only GoalPause reaches here now: hold position, no input. Kickoff used to
+    // freeze everyone and script the kicking striker to walk into the ball;
+    // real-game recordings show graphs keep control throughout a kickoff, so
+    // that scripting is gone. Circle exclusion for the receiving side lives in
+    // `clamp_receiving_team_outside_kickoff_circle`, which is a position clamp
+    // rather than a command override — it stops them standing in the circle
+    // without dictating where they go.
     BrainCommand {
         move_to: player.pos,
         sprint: false,
@@ -836,54 +830,41 @@ mod tests {
     }
 
     #[test]
-    fn kickoff_only_striker_of_kicking_team_may_move() {
+    /// Kickoff does NOT freeze graphs, and does NOT script a walk-in.
+    ///
+    /// Replaces an older test asserting the opposite. Real-game recording
+    /// timeplot_2026-07-26_14-45-28: the kicking striker spawned on the centre
+    /// spot, claimed the ball on the first tick, and then walked AWAY from it
+    /// to z=13 under its own MoveTo — impossible under a freeze or a scripted
+    /// walk-in. What the engine does enforce is the receiving side staying out
+    /// of the centre circle, which is a position clamp, not a command override.
+    fn kickoff_leaves_graphs_in_control() {
         let params = SimParams::default();
-        let mut world = MatchWorld::new_kickoff_opening(params, TeamId::Away);
+        let mut world = MatchWorld::new_kickoff_opening(params, TeamId::Home);
         assert_eq!(world.match_state.phase, MatchPhase::Kickoff);
-        let start: Vec<(TeamId, u8, Vec2)> = world
-            .players
-            .iter()
-            .map(|p| (p.team, p.id.0, p.pos))
-            .collect();
-        // Everyone commanded toward the ball — graph cmds must be ignored;
-        // only engine walk-in moves kicking P1.
-        let toward_ball = || {
-            let mut out = BrainOutput::default();
-            for id in PlayerId::ALL {
-                out.commands[(id.0 as usize) - 1] = BrainCommand {
-                    move_to: Vec2::ZERO,
-                    sprint: true,
-                    interact: true,
-                };
-            }
-            out
+
+        // Send everyone somewhere far away from where they spawned.
+        let target = Vec2::new(0.0, 24.0);
+        let start: Vec<Vec2> = world.players.iter().map(|p| p.pos).collect();
+        let cmd = BrainOutput {
+            commands: [BrainCommand { move_to: target, sprint: false, interact: false }; 4],
+            ..Default::default()
         };
         for _ in 0..20 {
-            let home = toward_ball();
-            let away = toward_ball();
-            world.step_with_commands(&home, &away, FIXED_DT);
+            world.step_with_commands(&cmd, &cmd, FIXED_DT);
         }
-        for (team, id, pos0) in start {
-            let p = world
-                .players
-                .iter()
-                .find(|p| p.team == team && p.id.0 == id)
-                .unwrap();
-            let moved = (p.pos - pos0).length();
-            if team == TeamId::Away && id == 1 {
-                assert!(
-                    moved > 0.5,
-                    "engine walk-in should move kicking striker; moved={moved}"
-                );
-            } else {
-                assert!(
-                    moved < 0.05,
-                    "{team:?} P{id} should stay on faceoff during Kickoff; moved={moved}"
-                );
-            }
-        }
-    }
 
+        let moved = world
+            .players
+            .iter()
+            .zip(&start)
+            .filter(|(p, s)| (p.pos - **s).length() > 0.05)
+            .count();
+        assert!(
+            moved > 1,
+            "graphs keep control during a kickoff; only {moved} player(s) moved"
+        );
+    }
     #[test]
     fn kickoff_engine_walk_in_even_when_brains_idle() {
         // Mirrors empty Unity team (XD.txt): no useful MoveTo, striker still walks.

@@ -204,6 +204,12 @@ pub fn place_kickoff(
         p.facing = kickoff_facing(p.team, p.id, kickoff_team);
         p.shot_charge = 0.0;
         p.charge_warmup_left = 0.0;
+        // Clear the Interact impulse latch too. Without this it survives every
+        // goal and whistle: a graph still holding Interact when the whistle
+        // goes carries a spent press into the restart and cannot claim the new
+        // kickoff at all, with no way to recover short of releasing. The
+        // restart is a fresh input context, so the edge detector starts fresh.
+        p.interact_held = false;
     }
 }
 
@@ -251,8 +257,20 @@ pub fn kickoff_control_allowed(
     match match_state.phase {
         MatchPhase::Play => true,
         MatchPhase::GoalPause => false,
-        // Kickoff: no graph/keyboard control for anyone. Engine scripts the
-        // kicking striker walk-in (empty XD.txt still walks to the ball).
-        MatchPhase::Kickoff => false,
+        // Kickoff: graphs KEEP control. Measured in the real game
+        // (timeplot_2026-07-26_14-45-28): the kicking striker spawned on the
+        // centre spot claimed the ball within the first tick and then walked
+        // AWAY from it to z=13 on its own MoveTo. A scripted walk-in, or a
+        // freeze, could not produce that.
+        //
+        // The old "engine scripts the walk-in — empty XD.txt still walks to
+        // the ball" note has a simpler explanation: an empty graph commands
+        // MoveTo (0,0), which IS the centre spot. It looks scripted; it is just
+        // the default target.
+        //
+        // The one thing the engine really does enforce is that the RECEIVING
+        // side stays out of the centre circle, and that is handled separately
+        // by `clamp_receiving_team_outside_kickoff_circle`.
+        MatchPhase::Kickoff => true,
     }
 }

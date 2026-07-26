@@ -51,69 +51,59 @@ pub fn freeze_except_many(out: &mut BrainOutput, world: &MatchWorld, team: TeamI
 /// Scenario 1 layout only: attacker P1 at center with ball; GK P4 on the goal
 /// line center. No custom tackle rules — possession uses the global duel.
 /// Other roster players are parked off-pitch.
-pub fn setup_1v1_harness(world: &mut MatchWorld, attack_home: bool, z_bias: f32) {
+pub fn setup_1v1_harness(world: &mut MatchWorld, attack_home: bool, _z_bias: f32) {
     let params = world.params.clone();
     let (atk, gk_team) = if attack_home {
         (TeamId::Home, TeamId::Away)
     } else {
         (TeamId::Away, TeamId::Home)
     };
-    let sign = if attack_home { 1.0 } else { -1.0 };
-    let own_goal_x = if attack_home {
-        params.goal_line_x.abs()
-    } else {
-        -params.goal_line_x.abs()
-    };
 
-    let atk_pos = Vec2::new(0.0, z_bias * 3.0);
-    // Middle of the goal mouth, slightly off the line into the pitch.
-    let gk_pos = Vec2::new(own_goal_x - sign * 1.5, 0.0);
-
-    world.match_state.phase = MatchPhase::Play;
+    // A REAL kickoff, not a handout. The scenario is now the ordinary game with
+    // exactly one difference: the side taking the kickoff is the attacker, the
+    // side receiving it is the goalkeeper side, and it is 1v1.
+    //
+    // This used to force phase = Play, place the attacker on the centre spot
+    // already HOLDING the ball, and set first_kick_done / kickoff_touch_done so
+    // the kickoff machinery was skipped entirely. That measured a shooting
+    // drill, not a kickoff: the attacker never had to win the ball, the
+    // receiving side never had to respect the circle, and none of the real
+    // claim rules applied.
+    world.match_state.kickoff_team = atk;
+    world.match_state.phase = MatchPhase::Kickoff;
     world.match_state.phase_timer = 0.0;
-    world.match_state.kickoff_circle_lock = false;
-    world.match_state.kickoff_suppress_away_team_side = false;
+    world.match_state.kickoff_circle_lock = true;
+    world.match_state.kickoff_suppress_away_team_side = true;
+    world.match_state.kickoff_seen_carrier = false;
     world.match_state.clock_s = 0.0;
     // Scores are intentionally preserved — Scenario 1 is a continuous bout;
     // callers zero scores only on a full restart / new drill trial.
 
+    place_kickoff(
+        &mut world.ball,
+        &mut world.players,
+        atk,
+        &params,
+        &world.kickoff_formations,
+    );
+    reset_possession_for_kickoff(&mut world.possession);
+
+    // 1v1: the attacker keeps P1, the goalkeeper side keeps P4. Everyone else
+    // leaves the pitch. Both survivors keep the kickoff spot the real placement
+    // just gave them, so the shape is the game's, not the harness's.
     for p in &mut world.players {
-        if p.team == atk && p.id == PlayerId(1) {
-            p.pos = atk_pos;
-            p.vel = Vec2::ZERO;
-            p.facing = Vec2::new(sign, 0.0);
-            p.shot_charge = 0.0;
-            p.charge_warmup_left = 0.0;
-            p.stamina = 1.0;
-        } else if p.team == gk_team && p.id == PlayerId(4) {
-            p.pos = gk_pos;
-            p.vel = Vec2::ZERO;
-            p.facing = Vec2::new(-sign, 0.0);
-            p.shot_charge = 0.0;
-            p.charge_warmup_left = 0.0;
-            p.stamina = 1.0;
-        } else {
+        let active =
+            (p.team == atk && p.id == PlayerId(1)) || (p.team == gk_team && p.id == PlayerId(4));
+        p.vel = Vec2::ZERO;
+        p.shot_charge = 0.0;
+        p.charge_warmup_left = 0.0;
+        p.stamina = 1.0;
+        p.interact_held = false;
+        if !active {
             p.pos = park_off_pitch(p.team, p.id.0, &params);
-            p.vel = Vec2::ZERO;
-            p.shot_charge = 0.0;
-            p.charge_warmup_left = 0.0;
-            p.stamina = 1.0;
         }
     }
 
-    world.ball.pos = atk_pos + Vec2::new(sign * params.hold_offset, 0.0);
-    world.ball.vel = Vec2::ZERO;
-    world.ball.vel_y = 0.0;
-    world.ball.height = params.ball_rest_height;
-    world.ball.held = true;
-    world.possession.carrier = Some((atk, 1));
-    world.possession.pickup_lockout = 0.0;
-    world.possession.kick_exclude_shooter = None;
-    world.possession.kick_exclude_left = 0.0;
-    world.possession.first_kick_done = true;
-    world.possession.kickoff_touch_done = true;
-    world.possession.opening_dump_hang = false;
-    world.possession.opening_hot_reclaim = false;
     world.match_state.reset_stale_tracker(world.ball.pos);
 }
 
