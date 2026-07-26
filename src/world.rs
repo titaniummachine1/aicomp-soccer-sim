@@ -596,6 +596,20 @@ pub fn clamp_player_to_pitch(player: &mut Player, params: &SimParams) {
 }
 
 /// Non-kicking team stays outside the center circle until the ball leaves it.
+/// Push a receiving-team player out of the centre circle at kickoff.
+///
+/// KEPT, against issue #5, which claims the real game allows entry regardless
+/// of whose kickoff it is. Measurement says otherwise: `titanium.graph`'s
+/// `CIRCLE_STANDOFF = 7.75` is "circle 7.25 + measured 0.50 clearance
+/// (Test1/Test2 probes, 2026-07-26)" — the engine really does shove a receiving
+/// player out to that radius, and Titanium's faceoff spots are built to sit on
+/// it so the push is a no-op.
+///
+/// What that measurement covers is kickoff PLACEMENT. Whether a receiving
+/// player can walk back in before the kicking side touches the ball — the
+/// narrower thing issue #5 actually describes — is not settled by it, and a
+/// probe that walks a receiving player at the circle during Kickoff would
+/// settle it. Until then the measured behaviour stands.
 fn clamp_receiving_team_outside_kickoff_circle(
     player: &mut Player,
     match_state: &MatchState,
