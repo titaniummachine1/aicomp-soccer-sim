@@ -179,7 +179,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
 
 fn build_brain(input: &BrainInput) -> Result<Box<dyn TeamBrain>, String> {
     Ok(match input {
-        BrainInput::Chase => Box::new(ChaseBallBrain),
+        BrainInput::Chase => Box::new(ChaseBallBrain::default()),
         BrainInput::Idle => Box::new(IdleBrain),
         BrainInput::Test1 => Box::new(Test1Brain::default()),
         BrainInput::Test2 => Box::new(Test2Brain::default()),

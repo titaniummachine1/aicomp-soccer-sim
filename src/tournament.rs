@@ -50,13 +50,27 @@ pub struct TournamentRules {
 }
 
 impl Default for TournamentRules {
+    /// MEASURED from the real game, 2026-07-26 (`timeplot_..._14-49-59.json`,
+    /// a 560 s run against the blank control):
+    ///
+    ///   kickoff restarts at real 180.0 / 360.0 / 540.0 s — i.e. every
+    ///   `Max Simulation Time`, whose default is 180
+    ///   one player per side stops playing at each of those boundaries:
+    ///     180 -> 3v3   360 -> 2v2   540 -> 1v1
+    ///
+    /// The author describes this as "every 90 minutes"; that is the same thing
+    /// in DISPLAY minutes — 180 s of API clock renders as 90 on-screen minutes,
+    /// so the display runs at 0.5 game-minutes per API second. Everything here
+    /// is API seconds, the unit `Current Simulation Time` reports.
     fn default() -> Self {
         Self {
-            regulation_s: 90.0,
-            extra_time_s: 90.0,
-            drop_interval_s: 30.0,
+            regulation_s: 180.0,
+            // Removals start immediately after regulation; there is no separate
+            // extra-time block in the observed schedule.
+            extra_time_s: 0.0,
+            drop_interval_s: 180.0,
             min_players: 1,
-            final_block_s: 30.0,
+            final_block_s: 180.0,
         }
     }
 }
@@ -214,18 +228,18 @@ mod tests {
     fn default_ladder_matches_the_documented_timeline() {
         let r = TournamentRules::default();
         assert_eq!(r.sudden_death_start_s(), 180.0);
-        assert_eq!(r.full_length_s(), 270.0);
+        assert_eq!(r.full_length_s(), 720.0);
         // 4v4 for all of regulation and extra time.
         assert_eq!(r.players_at(0.0), 4);
         assert_eq!(r.players_at(89.9), 4);
         assert_eq!(r.players_at(179.9), 4);
         // Removals land on the block boundaries.
         assert_eq!(r.players_at(180.0), 3);
-        assert_eq!(r.players_at(209.9), 3);
-        assert_eq!(r.players_at(210.0), 2);
-        assert_eq!(r.players_at(240.0), 1);
+        assert_eq!(r.players_at(359.9), 3);
+        assert_eq!(r.players_at(360.0), 2);
+        assert_eq!(r.players_at(540.0), 1);
         // Never below min_players, however long it runs.
-        assert_eq!(r.players_at(269.9), 1);
+        assert_eq!(r.players_at(719.9), 1);
         assert_eq!(r.players_at(10_000.0), 1);
     }
 
@@ -234,18 +248,17 @@ mod tests {
         let r = TournamentRules::default();
         assert_eq!(r.active_ids(0.0), vec![1, 2, 3, 4]);
         assert_eq!(r.active_ids(180.0), vec![1, 2, 3]);
-        assert_eq!(r.active_ids(210.0), vec![1, 2]);
-        assert_eq!(r.active_ids(240.0), vec![1]);
+        assert_eq!(r.active_ids(360.0), vec![1, 2]);
+        assert_eq!(r.active_ids(540.0), vec![1]);
     }
 
     #[test]
     fn goals_beat_possession_and_possession_breaks_a_tie() {
         let r = TournamentRules::default();
         // Behind on goals but far ahead on possession still loses.
-        assert_eq!(decide(&r, 90.0, 0, 1, 80.0, 5.0), (Some(TeamId::Away), DecidedBy::Regulation));
-        assert_eq!(decide(&r, 180.0, 2, 1, 1.0, 9.0), (Some(TeamId::Home), DecidedBy::ExtraTime));
-        assert_eq!(decide(&r, 205.0, 1, 0, 0.0, 0.0), (Some(TeamId::Home), DecidedBy::SuddenDeath));
-        assert_eq!(decide(&r, 270.0, 0, 0, 44.0, 43.0), (Some(TeamId::Home), DecidedBy::Possession));
-        assert_eq!(decide(&r, 270.0, 3, 3, 10.0, 10.0), (None, DecidedBy::Draw));
+        assert_eq!(decide(&r, 180.0, 0, 1, 80.0, 5.0), (Some(TeamId::Away), DecidedBy::Regulation));
+        assert_eq!(decide(&r, 400.0, 1, 0, 0.0, 0.0), (Some(TeamId::Home), DecidedBy::SuddenDeath));
+        assert_eq!(decide(&r, 720.0, 0, 0, 44.0, 43.0), (Some(TeamId::Home), DecidedBy::Possession));
+        assert_eq!(decide(&r, 720.0, 3, 3, 10.0, 10.0), (None, DecidedBy::Draw));
     }
 }

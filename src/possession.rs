@@ -137,6 +137,21 @@ pub fn apply_interact(
     kickoff_elapsed_s: Option<f32>,
 ) -> InteractOutcome {
     let hold = player.hold_pos_playable(params);
+    // Interact is an IMPULSE. Holding it charges a shot (handled in the carrier
+    // branch below, which is genuinely level-triggered), but a claim or a
+    // tackle fires only on the press. Level-triggering them let a graph that
+    // simply pinned Interact true re-attempt a steal every single tick, which
+    // the real game does not allow.
+    // Interact is an IMPULSE for claims and tackles: one only counts if the
+    // PREVIOUS tick was not pressing. Holding it down produces exactly one, the
+    // same anti-bunnyhop latch games use for jump. Charging a shot is
+    // unaffected — that is level-triggered and lives in the carrier branch.
+    let impulse = if params.interact_is_impulse {
+        cmd.interact && !player.interact_held
+    } else {
+        cmd.interact
+    };
+    player.interact_held = cmd.interact;
     let is_carrier = matches!(
         poss.carrier,
         Some((t, id)) if t == player.team && id == player.id.0
@@ -231,7 +246,7 @@ pub fn apply_interact(
         return InteractOutcome::default();
     }
 
-    if !cmd.interact {
+    if !impulse {
         return InteractOutcome::default();
     }
 
@@ -420,6 +435,7 @@ mod tests {
             stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
+            interact_held: false,
         };
         let cmd = BrainCommand {
             move_to: attacker.pos,
@@ -479,6 +495,7 @@ mod tests {
             stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
+            interact_held: false,
         };
         let cmd = BrainCommand {
             move_to: attacker.pos,
@@ -528,6 +545,7 @@ mod tests {
             stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
+            interact_held: false,
         };
         let cmd = BrainCommand {
             move_to: attacker.pos,
@@ -585,6 +603,7 @@ mod tests {
             stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
+            interact_held: false,
         };
         let cmd = BrainCommand {
             move_to: attacker.pos,
@@ -645,6 +664,7 @@ mod tests {
             stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
+            interact_held: false,
         };
         let cmd = BrainCommand {
             move_to: mate.pos,
@@ -681,6 +701,7 @@ mod tests {
             stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
+            interact_held: false,
         };
         let move_to = player.pos;
 
@@ -732,6 +753,7 @@ mod tests {
             stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
+            interact_held: false,
         };
         let cmd = BrainCommand {
             move_to: Vec2::X,

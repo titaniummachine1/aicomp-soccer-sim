@@ -27,7 +27,7 @@ fn build_brain(input: &BrainInput, cache: &ProgramCache) -> Result<Box<dyn TeamB
     // against itself is the control that tells you whether an asymmetry is in
     // a team's logic or in the simulator itself.
     let path = match input {
-        BrainInput::Chase => return Ok(Box::new(aicomp_soccer_sim::brain::ChaseBallBrain)),
+        BrainInput::Chase => return Ok(Box::new(aicomp_soccer_sim::brain::ChaseBallBrain::default())),
         BrainInput::Idle => return Ok(Box::new(aicomp_soccer_sim::brain::IdleBrain)),
         BrainInput::Aia => soccer_aia_graph_path(),
         BrainInput::Graph(p) => p.clone(),

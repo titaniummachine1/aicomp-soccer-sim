@@ -69,6 +69,7 @@ impl MatchWorld {
                     stamina_regen_lock_left: 0.0,
                     shot_charge: 0.0,
                     charge_warmup_left: 0.0,
+                    interact_held: false,
                 });
             }
         }
@@ -665,7 +666,7 @@ mod tests {
             }
         }
 
-        let mut gk = ChaseBallBrain;
+        let mut gk = ChaseBallBrain::default();
 
         let mut stole = false;
         let mut min_atk_stam = 1.0_f32;
@@ -826,8 +827,8 @@ mod tests {
     fn headless_steps_without_panic() {
         let params = SimParams::default();
         let mut world = MatchWorld::new_kickoff_opening(params, TeamId::Home);
-        let mut home = ChaseBallBrain;
-        let mut away = ChaseBallBrain;
+        let mut home = ChaseBallBrain::default();
+        let mut away = ChaseBallBrain::default();
         for _ in 0..200 {
             world.step_brains(&mut home, &mut away, FIXED_DT);
         }
@@ -1016,6 +1017,7 @@ mod tests {
             stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
+            interact_held: false,
         };
         clamp_player_to_pitch(&mut p, &params);
         assert!(p.pos.x <= params.x_max + 1e-4);
@@ -1037,6 +1039,7 @@ mod tests {
             stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
+            interact_held: false,
         };
         clamp_player_to_pitch(&mut p, &params);
         assert!(

@@ -27,7 +27,7 @@ use aicomp_soccer_sim::world::{MatchWorld, FIXED_DT};
 
 fn build(input: &BrainInput, cache: &ProgramCache) -> Result<Box<dyn TeamBrain>, String> {
     let path = match input {
-        BrainInput::Chase => return Ok(Box::new(aicomp_soccer_sim::brain::ChaseBallBrain)),
+        BrainInput::Chase => return Ok(Box::new(aicomp_soccer_sim::brain::ChaseBallBrain::default())),
         BrainInput::Idle => return Ok(Box::new(IdleBrain)),
         BrainInput::Aia => soccer_aia_graph_path(),
         BrainInput::Graph(p) => p.clone(),

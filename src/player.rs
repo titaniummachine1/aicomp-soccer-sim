@@ -27,6 +27,14 @@ pub struct Player {
     /// After pickup/steal, engine holds charge at 0 for ~0.30s while Interact
     /// can already be true (baseline TimePlot: both Home T1 and Away O2).
     pub charge_warmup_left: f32,
+    /// Interact state on the PREVIOUS tick.
+    ///
+    /// Interact is an impulse, not a held advantage (confirmed by the game's
+    /// author): holding it only charges a shot, while a claim or a tackle fires
+    /// once on the press and needs a RELEASE before it can fire again. Claims
+    /// and tackles are therefore gated on the rising edge, and this is the edge
+    /// detector.
+    pub interact_held: bool,
 }
 
 impl Player {
@@ -353,6 +361,7 @@ mod tests {
             stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
+            interact_held: false,
         }
     }
 
@@ -370,6 +379,7 @@ mod tests {
             stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
+            interact_held: false,
         };
         let desired = player.hold_pos(params.hold_offset);
         let actual = player.hold_pos_playable(&params);

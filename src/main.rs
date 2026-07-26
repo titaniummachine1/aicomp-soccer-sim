@@ -685,7 +685,7 @@ impl TeamBrain for ActiveBrain {
 /// Resolve CLI / button brain → ActiveBrain + display path for the status strip.
 fn resolve_brain(input: &BrainInput) -> (ActiveBrain, PathBuf) {
     match input {
-        BrainInput::Chase => (ActiveBrain::Chase(ChaseBallBrain), PathBuf::from("chase")),
+        BrainInput::Chase => (ActiveBrain::Chase(ChaseBallBrain::default()), PathBuf::from("chase")),
         BrainInput::Idle => (ActiveBrain::Idle(IdleBrain), PathBuf::from("idle")),
         BrainInput::Test1 => (
             ActiveBrain::Test1(Test1Brain::default()),
@@ -726,7 +726,7 @@ fn resolve_brain(input: &BrainInput) -> (ActiveBrain, PathBuf) {
                 .map(|d| d.as_nanos() & 1)
                 .unwrap_or(0);
             if bit == 0 {
-                (ActiveBrain::Chase(ChaseBallBrain), PathBuf::from("chase"))
+                (ActiveBrain::Chase(ChaseBallBrain::default()), PathBuf::from("chase"))
             } else {
                 (ActiveBrain::Idle(IdleBrain), PathBuf::from("idle"))
             }
@@ -751,7 +751,7 @@ fn load_graph_brain(path: &Path) -> ActiveBrain {
         }
         Err(e) => {
             warn!("graph load failed ({path:?}): {e} — using ChaseBallBrain");
-            ActiveBrain::Chase(ChaseBallBrain)
+            ActiveBrain::Chase(ChaseBallBrain::default())
         }
     }
 }

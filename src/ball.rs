@@ -412,6 +412,7 @@ mod tests {
             stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
+            interact_held: false,
         };
         resolve_player_bodies(&mut ball, &[pusher], &params);
         assert_eq!(ball.pos, start);

@@ -13,6 +13,29 @@ pub struct SimParams {
     pub wall_e: f32,
     pub wall_mu: f32,
     pub stop_speed_eps: f32,
+    /// Treat Interact as an IMPULSE for claims and tackles: they fire on the
+    /// press and need a release before firing again. Holding it still charges
+    /// a shot, which is the one case where holding helps.
+    ///
+    /// The game's author confirms the real game works this way: an Interact
+    /// only counts as an impulse if the PREVIOUS tick was not pressing, exactly
+    /// like an anti-bunnyhop jump latch. Charging a shot is unaffected — that
+    /// is level-triggered and handled in the carrier branch.
+    ///
+    /// OFF by default because the model as implemented does not yet reproduce
+    /// play. MEASURED, chase-vs-chase over 8 s:
+    ///     impulse OFF -> possession 2.09 / 3.63
+    ///     impulse ON  -> possession 0.00 / 0.00   (nobody ever claims)
+    /// even with the chaser pulsing press/release on alternating ticks, which
+    /// should produce a clean rising edge every other tick. So either the claim
+    /// path has another gate that a single-tick press cannot pass, or the real
+    /// rule is narrower than "every claim and tackle".
+    ///
+    /// Do NOT flip this default until that is understood and checked against a
+    /// real-game recording — a probe that drops the ball and tries to re-claim
+    /// while holding Interact would settle it. Turning it on silently would
+    /// invalidate every gate result for the second time in one day.
+    pub interact_is_impulse: bool,
     pub x_min: f32,
     pub x_max: f32,
     pub z_min: f32,
@@ -124,6 +147,7 @@ impl SimParams {
             // TRUE pitch outline, from the engine corner nodes. The ball
             // stops a radius short of these because of its own volume -- that
             // inset happens in resolve_walls, NOT by shrinking the pitch.
+            interact_is_impulse: false,
             x_min: -40.0,
             x_max: 40.0,
             z_min: -25.0,

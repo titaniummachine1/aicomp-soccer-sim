@@ -115,10 +115,21 @@ impl TeamBrain for IdleBrain {
 
 /// Chase ball via SoccerGet* labels — proves API I/O path.
 #[derive(Debug, Default)]
-pub struct ChaseBallBrain;
+pub struct ChaseBallBrain {
+    /// Ticks this brain has run. Per-instance on purpose: a shared counter
+    /// advanced once per brain per tick, so with two chasers on the pitch one
+    /// side pressed every tick (and thus stayed latched) while the other never
+    /// pressed at all.
+    tick: u64,
+}
 
 impl TeamBrain for ChaseBallBrain {
     fn think(&mut self, api: &TeamApi) -> BrainOutput {
+        // One press, then at least one full tick released, so the latch can
+        // clear and the next press is a fresh impulse. Advanced once per
+        // think() — i.e. per tick — not once per player.
+        let press_tick = self.tick % 2 == 0;
+        self.tick = self.tick.wrapping_add(1);
         let mut out = BrainOutput::default();
         let ball = api.get_transform("Ball").unwrap_or(Vec2::ZERO);
         let opp_goal = api
@@ -160,7 +171,14 @@ impl TeamBrain for ChaseBallBrain {
                 (ball, true, false)
             } else {
                 let dist = (me - ball).length();
-                (ball, true, near || dist <= interact_r)
+                // PULSE the claim. Interact is an impulse: it fires on the
+                // press and needs a release before it can fire again, so a
+                // brain that simply pins it true claims once and then never
+                // again. At kickoff the free-ball claim is additionally gated
+                // for ~1s, so a pinned press is spent before it is even legal
+                // and the ball is never picked up at all.
+                let want = near || dist <= interact_r;
+                (ball, true, want && press_tick)
             };
 
             out.commands[i] = BrainCommand {

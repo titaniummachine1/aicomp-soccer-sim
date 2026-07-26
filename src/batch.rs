@@ -295,7 +295,7 @@ pub fn build_default_titanium_brain() -> Result<Box<dyn TeamBrain>, String> {
         }
     }
     Ok(match random_builtin() {
-        BrainInput::Chase => Box::new(ChaseBallBrain),
+        BrainInput::Chase => Box::new(ChaseBallBrain::default()),
         _ => Box::new(IdleBrain),
     })
 }
@@ -333,7 +333,7 @@ fn build_brain(
     cache: Option<&ProgramCache>,
 ) -> Result<Box<dyn TeamBrain>, String> {
     Ok(match input {
-        BrainInput::Chase => Box::new(ChaseBallBrain),
+        BrainInput::Chase => Box::new(ChaseBallBrain::default()),
         BrainInput::Idle => Box::new(IdleBrain),
         BrainInput::Test1 => Box::new(Test1Brain::default()),
         BrainInput::Test2 => Box::new(Test2Brain::default()),
