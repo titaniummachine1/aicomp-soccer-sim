@@ -77,7 +77,19 @@ impl ProgramCache {
             return Ok(hit.clone());
         }
         let graph = load_team_graph(path).map_err(|e| format!("load graph {path:?}: {e}"))?;
+        // Clear first so a previous compile cannot be blamed on this graph.
+        let _ = crate::graph_vm::take_recursion_limit_hit();
         let cached = RuntimeBrain::compile_cached(graph);
+        if crate::graph_vm::take_recursion_limit_hit() {
+            // HARD FAIL, not a warning. A cycle leaves the affected ports null,
+            // so the graph still "runs" — it just makes no decisions, which
+            // looks exactly like a weak opponent and silently poisons any gate
+            // that includes it. The viewer can show a banner and let a human
+            // judge; headless has no human, so it must refuse.
+            return Err(format!(
+                "recursion depth reached loading {path:?}: dependency cycle,                  cannot be lowered. Refused rather than played - it would run                  as an inert opponent and quietly invalidate every result it                  appears in."
+            ));
+        }
         let mut map = self.inner.lock().map_err(|e| e.to_string())?;
         Ok(map.entry(key).or_insert(cached).clone())
     }
