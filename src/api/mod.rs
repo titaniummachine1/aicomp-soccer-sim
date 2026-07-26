@@ -11,6 +11,7 @@
 
 mod clear;
 mod dense;
+pub mod fidelity;
 mod labels;
 mod snapshot;
 
