@@ -23,6 +23,7 @@ pub mod probe_brains;
 pub mod scenario;
 pub mod team_threads;
 pub mod titanium;
+pub mod tournament;
 pub mod timeplot;
 pub mod world;
 /// Square-weights NN harness. **Off by default** (`nn_train` feature) so Bevy

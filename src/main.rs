@@ -584,6 +584,7 @@ fn main() {
                 handle_ui_buttons,
                 handle_timescale_slider,
                 handle_player_click,
+                drag_players_when_paused,
                 sync_visuals,
                 sync_stamina_arcs,
                 sync_team_buttons,
@@ -1014,6 +1015,9 @@ enum UiAction {
     TogglePause,
     ToggleFast,
     ToggleDebug,
+    /// Copy the current player layout as faceoff spots, ready to paste into
+    /// `InitializeSoccer`. Pair it with dragging players while paused.
+    CaptureFormation,
 }
 
 #[derive(Component)]
@@ -1563,18 +1567,42 @@ fn setup_ui(
             ));
         });
 
-    // Top-right: DebugDraw visibility toggle.
+    // Top-right: DebugDraw toggle + Capture Start Pos.
     commands
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
                 top: Val::Px(12.0),
                 right: Val::Px(12.0),
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(8.0),
                 ..default()
             },
             ZIndex(20),
         ))
         .with_children(|parent| {
+            parent
+                .spawn((
+                    Button,
+                    UiAction::CaptureFormation,
+                    Node {
+                        padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
+                        min_width: Val::Px(150.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border_radius: BorderRadius::all(Val::Px(6.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.22, 0.22, 0.30)),
+                ))
+                .with_children(|b| {
+                    b.spawn((
+                        Text::new("Capture Start Pos"),
+                        TextFont::from_font_size(14.0),
+                        TextColor(Color::WHITE),
+                        TextLayout::new(Justify::Center, LineBreak::NoWrap),
+                    ));
+                });
             parent
                 .spawn((
                     Button,
@@ -2433,6 +2461,27 @@ fn handle_ui_buttons(
                     }
                     UiAction::TogglePause => toggle_pause(&mut paused),
                     UiAction::ToggleFast => toggle_fast(&mut fast, &mut clock),
+                    UiAction::CaptureFormation => {
+                        let text = formation_snippet(&viewer.world);
+                        let copied = match arboard::Clipboard::new()
+                            .and_then(|mut c| c.set_text(text.clone()))
+                        {
+                            Ok(()) => true,
+                            Err(e) => {
+                                warn!("clipboard unavailable: {e}");
+                                false
+                            }
+                        };
+                        // Always log it: a failed clipboard must not lose the
+                        // layout the user just spent time arranging.
+                        info!("captured start positions:
+{text}");
+                        scripts.status = if copied {
+                            "start positions copied to clipboard".to_string()
+                        } else {
+                            "clipboard failed — layout printed to console".to_string()
+                        };
+                    }
                     UiAction::ToggleDebug => {
                         show_debug.0 = !show_debug.0;
                         if let Ok(mut text) = debug_label.single_mut() {
@@ -2543,6 +2592,125 @@ fn pick_team_script(title: &str) -> Option<PathBuf> {
         .set_directory(&dir)
         .add_filter("AIComp team", &["txt"])
         .pick_file()
+}
+
+/// Current player layout as `ConstructSoccerProperties` faceoff spots.
+///
+/// Declared spots are world absolute and are mirrored by the graph's own team
+/// multiplier (−1 Home, +1 Away), so the value to DECLARE is the world
+/// position multiplied by that same sign — `spot()` puts it back.
+///
+/// Flags anything the engine would refuse to honour, because a spot that gets
+/// silently relocated at the whistle is worse than one that is obviously
+/// wrong: the opponent's half is dragged onto the halfway line, and the
+/// receiving side is pushed out of the centre circle.
+fn formation_snippet(world: &MatchWorld) -> String {
+    let r = world.params.kickoff_circle_r;
+    let mut out = String::new();
+    for team in [TeamId::Home, TeamId::Away] {
+        let tm = match team {
+            TeamId::Home => -1.0,
+            TeamId::Away => 1.0,
+        };
+        out.push_str(&format!("// {team:?}
+"));
+        let mut players: Vec<_> = world.players.iter().filter(|p| p.team == team).collect();
+        players.sort_by_key(|p| p.id.0);
+        for p in players {
+            let d = p.pos * tm;
+            let own_half = match team {
+                TeamId::Home => p.pos.x <= 0.0,
+                TeamId::Away => p.pos.x >= 0.0,
+            };
+            let mut note = String::new();
+            if !own_half {
+                note.push_str("  [opponent half — clamped to x=0]");
+            }
+            if p.pos.length() < r {
+                note.push_str("  [inside circle — pushed out when receiving]");
+            }
+            out.push_str(&format!(
+                "spot({:7.2}, {:7.2}),   // P{}{}
+",
+                d.x, d.y, p.id.0, note
+            ));
+        }
+    }
+    out
+}
+
+/// Drag players around with the mouse while the sim is paused.
+///
+/// Only while paused: the sim would overwrite any drag on the next tick, and
+/// a half-applied drag mid-match is a corrupted world rather than a layout.
+fn drag_players_when_paused(
+    paused: Res<SimPaused>,
+    buttons: Res<ButtonInput<MouseButton>>,
+    windows: Query<&Window>,
+    cameras: Query<(&Camera, &GlobalTransform)>,
+    mut viewer: ResMut<ViewerWorld>,
+    mut interp: ResMut<InterpState>,
+    mut held: Local<Option<(TeamId, PlayerId)>>,
+) {
+    if !paused.0 {
+        *held = None;
+        return;
+    }
+    if buttons.just_released(MouseButton::Left) {
+        *held = None;
+        return;
+    }
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Some(cursor) = window.cursor_position() else {
+        return;
+    };
+    let Ok((camera, cam_tf)) = cameras.single() else {
+        return;
+    };
+    let Ok(world_px) = camera.viewport_to_world_2d(cam_tf, cursor) else {
+        return;
+    };
+    let target = world_px / PPM;
+
+    if buttons.just_pressed(MouseButton::Left) && held.is_none() {
+        // Grab the nearest player, but only a real hit — otherwise every click
+        // on empty grass would teleport whoever happened to be closest.
+        let grab_r = viewer.world.params.body_radius * 2.0;
+        let mut best: Option<(f32, TeamId, PlayerId)> = None;
+        for p in &viewer.world.players {
+            let d = p.pos.distance(target);
+            if d <= grab_r && best.map_or(true, |(bd, _, _)| d < bd) {
+                best = Some((d, p.team, p.id));
+            }
+        }
+        *held = best.map(|(_, t, id)| (t, id));
+    }
+
+    let Some((team, id)) = *held else {
+        return;
+    };
+    if !buttons.pressed(MouseButton::Left) {
+        *held = None;
+        return;
+    }
+    let params = viewer.world.params.clone();
+    if let Some(p) = viewer
+        .world
+        .players
+        .iter_mut()
+        .find(|p| p.team == team && p.id == id)
+    {
+        p.pos = Vec2::new(
+            target.x.clamp(params.x_min, params.x_max),
+            target.y.clamp(params.z_min, params.z_max),
+        );
+        p.vel = Vec2::ZERO;
+    }
+    // The viewer renders from interpolated positions, so a drag that only
+    // moved the world would snap back on the next frame.
+    interp.reset_from(&viewer.world);
 }
 
 fn handle_player_click(

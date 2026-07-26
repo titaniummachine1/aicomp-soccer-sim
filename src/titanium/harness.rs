@@ -12,7 +12,7 @@ use crate::player::PlayerId;
 use crate::possession::reset_possession_for_kickoff;
 use crate::world::MatchWorld;
 
-fn park_off_pitch(team: TeamId, id: u8, params: &SimParams) -> Vec2 {
+pub fn park_off_pitch(team: TeamId, id: u8, params: &SimParams) -> Vec2 {
     let back = match team {
         TeamId::Home => -1.0,
         TeamId::Away => 1.0,

@@ -10,7 +10,7 @@
 //! the private engine repo's `scripts/build_titanium.py` and is loaded here
 //! only as a compiled graph.
 
-mod harness;
+pub mod harness;
 
 pub use harness::{
     apply_1v1_freeze, apply_2v1_freeze, apply_4v1_freeze, freeze_except, freeze_except_many,

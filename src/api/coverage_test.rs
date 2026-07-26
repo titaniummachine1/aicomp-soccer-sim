@@ -133,3 +133,52 @@ mod tests {
         assert_eq!(api(&players).get_bool("Is Team Player 1 Open"), Some(true));
     }
 }
+
+#[cfg(test)]
+mod dropdown_index_alignment {
+    use crate::graph::dropdowns::SOCCER_GET_FLOAT;
+
+    /// Graph files store the dropdown INDEX, not the label — AIGamePyLibrary's
+    /// `_normalize_modifier` writes the position from its `DROPDOWN_OPTIONS`
+    /// table. So this list must match the game's dropdown ORDER exactly; a
+    /// single spurious or missing entry silently shifts every label after it.
+    ///
+    /// That is not hypothetical. A phantom "Player With Ball Shot Charge %" at
+    /// index 10 shifted everything from 10 on by one, so 14 of the 15 floats
+    /// the live champion reads resolved to the wrong value — `Ball Carrier
+    /// Stamina` came back as a shot charge, `Team Player 1 Stamina` came back
+    /// as the constant `Goal Height`. Every stamina-duel and shot-charge gate
+    /// result taken before that fix was measured against nonsense.
+    #[test]
+    fn soccer_get_float_indices_match_the_game_dropdown() {
+        assert_eq!(
+            SOCCER_GET_FLOAT.len(),
+            44,
+            "the game's SoccerGetFloat dropdown has exactly 44 entries"
+        );
+        // Spot-check the entries Titanium actually reads, by index.
+        for (index, expected) in [
+            (9usize, "Player Interact Radius"),
+            (10, "Ball Carrier Stamina"),
+            (11, "Ball Carrier Shot Charge"),
+            (12, "Teammate 1 Shot Charge"),
+            (15, "Teammate 4 Shot Charge"),
+            (21, "Team Player 1 Stamina"),
+            (24, "Team Player 4 Stamina"),
+            (29, "Opponent Player 1 Stamina"),
+            (32, "Opponent Player 4 Stamina"),
+            (38, "Current Simulation Time"),
+            (39, "Max Simulation Time"),
+            (43, "Pi"),
+        ] {
+            assert_eq!(
+                SOCCER_GET_FLOAT[index], expected,
+                "SoccerGetFloat index {index} must be {expected:?}"
+            );
+        }
+        assert!(
+            !SOCCER_GET_FLOAT.contains(&"Player With Ball Shot Charge %"),
+            "phantom label — it is not in the game's dropdown and shifts every index after 9"
+        );
+    }
+}

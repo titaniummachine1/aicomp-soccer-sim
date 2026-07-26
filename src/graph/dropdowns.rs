@@ -69,7 +69,18 @@ pub const SOCCER_GET_FLOAT: &[&str] = &[
     "Opponent Attacking %",
     "Ball Speed",
     "Player Interact Radius",
-    "Player With Ball Shot Charge %",
+    // NO ENTRY HERE. "Player With Ball Shot Charge %" used to sit at index 10
+    // and does not exist in the game's dropdown at all. Because graph files
+    // store the dropdown INDEX (AIGamePyLibrary `_normalize_modifier` writes
+    // the position, not the label), that one phantom entry shifted every label
+    // from 10 onward by one, so 14 of the 15 floats the live champion reads
+    // resolved to the wrong value:
+    //   Ball Carrier Stamina  -> Player With Ball Shot Charge %  (phantom)
+    //   Team Player 1 Stamina -> Goal Height                     (a constant!)
+    //   Opponent Player 1 Stamina -> Distance from TP4 to nearest Opponent
+    // Every stamina duel and shot-charge decision was therefore gated against
+    // nonsense. Verified against AIGamePyLibrary's DROPDOWN_OPTIONS, which is
+    // what the builder writes; `api/coverage_test.rs` now pins the ordering.
     "Ball Carrier Stamina",
     "Ball Carrier Shot Charge",
     "Teammate 1 Shot Charge",

@@ -61,6 +61,7 @@ nn_train = []
 [dependencies]
 # Viewer is 2D + UI only — drop default 3D/audio.
 bevy = { version = "0.19", default-features = false, features = ["2d", "ui", "png"] }
+arboard = "3"
 micropool = "0.3"
 rfd = "0.15"
 serde = { version = "1", features = ["derive"] }
