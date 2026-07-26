@@ -179,10 +179,12 @@ impl MatchWorld {
 
         if self.match_state.phase == MatchPhase::Kickoff {
             self.match_state.phase_timer += dt;
+            self.match_state.kickoff_ticks += 1;
             // Unity Is_Kickoff clears on pickup (DB33 ~1s), not on a body nudge of
-            // the free center ball. Fall back only if nobody claims for a long time.
+            // the free center ball. Otherwise the kickoff lasts a fixed
+            // KICKOFF_TICKS — one second, counted in ticks so it is exact.
             let first_touch = self.possession.carrier.is_some();
-            if first_touch || self.match_state.phase_timer > 8.0 {
+            if first_touch || self.match_state.kickoff_ticks >= crate::match_state::KICKOFF_TICKS {
                 self.match_state.phase = MatchPhase::Play;
                 self.match_state.reset_stale_tracker(self.ball.pos);
             }

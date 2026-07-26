@@ -14,6 +14,22 @@ pub enum MatchPhase {
     GoalPause,
 }
 
+/// How long a kickoff lasts, counted in TICKS rather than seconds.
+///
+/// The engine steps at a measured 0.019 s (confirmed against real-game TimePlot
+/// exports: median 0.019000, min/max 0.018999/0.019001 over 9474 samples), so
+/// one second is `1.000 / 0.019 = 52.6316` ticks, which is not an integer. 53 is the nearer whole tick and runs 1.007 s; 52
+/// would run 0.988 s. Counting ticks instead of accumulating `dt` also removes
+/// the float drift a `phase_timer > 1.0` comparison would carry.
+///
+/// For reference the free-ball claim gate is already tick-exact at the other
+/// end: its 0.95 s is precisely 50 ticks.
+///
+/// This replaces an 8.0 s fallback, which was ~421 ticks — long enough that a
+/// kickoff where nobody claimed the ball held the non-kicking side out of the
+/// centre circle for eight seconds of play.
+pub const KICKOFF_TICKS: u32 = 53;
+
 #[derive(Resource, Debug, Clone)]
 pub struct MatchState {
     pub phase: MatchPhase,
@@ -47,6 +63,9 @@ pub struct MatchState {
     pub stale_anchor: Vec2,
     /// Seconds since the ball last moved past the stale distance threshold.
     pub stale_idle_s: f32,
+    /// Ticks elapsed in the current Kickoff phase. Counted, not integrated, so
+    /// the duration is exact — see [`KICKOFF_TICKS`].
+    pub kickoff_ticks: u32,
 }
 
 impl Default for MatchState {
@@ -84,6 +103,7 @@ impl MatchState {
             kickoff_seen_carrier: false,
             stale_anchor: Vec2::ZERO,
             stale_idle_s: 0.0,
+            kickoff_ticks: 0,
         }
     }
 
@@ -101,6 +121,7 @@ impl MatchState {
         self.kickoff_circle_lock = true;
         self.kickoff_suppress_away_team_side = true;
         self.kickoff_seen_carrier = false;
+        self.kickoff_ticks = 0;
         self.reset_stale_tracker(Vec2::ZERO);
     }
 
@@ -141,6 +162,7 @@ impl MatchState {
         self.kickoff_circle_lock = true;
         self.kickoff_suppress_away_team_side = true;
         self.kickoff_seen_carrier = false;
+        self.kickoff_ticks = 0;
         self.reset_stale_tracker(Vec2::ZERO);
     }
 
@@ -310,6 +332,49 @@ mod tests {
         assert!(
             home > 0 && away > 0,
             "opening kickoff never varied over 200 draws: {home} home / {away} away"
+        );
+    }
+}
+
+#[cfg(test)]
+mod kickoff_duration_tests {
+    use super::KICKOFF_TICKS;
+    use crate::world::FIXED_DT;
+
+    /// The kickoff is one second, expressed exactly in ticks.
+    #[test]
+    fn kickoff_is_one_second_in_whole_ticks() {
+        // 1.000 / 0.019 = 52.6316, so 53 is the nearest whole tick.
+        let ideal = 1.0_f32 / FIXED_DT;
+        assert!(
+            (KICKOFF_TICKS as f32 - ideal).abs() <= 0.5,
+            "{KICKOFF_TICKS} ticks is not the nearest whole tick to {ideal:.4}"
+        );
+        let seconds = KICKOFF_TICKS as f32 * FIXED_DT;
+        assert!(
+            (seconds - 1.0).abs() < 0.01,
+            "kickoff runs {seconds:.4}s, expected within 10ms of 1s"
+        );
+    }
+
+    /// A kickoff nobody claims must end on time rather than hanging on.
+    #[test]
+    fn an_unclaimed_kickoff_ends_after_exactly_one_second() {
+        use crate::brain::{BrainOutput, TeamId};
+        use crate::match_state::MatchPhase;
+        use crate::params::SimParams;
+        use crate::world::MatchWorld;
+
+        let mut world = MatchWorld::new_kickoff_opening(SimParams::default(), TeamId::Home);
+        let cmd = BrainOutput::default(); // nobody moves, nobody claims
+        let mut ticks = 0;
+        while world.match_state.phase == MatchPhase::Kickoff && ticks < 1000 {
+            world.step_with_commands(&cmd, &cmd, FIXED_DT);
+            ticks += 1;
+        }
+        assert_eq!(
+            ticks, KICKOFF_TICKS as i32,
+            "unclaimed kickoff ran {ticks} ticks, expected {KICKOFF_TICKS}"
         );
     }
 }
