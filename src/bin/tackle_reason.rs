@@ -53,6 +53,18 @@ fn heading_is_safe(
     let me_end = carrier_start + heading * params.player_walk_speed * FIXED_DT;
     let ball_end = me_end + heading * params.hold_offset;
     !resolved_opponents.iter().any(|(opp_end, opp_facing, stam)| {
+        // A weaker opponent loses the duel and is a ghost — INDEPENDENTLY.
+        //
+        // The residual mispredictions all live here. A failed tackle still
+        // drains the carrier by min(both), and phase 2 applies that drain
+        // immediately, so opponent A can fail, drop the carrier's stamina, and
+        // leave opponent B — previously too weak — winning the duel on the same
+        // tick. Judging each opponent against the carrier's PRE-drain stamina
+        // (as here, and as Titanium does) cannot see that chain.
+        //
+        // NOT graded: whether the real game applies drain mid-tick or at tick
+        // end is unmeasured. If it is tick-end, this chain is a sim artifact
+        // and the mispredictions are not Titanium's fault at all.
         if *stam < my_stam {
             return false;
         }
@@ -191,11 +203,19 @@ fn main() {
                             samples += 1;
                             // Titanium assumes the ball lands at
                             //     me_end + chosen_heading * hold_offset
-                            // i.e. that the carrier instantly faces the chosen
-                            // direction. Facing actually rotates at a limited
-                            // angular speed, so compare the assumed ball point
-                            // against where the ball REALLY ended up.
-                            let real_ball = world.ball.pos;
+                            // Compare that against where the ball ACTUALLY was
+                            // when the tackle was judged: the losing carrier's
+                            // own wall-projected hold point.
+                            //
+                            // NOT `world.ball.pos` — by now the tackler owns the
+                            // ball, so that reads the tackler's hold point and
+                            // reports a ~2 m "model error" that is pure artifact.
+                            let real_ball = world
+                                .players
+                                .iter()
+                                .find(|q| Some((q.team, q.id.0)) == before)
+                                .map(|q| q.hold_pos_playable(&world.params))
+                                .unwrap_or(world.ball.pos);
                             let ball_model_err = (real_ball - ball_end).length();
                             println!("  miss: A{tid} movement err {err:.3}m | ball assumed {:.2}m from tackler, REAL {:.2}m (r {:.2}) | ball position error {ball_model_err:.3}m",
                                 (t.pos - ball_end).length(),

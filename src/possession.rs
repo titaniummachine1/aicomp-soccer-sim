@@ -353,23 +353,24 @@ pub fn apply_interact(
     // player claim a ball up to 3.42 m away instead of 1.75 m.
     let dist = (player.pos - ball.pos).length();
     if dist <= params.interact_radius {
-        // Claim paths:
-        //   - goalie in interact (always)
-        //   - opening dump only: ~0.25s post-kick opponent hot window (fat)
-        //   - else: Interact + XZ in radius (mid-air OK). Shooter alone is
-        //     already blocked above; ball lockout blocked same-tick snatch.
+        // Reach is settled: the gate above is the ONLY distance test, so
+        // everything below decides permission, never range. (A branch here used
+        // to read `dist <= interact_radius + 1.0` for a "slightly fat" opening
+        // reach; nested inside that gate it could never be false, so it granted
+        // nothing and only made the reach rule look negotiable.)
+        //
+        // The single restriction that survives is the opening dump hang: the
+        // kicked ball must travel ~0.12s before anyone may Interact-claim it.
+        // The keeper is exempt, as is an opponent in the ~0.25s post-kick
+        // reclaim window. Shooter-alone is already blocked above, and the ball
+        // lockout blocks a same-tick snatch.
         let hot_opp_window = shooter_team.is_some_and(|t| t != player.team)
             && since_kick < 0.25
             && poss.opening_hot_reclaim
             && !poss.opening_dump_hang;
-        let can_claim = if player.id.0 == 4 {
-            dist <= params.interact_radius
-        } else if hot_opp_window {
-            // Slightly fat reach for the opening post-kick window — Home is
-            // often ~2–2.5 m away when Away releases (real reclaim is instant).
-            dist <= params.interact_radius + 1.0
+        let can_claim = if player.id.0 == 4 || hot_opp_window {
+            true
         } else if poss.opening_dump_hang {
-            // Opening dump must travel ~0.12s before anyone Interact-claims.
             false
         } else {
             // Mid-air OK: Interact is XZ-only; Y is bounce sim only.
