@@ -119,6 +119,38 @@ fn predict(pos: Vec2, vel: Vec2, move_to: Vec2, facing: Vec2, p: &SimParams, dt:
     (pos + v * dt, new_facing)
 }
 
+/// Where a free ball will be after `t` seconds.
+///
+/// Coulomb slide: constant deceleration `slide_accel` along the current
+/// heading, stopping dead once the speed reaches zero. Same model the engine
+/// integrates, evaluated in closed form.
+fn ball_at(pos: Vec2, vel: Vec2, t: f32, slide: f32) -> Vec2 {
+    let speed = vel.length();
+    if speed < 1e-4 {
+        return pos;
+    }
+    let stop_t = speed / slide.max(1e-4);
+    let tt = t.min(stop_t);
+    pos + vel.normalize() * (speed * tt - 0.5 * slide * tt * tt)
+}
+
+/// Earliest point on a loose ball's path this player can actually get to.
+///
+/// Chasing the ball's CURRENT position is chasing where it has already left.
+/// This walks forward in time and takes the first moment the player can be
+/// within interact range of the ball, which is a cut-off, not a tail-chase.
+fn intercept_point(me: Vec2, ball: Vec2, bvel: Vec2, p: &SimParams, dt: f32) -> Vec2 {
+    for k in 0..120 {
+        let t = k as f32 * dt;
+        let bp = ball_at(ball, bvel, t, p.slide_accel);
+        // How far we can have travelled by then, plus the reach we arrive with.
+        if (bp - me).length() <= p.player_walk_speed * t + p.interact_radius {
+            return bp;
+        }
+    }
+    ball_at(ball, bvel, 120.0 * dt, p.slide_accel)
+}
+
 fn main() {
     let argv: Vec<String> = env::args().skip(1).collect();
     let get = |k: &str| -> Option<String> {
@@ -129,6 +161,15 @@ fn main() {
     let away_in =
         BrainInput::parse(&get("--away").unwrap_or_else(|| "chase".into())).expect("away brain");
     let secs: f32 = get("--secs").unwrap_or_else(|| "180".into()).parse().unwrap();
+    // Walk at the CLOSEST point on the goal line rather than the centre spot.
+    // OFF by default because it MEASURED WORSE: 45-19 against 44-16 on its own,
+    // and it costs 3 goals on top of interception (72-11 against 75-11).
+    // The centre spot is not a detour, it is the one place the chain can be
+    // fed from every angle; drifting to a corner of the mouth trades a shorter
+    // walk for spokes that no longer have room behind them.
+    let nearest_goal = argv.iter().any(|a| a == "--nearest");
+    // Chase where a loose ball WILL be, not where it is.
+    let intercept = !argv.iter().any(|a| a == "--no-intercept");
 
     let cache = ProgramCache::default();
     let mut away = brain(&away_in, &cache);
@@ -138,7 +179,18 @@ fn main() {
     // 1 cm inside maximum reach: at exactly hold + r_int the f32 gap lands on
     // 1.7500001 and the engine's `dist <= interact_radius` refuses.
     let spacing = hold + r_int - 0.01;
-    let goal = Vec2::new(params.goal_line_x, 0.0);
+    let goal_c = Vec2::new(params.goal_line_x, 0.0);
+    // Aim 2 m PAST the line: the player is clamped to the pitch at x_max, but
+    // its held ball sits hold_offset further on and is not clamped inside the
+    // mouth, so walking into the line carries the ball over it.
+    let mouth = params.goal_half_width - 0.7;
+    let goal_for = |from: Vec2| -> Vec2 {
+        if nearest_goal {
+            Vec2::new(params.goal_line_x + 2.0, from.y.clamp(-mouth, mouth))
+        } else {
+            goal_c
+        }
+    };
 
     let mut w = MatchWorld::new_kickoff_opening(params.clone(), TeamId::Home);
 
@@ -218,12 +270,23 @@ fn main() {
         // exposed that spot is. Simple and good enough to choose among 16.
         let mut taken: Vec<usize> = Vec::new();
         let mut slot_for = [Vec2::ZERO; 4];
-        let to_goal = (goal - anchor).normalize_or_zero();
+        // A loose ball is the only thing that matters: go where it WILL be.
+        let loose_target = if ball_free && intercept {
+            Some(ball)
+        } else {
+            None
+        };
+        let to_goal = (goal_for(anchor) - anchor).normalize_or_zero();
         for &i in &mine {
             let p = &w.players[i];
             if matches!(carrier, Some((TeamId::Home, id)) if id == p.id.0) {
                 // The carrier drives the whole formation at the goal.
-                slot_for[p.id.0 as usize - 1] = goal;
+                slot_for[p.id.0 as usize - 1] = goal_for(p.pos);
+                continue;
+            }
+            if loose_target.is_some() {
+                slot_for[p.id.0 as usize - 1] =
+                    intercept_point(p.pos, ball, w.ball.vel, &params, FIXED_DT);
                 continue;
             }
             let mut best = (f32::NEG_INFINITY, Vec2::ZERO, usize::MAX);
