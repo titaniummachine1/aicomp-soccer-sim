@@ -447,19 +447,10 @@ fn main() {
         eprintln!("params load failed ({e}); using fallbacks");
         SimParams::default()
     });
-    // Clear first so a stale flag cannot be blamed on this graph, then read it
-    // straight after each side compiles — that is what attributes the cycle to
-    // LEFT or RIGHT.
-    let _ = aicomp_soccer_sim::graph_vm::take_recursion_limit_hit();
     let (home_brain, home_path) = resolve_brain(&args.home);
-    let home_recursion = aicomp_soccer_sim::graph_vm::take_recursion_limit_hit();
+    note_home_load();
     let (away_brain, away_path) = resolve_brain(&args.away);
-    let away_recursion = aicomp_soccer_sim::graph_vm::take_recursion_limit_hit();
-    if home_recursion || away_recursion {
-        error!(
-            "recursion depth reached (left={home_recursion} right={away_recursion})              — the graph has a dependency cycle and cannot be lowered"
-        );
-    }
+    note_away_load();
 
     let asset_root = portable_asset_root();
     eprintln!(
@@ -534,10 +525,7 @@ fn main() {
                 }),
         )
         .insert_resource(ClearColor(Color::srgb(0.10, 0.40, 0.16)))
-        .insert_resource(RecursionAlert {
-            home: home_recursion,
-            away: away_recursion,
-        })
+
         .insert_resource(ViewerOpening(args.opening))
         .insert_resource(Titanium1v1Mode {
             scenario: args.scenario,
@@ -630,13 +618,12 @@ fn main() {
 /// run, so every decision built on them is unsimulated for as long as that
 /// graph is loaded. A message that faded would imply the problem had passed.
 fn refresh_recursion_alert(
-    alert: Res<RecursionAlert>,
     mut q: Query<(&mut Text, &mut Visibility), With<RecursionAlertText>>,
 ) {
     let Ok((mut text, mut vis)) = q.single_mut() else {
         return;
     };
-    match alert.message() {
+    match recursion_message() {
         Some(msg) => {
             if text.0 != msg {
                 *text = Text::new(msg);
@@ -806,7 +793,46 @@ fn resolve_brain(input: &BrainInput) -> (ActiveBrain, PathBuf) {
     }
 }
 
+/// Whether the most recent `load_graph_brain` tripped the recursion cap.
+/// Read immediately afterwards by `note_home_load` / `note_away_load`, which
+/// is what attributes it to a side.
+static LAST_LOAD_RECURSION: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static HOME_RECURSION: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static AWAY_RECURSION: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Adopt the last load's result for the left side. Called after EVERY home
+/// graph load, so reloading a working script clears a stale banner and
+/// reloading a broken one raises it again — including reloading the same path,
+/// which is the documented way to dismiss the message.
+fn note_home_load() {
+    let hit = LAST_LOAD_RECURSION.load(std::sync::atomic::Ordering::Relaxed);
+    HOME_RECURSION.store(hit, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn note_away_load() {
+    let hit = LAST_LOAD_RECURSION.load(std::sync::atomic::Ordering::Relaxed);
+    AWAY_RECURSION.store(hit, std::sync::atomic::Ordering::Relaxed);
+}
+
 fn load_graph_brain(path: &Path) -> ActiveBrain {
+    // Clear first so a previous load cannot be blamed on this graph.
+    let _ = aicomp_soccer_sim::graph_vm::take_recursion_limit_hit();
+    let brain = load_graph_brain_inner(path);
+    let hit = aicomp_soccer_sim::graph_vm::take_recursion_limit_hit();
+    if hit {
+        error!(
+            "recursion depth reached loading {} - the graph has a dependency              cycle and cannot be lowered",
+            path.display()
+        );
+    }
+    LAST_LOAD_RECURSION.store(hit, std::sync::atomic::Ordering::Relaxed);
+    brain
+}
+
+fn load_graph_brain_inner(path: &Path) -> ActiveBrain {
     match load_team_graph(path) {
         Ok(g) => {
             info!(
@@ -829,17 +855,14 @@ struct RecursionAlertText;
 /// Which side's graph hit the lowering recursion cap, if either.
 ///
 /// A cycle has no base case, so the graph cannot be lowered and nothing built
-/// from it is a real decision. No salvage is attempted — the real game does not
-/// survive this either. The banner just says which side is broken.
-#[derive(Resource, Default)]
-struct RecursionAlert {
-    home: bool,
-    away: bool,
-}
-
-impl RecursionAlert {
-    fn message(&self) -> Option<String> {
-        match (self.home, self.away) {
+/// from it is a real decision. No salvage is attempted - the real game does not
+/// survive this either. The banner just says which side is broken, and clears
+/// only when that side is RELOADED, since nothing else can fix it.
+fn recursion_message() -> Option<String> {
+    let home = HOME_RECURSION.load(std::sync::atomic::Ordering::Relaxed);
+    let away = AWAY_RECURSION.load(std::sync::atomic::Ordering::Relaxed);
+    {
+        match (home, away) {
             (true, true) => Some("RECURSION DEPTH REACHED BY LEFT AND RIGHT".into()),
             (true, false) => Some("RECURSION DEPTH REACHED BY LEFT".into()),
             (false, true) => Some("RECURSION DEPTH REACHED BY RIGHT".into()),
@@ -2259,6 +2282,7 @@ fn handle_hotkeys(
             scripts.perfect_regress.compact = false;
             let path = perfect_parity_graph(false);
             viewer.brains.replace_home(load_graph_brain(&path));
+            note_home_load();
             scripts.home_path = path;
             apply_perfect_regress_harness(&mut viewer.world, scripts.perfect_regress.case_idx);
             viewer.debug_draw = Default::default();
@@ -2270,6 +2294,7 @@ fn handle_hotkeys(
             scripts.perfect_regress.compact = true;
             let path = perfect_parity_graph(true);
             viewer.brains.replace_home(load_graph_brain(&path));
+            note_home_load();
             scripts.home_path = path;
             apply_perfect_regress_harness(&mut viewer.world, scripts.perfect_regress.case_idx);
             viewer.debug_draw = Default::default();
@@ -2527,9 +2552,11 @@ fn handle_ui_buttons(
                             if ti.is_file() {
                                 if mode.attack_home {
                                     viewer.brains.replace_away(load_graph_brain(&ti));
+                                    note_away_load();
                                     scripts.away_path = ti;
                                 } else {
                                     viewer.brains.replace_home(load_graph_brain(&ti));
+                                    note_home_load();
                                     scripts.home_path = ti;
                                 }
                             }
@@ -2610,6 +2637,7 @@ fn handle_ui_buttons(
                     UiAction::LoadHome => {
                         if let Some(path) = pick_team_script("Load Left team") {
                             viewer.brains.replace_home(load_graph_brain(&path));
+            note_home_load();
                             scripts.home_path = path;
                             scripts.status = format!("Left {}", file_stem(&scripts.home_path));
                         }
@@ -2617,6 +2645,7 @@ fn handle_ui_buttons(
                     UiAction::LoadAway => {
                         if let Some(path) = pick_team_script("Load Right team") {
                             viewer.brains.replace_away(load_graph_brain(&path));
+            note_away_load();
                             scripts.away_path = path;
                             scripts.status = format!("Right {}", file_stem(&scripts.away_path));
                         }
