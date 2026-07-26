@@ -352,6 +352,13 @@ pub fn apply_interact(
                     let tackler_wins = tackler_stam + eps >= carrier_stam;
                     if tackler_wins {
                         poss.carrier = Some((player.team, player.id.0));
+                        // The ball moves to the NEW carrier's hold point at
+                        // once, exactly as the pickup path already does. Both
+                        // are "possession changed", and leaving the ball on the
+                        // loser's hold point until the end-of-tick sync means
+                        // every interaction resolved later in the same tick
+                        // judges itself against a ball that has already moved.
+                        ball.pos = hold;
                         player.shot_charge = 0.0;
                         player.charge_warmup_left = params.shot_charge_warmup_s;
                         trace(format!(
