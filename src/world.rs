@@ -911,7 +911,9 @@ mod tests {
             "holding Interact allows free ball pickup"
         );
 
-        // Release for one tick, then press again — that is a new press.
+        // Release for one tick, reset carrier, then press again — that is a new press.
+        world.possession.carrier = None;
+        world.ball.held = false;
         world.step_with_commands(&release, &release, FIXED_DT);
         world.ball.pos = world.players[0].pos + world.players[0].facing * hold;
         world.step_with_commands(&press, &release, FIXED_DT);
