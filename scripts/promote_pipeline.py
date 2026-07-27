@@ -1,21 +1,35 @@
 #!/usr/bin/env python3
-"""CANONICAL promotion test — fixed fixtures, total goals, champion vs challenger.
+"""CANONICAL promotion test — total goals across accepted Titaniums + challenger.
 
-Opponents (NOT promotable), in order:
-AIA → AIA3 → Poponeta → Haialand-v2 → StarCheese.
-Each titanium side plays every opponent home AND away, then champion vs
-challenger both sides. Most total goals between the two titanium builds wins;
-challenger replaces live Titanium only if it outscores the champion. Tie →
-champion stays. Runs automatically after every challenger build.
+Titanium pool (dynamically discovered, then h2h):
+  * live champion (`Titanium.txt`)
+  * current challenger (`Titanium_challenger.txt`)
+  * every accepted snapshot `Titanium_vN.txt` (v1, v2, v3, …)
+
+Identical files are deduped by content hash so live==v3 does not double-play.
+External opponents (never promoted): AIA, AIA3, Poponeta, Haialand-v2, StarCheese.
+
+Each titanium plays every external home AND away, then every other titanium
+home AND away (so challenger can score against champion / prior kings).
+
+Challenger promotes only if it strictly outscores every other titanium build.
 """
 from __future__ import annotations
 
+import hashlib
+import os
+import re
 import shutil
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from itertools import combinations
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gate_lib  # noqa: E402
+
+# cargo/sim is mostly waiting on one core per match; run several at once.
+MATCH_WORKERS = int(os.environ.get("PROMOTE_WORKERS", "4"))
 
 ROOT = Path(__file__).resolve().parent.parent
 SAVES = (
@@ -29,21 +43,80 @@ SAVES = (
 )
 LIVE = ROOT / "data" / "titanium" / "Titanium.txt"
 BACKUPS = ROOT / "data" / "titanium" / "backups"
-CHALLENGER = ROOT.parent / "titanim-socker-engine" / "out" / "Titanium_challenger.txt"
+ENGINE_OUT = ROOT.parent / "titanim-socker-engine" / "out"
+CHALLENGER = ENGINE_OUT / "Titanium_challenger.txt"
 HAIALAND = ROOT / "data" / "titanium" / "Haialand-v2.txt"
-STARCHEESE = SAVES / "StarCheese.txt"
-if not STARCHEESE.is_file():
-    STARCHEESE = ROOT.parent / "titanim-socker-engine" / "out" / "StarCheese.txt"
+DATA_TI = ROOT / "data" / "titanium"
 
 CHAMPION_NAME = "champion"
 CHALLENGER_NAME = "challenger"
 
-TITANIUM = [
-    (CHAMPION_NAME, LIVE),
-    (CHALLENGER_NAME, CHALLENGER),
-]
+_VERSION_RE = re.compile(r"^Titanium_v(\d+)\.txt$", re.IGNORECASE)
 
-# External roster — test targets only, never promoted
+
+def _resolve_graph(*candidates: Path) -> Path | None:
+    for p in candidates:
+        if p.is_file():
+            return p
+    return None
+
+
+def _file_digest(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def discover_accepted_versions() -> list[tuple[str, Path]]:
+    """Find Titanium_vN.txt across data/saves/out, highest path priority first."""
+    found: dict[int, Path] = {}
+    search_roots = (DATA_TI, SAVES, ENGINE_OUT)
+    for root in search_roots:
+        if not root.is_dir():
+            continue
+        for p in root.glob("Titanium_v*.txt"):
+            m = _VERSION_RE.match(p.name)
+            if not m:
+                continue
+            n = int(m.group(1))
+            # Prefer data/titanium, then Saves, then engine out (first wins).
+            found.setdefault(n, p)
+    return [(f"Titanium_v{n}", found[n]) for n in sorted(found)]
+
+
+def build_titanium_pool() -> list[tuple[str, Path]]:
+    """Champion + challenger + all accepted versions, deduped by content."""
+    candidates: list[tuple[str, Path]] = []
+    if LIVE.is_file():
+        candidates.append((CHAMPION_NAME, LIVE))
+    if CHALLENGER.is_file():
+        candidates.append((CHALLENGER_NAME, CHALLENGER))
+    candidates.extend(discover_accepted_versions())
+
+    pool: list[tuple[str, Path]] = []
+    seen_digest: dict[str, str] = {}
+    for name, path in candidates:
+        if not path.is_file():
+            print(f"  skip {name} — missing {path}", file=sys.stderr)
+            continue
+        dig = _file_digest(path)
+        if dig in seen_digest:
+            print(
+                f"  note: {name} identical to {seen_digest[dig]} — "
+                f"keeping one graph in the pool",
+                file=sys.stderr,
+            )
+            continue
+        seen_digest[dig] = name
+        pool.append((name, path))
+    return pool
+
+
+STARCHEESE = _resolve_graph(SAVES / "StarCheese.txt", ENGINE_OUT / "StarCheese.txt")
+
+# External roster — non-Titanium opponents only, never promoted
 EXTERNAL = [
     ("AIA", SAVES / "AIA.txt"),
     ("AIA3", SAVES / "AIA3.txt"),
@@ -76,25 +149,36 @@ def goals_in_match(m, bot):
     return 0
 
 
+def goals_against_in_match(m, bot):
+    if m["home"] == bot:
+        return m["score_away"]
+    if m["away"] == bot:
+        return m["score_home"]
+    return 0
+
+
 def total_goals_for(matches, bot):
     return sum(goals_in_match(m, bot) for m in matches)
 
 
-def build_fixtures():
-    """Same order every run: externals (both sides) then champion vs challenger."""
+def total_conceded_for(matches, bot):
+    return sum(goals_against_in_match(m, bot) for m in matches)
+
+
+def build_fixtures(titanium: list[tuple[str, Path]]):
+    """Each titanium vs each external (H+A), then titanium h2h (both openings)."""
     fixtures = []
-    for ti_name, ti_path in TITANIUM:
+    for ti_name, ti_path in titanium:
         for opp_name, opp_path in EXTERNAL:
-            if not opp_path.is_file():
-                print(f"  skip {opp_name} — missing {opp_path}", file=sys.stderr)
+            if opp_path is None or not opp_path.is_file():
+                print(f"  skip {opp_name} — missing", file=sys.stderr)
                 continue
             fixtures.append((ti_name, ti_path, opp_name, opp_path, "home"))
             fixtures.append((opp_name, opp_path, ti_name, ti_path, "away"))
 
-    champ_path = LIVE
-    chall_path = CHALLENGER
-    fixtures.append((CHAMPION_NAME, champ_path, CHALLENGER_NAME, chall_path, "home"))
-    fixtures.append((CHALLENGER_NAME, chall_path, CHAMPION_NAME, champ_path, "home"))
+    for (n1, p1), (n2, p2) in combinations(titanium, 2):
+        fixtures.append((n1, p1, n2, p2, "home"))
+        fixtures.append((n2, p2, n1, p1, "home"))
     return fixtures
 
 
@@ -124,8 +208,17 @@ def deploy_titanium_test(src: Path) -> None:
         print(f"  Auto-deployed TEST: {dest}")
 
 
+def next_version_path() -> Path:
+    """Next Titanium_vN snapshot path under data/titanium."""
+    n = 1
+    while (DATA_TI / f"Titanium_v{n}.txt").is_file():
+        n += 1
+    return DATA_TI / f"Titanium_v{n}.txt"
+
+
 def promote_challenger() -> None:
     BACKUPS.mkdir(parents=True, exist_ok=True)
+    DATA_TI.mkdir(parents=True, exist_ok=True)
     if LIVE.is_file():
         n = 0
         backup = BACKUPS / "Titanium_pre_promote.txt"
@@ -135,24 +228,20 @@ def promote_challenger() -> None:
         if not backup.is_file():
             shutil.copy2(LIVE, backup)
             print(f"  backed up incumbent -> {backup}")
+
+    # Snapshot new king as next accepted version (v4, v5, …).
+    ver = next_version_path()
+    shutil.copy2(CHALLENGER, ver)
+    shutil.copy2(CHALLENGER, SAVES / ver.name)
+    shutil.copy2(CHALLENGER, ENGINE_OUT / ver.name)
+    print(f"  accepted snapshot -> {ver.name}")
+
     shutil.copy2(CHALLENGER, LIVE)
     unity = SAVES / "Titanium.txt"
     unity.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(CHALLENGER, unity)
     print(f"  PROMOTED challenger -> {LIVE}")
     print(f"  PROMOTED challenger -> {unity}")
-
-
-def goals_against_in_match(m, bot):
-    if m["home"] == bot:
-        return m["score_away"]
-    if m["away"] == bot:
-        return m["score_home"]
-    return 0
-
-
-def total_conceded_for(matches, bot):
-    return sum(goals_against_in_match(m, bot) for m in matches)
 
 
 def print_per_opponent_table(matches, bot):
@@ -188,28 +277,46 @@ def print_per_opponent_table(matches, bot):
 
 
 def run_promotion_pipeline() -> int:
-    for name, path in TITANIUM:
-        if not path.is_file():
-            print(f"Missing {name}: {path}", file=sys.stderr)
-            return 1
+    titanium = build_titanium_pool()
+    if not titanium:
+        print("No titanium builds found", file=sys.stderr)
+        return 1
+    names = [n for n, _ in titanium]
+    if CHALLENGER_NAME not in names:
+        print(f"Missing challenger: {CHALLENGER}", file=sys.stderr)
+        return 1
+    if CHAMPION_NAME not in names and not any(n.startswith("Titanium_v") for n in names):
+        print("Missing live champion and all version snapshots", file=sys.stderr)
+        return 1
 
     print("== Auto-deploy Titanium_test (challenger under test) ==")
     deploy_titanium_test(CHALLENGER)
     print()
 
-    fixtures = build_fixtures()
-    names = [CHAMPION_NAME, CHALLENGER_NAME]
-
+    fixtures = build_fixtures(titanium)
     print("== Promotion test (180s, both sides, total goals) ==\n")
-    print("  Order: AIA -> AIA3 -> Poponeta -> Haialand-v2 -> StarCheese -> champion vs challenger\n")
-    matches = []
-    for home_name, home_path, away_name, away_path, opening in fixtures:
+    print(f"  Titanium pool: {', '.join(names)}")
+    print(
+        "  Externals: AIA -> AIA3 -> Poponeta -> Haialand-v2 -> StarCheese\n"
+        "  Then h2h among every titanium pair (both openings)\n"
+    )
+    print(f"  Parallel matches: {MATCH_WORKERS} workers\n")
+
+    def _one(idx_fix):
+        idx, (home_name, home_path, away_name, away_path, opening) = idx_fix
         m = run(home_name, away_name, home_path, away_path, opening)
-        matches.append(m)
-        print(
-            f"  {home_name:12s} {m['score_home']}-{m['score_away']} {away_name:12s}  "
-            f"(opening={opening})"
-        )
+        return idx, m
+
+    matches = [None] * len(fixtures)
+    with ThreadPoolExecutor(max_workers=MATCH_WORKERS) as pool:
+        futs = [pool.submit(_one, item) for item in enumerate(fixtures)]
+        for fut in as_completed(futs):
+            idx, m = fut.result()
+            matches[idx] = m
+            print(
+                f"  {m['home']:12s} {m['score_home']}-{m['score_away']} {m['away']:12s}  "
+                f"(opening={m['opening']})"
+            )
 
     for n in names:
         print_per_opponent_table(matches, n)
@@ -223,18 +330,20 @@ def run_promotion_pipeline() -> int:
             f"(GD {totals[n] - conceded[n]:+d})"
         )
 
-    cg = totals[CHAMPION_NAME]
     tg = totals[CHALLENGER_NAME]
+    others = {n: totals[n] for n in names if n != CHALLENGER_NAME}
     print("\n== Verdict ==")
-    if tg > cg:
-        print(f"  Challenger wins ({tg} vs {cg}). Promoting.")
+    if others and tg > max(others.values()):
+        detail = ", ".join(f"{n} {g}" for n, g in sorted(others.items(), key=lambda x: -x[1]))
+        print(f"  Challenger wins gate ({tg} vs {detail}). Promoting.")
         promote_challenger()
         deploy_titanium_test(CHALLENGER)
-    elif cg > tg:
-        print(f"  Champion stays ({cg} vs {tg}).")
-        deploy_titanium_test(CHALLENGER)
     else:
-        print(f"  Tie ({cg}-{cg}). Champion stays.")
+        best_other = max(others, key=others.get) if others else CHAMPION_NAME
+        print(
+            f"  No promotion — challenger {tg}, best other "
+            f"{best_other} {others.get(best_other, 0)}."
+        )
         deploy_titanium_test(CHALLENGER)
     return 0
 
