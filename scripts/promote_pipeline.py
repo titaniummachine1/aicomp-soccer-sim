@@ -5,18 +5,28 @@ Contenders (exactly two):
   * live champion (`Titanium.txt`)
   * current challenger (`Titanium_challenger.txt`)
 
-Targets to beat (fixed roster, never promoted):
+Targets to beat (never contenders, never play each other):
   AIA, AIA3, Poponeta, Haialand-v2, StarCheese
+  + every accepted Titanium_vN snapshot (deduped by content hash)
 
-Each contender plays every target home AND away. No titanium-vs-titanium,
-no round-robin, no AI against itself.
+Each contender plays every target home AND away.
 
-Whoever scores more total goals wins. Challenger promotes only if it
-strictly outscores the champion.
+Plus champion ↔ challenger in all 4 side×kickoff configs:
+  1. champ home / champ kicks
+  2. champ home / challenger kicks
+  3. challenger home / challenger kicks
+  4. challenger home / champ kicks
+
+Whoever scores more total goals across the full slate wins.
+Challenger promotes only if it strictly outscores the champion.
+
+Scoreboard: GP / GF / GA / GD
 """
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -25,7 +35,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gate_lib  # noqa: E402
 
-# cargo/sim is mostly waiting on one core per match; run several at once.
 MATCH_WORKERS = int(os.environ.get("PROMOTE_WORKERS", "4"))
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -47,6 +56,7 @@ DATA_TI = ROOT / "data" / "titanium"
 
 CHAMPION_NAME = "champion"
 CHALLENGER_NAME = "challenger"
+_VERSION_RE = re.compile(r"^Titanium_v(\d+)\.txt$", re.IGNORECASE)
 
 
 def _resolve_graph(*candidates: Path) -> Path | None:
@@ -56,16 +66,58 @@ def _resolve_graph(*candidates: Path) -> Path | None:
     return None
 
 
+def _file_digest(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def discover_accepted_versions() -> list[tuple[str, Path]]:
+    found: dict[int, Path] = {}
+    for root in (DATA_TI, SAVES, ENGINE_OUT):
+        if not root.is_dir():
+            continue
+        for p in root.glob("Titanium_v*.txt"):
+            m = _VERSION_RE.match(p.name)
+            if not m:
+                continue
+            found.setdefault(int(m.group(1)), p)
+    return [(f"Titanium_v{n}", found[n]) for n in sorted(found)]
+
+
 STARCHEESE = _resolve_graph(SAVES / "StarCheese.txt", ENGINE_OUT / "StarCheese.txt")
 
-# Fixed targets — never contenders, never play each other.
-TARGETS = [
+EXTERNAL_TARGETS = [
     ("AIA", SAVES / "AIA.txt"),
     ("AIA3", SAVES / "AIA3.txt"),
     ("Poponeta", SAVES / "Poponeta.txt"),
     ("Haialand-v2", HAIALAND),
     ("StarCheese", STARCHEESE),
 ]
+
+
+def build_targets() -> list[tuple[str, Path]]:
+    """Externals + Titanium_vN, deduped by content (skip graphs identical to live)."""
+    targets: list[tuple[str, Path]] = []
+    seen: dict[str, str] = {}
+    live_dig = _file_digest(LIVE) if LIVE.is_file() else None
+
+    for name, path in EXTERNAL_TARGETS + discover_accepted_versions():
+        if path is None or not path.is_file():
+            print(f"  skip {name} — missing", file=sys.stderr)
+            continue
+        dig = _file_digest(path)
+        if live_dig is not None and dig == live_dig:
+            print(f"  note: {name} identical to live champion — skip as target", file=sys.stderr)
+            continue
+        if dig in seen:
+            print(f"  note: {name} identical to {seen[dig]} — skip", file=sys.stderr)
+            continue
+        seen[dig] = name
+        targets.append((name, path))
+    return targets
 
 
 def graph(path: Path) -> str:
@@ -99,6 +151,10 @@ def goals_against_in_match(m, bot):
     return 0
 
 
+def games_played(matches, bot):
+    return sum(1 for m in matches if m["home"] == bot or m["away"] == bot)
+
+
 def total_goals_for(matches, bot):
     return sum(goals_in_match(m, bot) for m in matches)
 
@@ -116,21 +172,30 @@ def build_contenders() -> list[tuple[str, Path]]:
     return contenders
 
 
-def build_fixtures(contenders: list[tuple[str, Path]]):
-    """Each contender vs each target, home and away. No self-play."""
+def build_target_fixtures(contenders, targets):
     fixtures = []
     for ti_name, ti_path in contenders:
-        for opp_name, opp_path in TARGETS:
-            if opp_path is None or not opp_path.is_file():
-                print(f"  skip {opp_name} — missing", file=sys.stderr)
-                continue
+        for opp_name, opp_path in targets:
             fixtures.append((ti_name, ti_path, opp_name, opp_path, "home"))
             fixtures.append((opp_name, opp_path, ti_name, ti_path, "away"))
     return fixtures
 
 
+def build_h2h_fixtures(contenders):
+    by_name = {n: p for n, p in contenders}
+    if CHAMPION_NAME not in by_name or CHALLENGER_NAME not in by_name:
+        return []
+    ch_p = by_name[CHAMPION_NAME]
+    cl_p = by_name[CHALLENGER_NAME]
+    return [
+        (CHAMPION_NAME, ch_p, CHALLENGER_NAME, cl_p, "home"),
+        (CHAMPION_NAME, ch_p, CHALLENGER_NAME, cl_p, "away"),
+        (CHALLENGER_NAME, cl_p, CHAMPION_NAME, ch_p, "home"),
+        (CHALLENGER_NAME, cl_p, CHAMPION_NAME, ch_p, "away"),
+    ]
+
+
 def deploy_titanium_test(src: Path) -> None:
-    """Always refresh Titanium_test so the user can watch what was just tested."""
     import time
 
     if not src.is_file():
@@ -154,7 +219,6 @@ def deploy_titanium_test(src: Path) -> None:
 
 
 def next_version_path() -> Path:
-    """Next Titanium_vN snapshot path under data/titanium."""
     n = 1
     while (DATA_TI / f"Titanium_v{n}.txt").is_file():
         n += 1
@@ -189,7 +253,6 @@ def promote_challenger() -> None:
 
 
 def print_per_opponent_table(matches, bot):
-    """GF/GA for `bot` against every target."""
     opps = []
     seen = set()
     for m in matches:
@@ -199,25 +262,69 @@ def print_per_opponent_table(matches, bot):
         seen.add(other)
         opps.append(other)
 
-    print(f"\n== {bot}: scored / conceded by opponent ==\n")
-    print(f"  {'opponent':14s}  {'GF':>4}  {'GA':>4}  {'GD':>4}  matches")
-    tot_gf = tot_ga = 0
+    print(f"\n== {bot}: by opponent ==\n")
+    print(f"  {'opponent':14s}  {'GP':>3}  {'GF':>4}  {'GA':>4}  {'GD':>4}  results")
+    tot_gp = tot_gf = tot_ga = 0
     for opp in opps:
-        gf = ga = 0
+        gf = ga = gp = 0
         rows = []
         for m in matches:
             if m["home"] == bot and m["away"] == opp:
+                gp += 1
                 gf += m["score_home"]
                 ga += m["score_away"]
-                rows.append(f"{m['score_home']}-{m['score_away']} (H)")
+                kick = "ko-H" if m["opening"] == "home" else "ko-A"
+                rows.append(f"{m['score_home']}-{m['score_away']} ({kick})")
             elif m["away"] == bot and m["home"] == opp:
+                gp += 1
                 gf += m["score_away"]
                 ga += m["score_home"]
-                rows.append(f"{m['score_away']}-{m['score_home']} (A)")
+                kick = "ko-H" if m["opening"] == "home" else "ko-A"
+                rows.append(f"{m['score_away']}-{m['score_home']} (away,{kick})")
+        tot_gp += gp
         tot_gf += gf
         tot_ga += ga
-        print(f"  {opp:14s}  {gf:4d}  {ga:4d}  {gf - ga:4d}  {', '.join(rows)}")
-    print(f"  {'TOTAL':14s}  {tot_gf:4d}  {tot_ga:4d}  {tot_gf - tot_ga:4d}")
+        print(
+            f"  {opp:14s}  {gp:3d}  {gf:4d}  {ga:4d}  {gf - ga:4d}  {', '.join(rows)}"
+        )
+    print(
+        f"  {'TOTAL':14s}  {tot_gp:3d}  {tot_gf:4d}  {tot_ga:4d}  {tot_gf - tot_ga:4d}"
+    )
+
+
+def print_scoreboard(matches, names):
+    print("\n== Scoreboard ==")
+    print("  GP=games played  GF=goals for  GA=goals against  GD=goal difference\n")
+    print(f"  {'bot':12s}  {'GP':>3}  {'GF':>4}  {'GA':>4}  {'GD':>5}")
+    rows = []
+    for n in names:
+        gp = games_played(matches, n)
+        gf = total_goals_for(matches, n)
+        ga = total_conceded_for(matches, n)
+        rows.append((n, gp, gf, ga, gf - ga))
+    for n, gp, gf, ga, gd in sorted(rows, key=lambda r: (-r[2], -r[4])):
+        print(f"  {n:12s}  {gp:3d}  {gf:4d}  {ga:4d}  {gd:+5d}")
+
+
+def print_h2h(matches):
+    h2h = [
+        m
+        for m in matches
+        if {m["home"], m["away"]} == {CHAMPION_NAME, CHALLENGER_NAME}
+    ]
+    if not h2h:
+        return
+    print("\n== Champion ↔ challenger (4 configs: side × kickoff) ==\n")
+    for m in h2h:
+        side = f"{m['home']} home"
+        kick = f"{m['home']} kicks" if m["opening"] == "home" else f"{m['away']} kicks"
+        print(
+            f"  {m['home']:12s} {m['score_home']}-{m['score_away']} {m['away']:12s}  "
+            f"({side}, {kick})"
+        )
+    ch_gf = total_goals_for(h2h, CHAMPION_NAME)
+    cl_gf = total_goals_for(h2h, CHALLENGER_NAME)
+    print(f"\n  H2H goals: champion {ch_gf}  challenger {cl_gf}")
 
 
 def run_promotion_pipeline() -> int:
@@ -234,12 +341,14 @@ def run_promotion_pipeline() -> int:
     deploy_titanium_test(CHALLENGER)
     print()
 
-    fixtures = build_fixtures(contenders)
-    target_names = [n for n, p in TARGETS if p is not None and p.is_file()]
-    print("== Promotion test (180s, both sides, total goals) ==\n")
+    targets = build_targets()
+    fixtures = build_target_fixtures(contenders, targets) + build_h2h_fixtures(contenders)
+    target_names = [n for n, _ in targets]
+    print("== Promotion test (180s, total goals) ==\n")
     print(f"  Contenders: {', '.join(names)}")
     print(f"  Targets:    {' -> '.join(target_names)}")
-    print("  Rule: most goals vs targets wins. No self-play / no round-robin.\n")
+    print("  + champ↔challenger × 4 (both sides × both kickoffs)")
+    print("  Rule: highest GF across full slate wins. No self-play.\n")
     print(f"  Parallel matches: {MATCH_WORKERS} workers\n")
 
     def _one(idx_fix):
@@ -260,25 +369,19 @@ def run_promotion_pipeline() -> int:
 
     for n in names:
         print_per_opponent_table(matches, n)
+    print_h2h(matches)
+    print_scoreboard(matches, names)
 
     totals = {n: total_goals_for(matches, n) for n in names}
-    conceded = {n: total_conceded_for(matches, n) for n in names}
-    print("\n== Contender totals (vs targets only) ==\n")
-    for n in sorted(names, key=lambda x: -totals[x]):
-        print(
-            f"  {n:12s}  {totals[n]} scored  /  {conceded[n]} conceded  "
-            f"(GD {totals[n] - conceded[n]:+d})"
-        )
-
     tg = totals[CHALLENGER_NAME]
     cg = totals[CHAMPION_NAME]
     print("\n== Verdict ==")
     if tg > cg:
-        print(f"  Challenger wins gate ({tg} vs champion {cg}). Promoting.")
+        print(f"  Challenger wins gate (GF {tg} vs champion {cg}). Promoting.")
         promote_challenger()
         deploy_titanium_test(CHALLENGER)
     else:
-        print(f"  No promotion — challenger {tg}, champion {cg}.")
+        print(f"  No promotion — challenger GF {tg}, champion GF {cg}.")
         deploy_titanium_test(CHALLENGER)
     return 0
 
