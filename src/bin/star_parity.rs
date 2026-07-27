@@ -95,6 +95,17 @@ fn main() {
     let mut pressed = [false; 4];
     let mut first: Option<u32> = None;
     let mut disagreements = 0u32;
+    // Why one side wins and the other collapses, measured rather than argued:
+    // relays are the mechanism, and stamina is what the mechanism costs.
+    let mut relays = 0u32;      // Home -> Home possession changes (teammate tackles)
+    let mut steals_lost = 0u32; // Home -> Away
+    let mut steals_won = 0u32;  // Away -> Home: did we EVER tackle an opponent?
+    let mut opp_held_ticks = 0u32;
+    let mut in_reach_ticks = 0u32; // ticks a Home player was within reach of an enemy-held ball
+    let mut stam_sum = 0.0f64;
+    let mut stam_n = 0u32;
+    let mut home_ticks = 0u32;
+    let mut spawn_logged = false;
     let mut csv = String::new();
     if plot.is_some() {
         csv.push_str("tick,t,ball_x,ball_z,ball_vx,ball_vz,carrier,");
@@ -134,7 +145,7 @@ fn main() {
                     println!(
                         "    {:?} {}  pos ({:7.2},{:7.2})  facing ({:5.2},{:5.2})  stam {:.2}  held {}",
                         p.team, p.id.0, p.pos.x, p.pos.y, p.facing.x, p.facing.y,
-                        p.stamina, p.interact_held
+                        p.stamina, p.interact_bits & 1
                     );
                 }
                 println!("\n  COMMANDS      graph                    reference");
@@ -179,12 +190,49 @@ fn main() {
             let _ = writeln!(csv, "{}", diff.is_none() as u8);
         }
 
+        if !spawn_logged {
+            // What the graph DECLARES vs where players actually stand. A
+            // declared spot of (0,0) for every slot re-places the whole team on
+            // the centre spot, where they tackle each other to zero stamina.
+            println!("DECLARED kickoff_formation: {:?}", g_out.kickoff_positions);
+            println!("SPAWN (formation the graph declared, whoever drives):");
+            for p in w.players.iter().filter(|p| p.team == TeamId::Home) {
+                println!("    Home {}  ({:7.2},{:7.2})", p.id.0, p.pos.x, p.pos.y);
+            }
+            println!();
+            spawn_logged = true;
+        }
+        let before_c = w.possession.carrier;
+
         // Keep the press history aligned with whichever side is driving.
         let driving = if drive_ref { &r_out } else { &g_out };
         for s in 0..4 {
             pressed[s] = driving.commands[s].interact;
         }
         w.step_with_commands(driving, &away_out, FIXED_DT);
+
+        match (before_c, w.possession.carrier) {
+            (Some((TeamId::Home, a)), Some((TeamId::Home, b))) if a != b => relays += 1,
+            (Some((TeamId::Home, _)), Some((TeamId::Away, _))) => steals_lost += 1,
+            (Some((TeamId::Away, _)), Some((TeamId::Home, _))) => steals_won += 1,
+            _ => {}
+        }
+        if matches!(w.possession.carrier, Some((TeamId::Home, _))) {
+            home_ticks += 1;
+        }
+        if matches!(w.possession.carrier, Some((TeamId::Away, _))) {
+            opp_held_ticks += 1;
+            // Chances actually presented: was one of ours close enough to tackle?
+            if w.players.iter().any(|p| {
+                p.team == TeamId::Home && (p.pos - w.ball.pos).length() <= w.params.interact_radius
+            }) {
+                in_reach_ticks += 1;
+            }
+        }
+        for p in w.players.iter().filter(|p| p.team == TeamId::Home) {
+            stam_sum += p.stamina as f64;
+            stam_n += 1;
+        }
     }
 
     if let Some(path) = plot {
@@ -192,6 +240,22 @@ fn main() {
         println!("timeplot -> {path}");
     }
 
+    println!(
+        "
+  driver            {}",
+        if drive_ref { "REFERENCE (Rust design)" } else { "GRAPH (StarCheese.txt)" }
+    );
+    println!("  teammate relays   {relays}");
+    println!("  balls lost        {steals_lost}");
+    println!("  balls WON off opponents  {steals_won}");
+    println!(
+        "  chances to tackle        {in_reach_ticks} ticks in reach of an enemy-held ball (of {opp_held_ticks} they held it)"
+    );
+    println!("  possession        {:.1}%", 100.0 * home_ticks as f32 / ticks as f32);
+    println!(
+        "  mean Home stamina {:.3}   <- the cost of relaying: a tackle drains min(both) from BOTH",
+        if stam_n == 0 { 0.0 } else { stam_sum / stam_n as f64 }
+    );
     println!(
         "score {}-{}   disagreeing ticks {disagreements}/{ticks}  ({:.1}%)",
         w.match_state.score_home,

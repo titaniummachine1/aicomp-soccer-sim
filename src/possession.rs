@@ -137,24 +137,17 @@ pub fn apply_interact(
     _kickoff_elapsed_s: Option<f32>,
 ) -> InteractOutcome {
     let hold = player.hold_pos_playable(params);
-    // THE ENTIRE RULE: you cannot tackle or pick up the ball if you already
-    // used Interact on the prior tick.
+    // Per-player 64-bit Interact history: each tick shift left, LSB = current.
+    // Cleared on whistle / goal / roster reset (see place_kickoff).
     //
-    // Confirmed by the game's author. Holding Interact down therefore yields
-    // exactly one attempt, the same anti-bunnyhop latch games use for jump —
-    // a graph that simply pins Interact true never steals again after its
-    // first tick. This is not optional and has no toggle: a flag here would
-    // only let someone run a simulator that is knowingly wrong.
-    //
-    // Charging a shot is untouched. That is genuinely level-triggered and
-    // lives in the carrier branch below: hold to charge, release to shoot.
-    //
-    // The press history resets on a whistle — see `reset_interact_latch`,
-    // called wherever positions are restarted for the next kickoff.
-    let impulse = cmd.interact && !player.interact_held;
-    // Previous tick's press, needed below: a carrier kicks on the FALLING edge.
-    let was_pressing = player.interact_held;
-    player.interact_held = cmd.interact;
+    // Claim / tackle: rising edge only (held now, not held last tick).
+    // Shot: falling edge kicks; charge = consecutive held ticks in the low
+    // bits (after post-pickup warmup), capped at full-charge length. Holding
+    // forever does not re-fire claim/tackle — only a fresh rising edge does.
+    use crate::interact_history::{interact_falling_edge, interact_rising_edge, push_interact};
+    player.interact_bits = push_interact(player.interact_bits, cmd.interact);
+    let impulse = interact_rising_edge(player.interact_bits);
+    let released = interact_falling_edge(player.interact_bits);
     let is_carrier = matches!(
         poss.carrier,
         Some((t, id)) if t == player.team && id == player.id.0
@@ -171,40 +164,21 @@ pub fn apply_interact(
         }
 
         if cmd.interact {
-            // Warmup: Interact can be true while charge stays 0 (~0.30s real).
+            // Hold-to-charge: accumulate after post-pickup warmup. The bit
+            // buffer's consecutive-held run is the same clock (one bit per
+            // tick); we integrate in seconds so charge_time_s stays calibrated.
             if player.charge_warmup_left <= 0.0 {
                 let t = params.shot_charge_time_s.max(1e-4);
                 player.shot_charge = (player.shot_charge + dt / t).min(1.0);
+            } else {
+                player.shot_charge = 0.0;
             }
             return InteractOutcome::default();
         }
 
-        // Release = kick. There is NO minimum charge threshold: press for a
-        // single tick, release on the next, and the ball goes — weakly, because
-        // charge is barely above zero, but it goes.
-        //
-        // This used to gate on `shot_charge > 0.05`. One tick of charge adds
-        // exactly 0.0500, so a single-tick press failed that test by exactly
-        // zero: the ball stayed glued to the carrier and the charge was
-        // silently discarded. Measured with `pass_speed`, which is how it was
-        // found — the quickest possible pass simply did not happen.
-        //
-        // Firing on the falling edge (pressed last tick, not this tick) is what
-        // makes "release to shoot" mean release. A carrier that never presses
-        // just keeps the ball, which a bare `!cmd.interact` would not give.
-        if was_pressing {
-            // On Interact→false, kick along that frame's move input.
-            //
-            // That IS `player.facing`: facing is set to the walk direction at
-            // the top of the tick, from `move_to - pos` taken BEFORE movement.
-            //
-            // This used to recompute `cmd.move_to - player.pos` here instead —
-            // but interaction runs AFTER movement, so a player that reached or
-            // overshot its target got a degenerate or REVERSED vector and
-            // kicked backwards. Measured with `pass_speed`: a stationary passer
-            // aiming +X at a teammate launched the ball along -X, away from
-            // them, because it had crept 0.1 m past the move_to it was given.
-            let mut dir = if player.facing.length_squared() > 1e-6 {
+        // Release = kick on the falling edge.
+        if released {
+            let dir = if player.facing.length_squared() > 1e-6 {
                 player.facing.normalize()
             } else {
                 match player.team {
@@ -212,14 +186,6 @@ pub fn apply_interact(
                     TeamId::Away => -Vec2::X,
                 }
             };
-            // (Removed: a hardcoded override that rewrote the kick direction to
-            // a fixed (-0.707, -0.707) diagonal for ANY Away player shooting at
-            // charge >= 0.75, either on the opening kick or whenever the aim was
-            // already vaguely west. It existed to reproduce one recording's
-            // opening dump, but it was not scoped to the opening — it silently
-            // hijacked every hard Away shot for the whole match, so an Away
-            // graph aiming at goal could have the ball sent somewhere else. The
-            // aim a graph chooses is the aim it gets.)
             let charge = player.shot_charge;
             let (horiz, lift) = crate::ball::kick_launch_speeds(charge, params);
             ball.held = false;
@@ -231,14 +197,10 @@ pub fn apply_interact(
             player.charge_warmup_left = 0.0;
             let was_opening = !poss.first_kick_done;
             poss.carrier = None;
-            // A kicked ball remains interactable immediately. There is no
-            // artificial post-kick cooldown; tackle exchange lockouts below
-            // are separate and only apply after a contested steal.
             poss.kick_exclude_shooter = Some((player.team, player.id.0));
             poss.kick_exclude_left = 3.0;
             poss.first_kick_done = true;
             poss.kickoff_touch_done = true;
-            // DB33 Away opening: Ball.X keeps traveling ~0.1s before Home claims.
             poss.opening_dump_hang = was_opening;
             poss.opening_hot_reclaim = was_opening;
             trace(format!(
@@ -257,7 +219,7 @@ pub fn apply_interact(
         }
         if player.shot_charge > 0.0 {
             trace(format!(
-                "CHARGE_CLEAR_NO_KICK {:?} P{} charge was {:.2} (Interact false, charge≤0.05)",
+                "CHARGE_CLEAR_NO_KICK {:?} P{} charge was {:.2} (Interact false, no falling edge)",
                 player.team, player.id.0, player.shot_charge
             ));
         }
@@ -518,7 +480,7 @@ mod tests {
             stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
-            interact_held: false,
+            interact_bits: 0,
         };
         let mut ball = Ball {
             pos: carrier.hold_pos(params.hold_offset),
@@ -593,7 +555,7 @@ mod tests {
             stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
-            interact_held: false,
+            interact_bits: 0,
         };
         let cmd = BrainCommand {
             move_to: attacker.pos,
@@ -653,7 +615,7 @@ mod tests {
             stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
-            interact_held: false,
+            interact_bits: 0,
         };
         let cmd = BrainCommand {
             move_to: attacker.pos,
@@ -706,7 +668,7 @@ mod tests {
             stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
-            interact_held: false,
+            interact_bits: 0,
         };
         let cmd = BrainCommand {
             move_to: attacker.pos,
@@ -764,7 +726,7 @@ mod tests {
             stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
-            interact_held: false,
+            interact_bits: 0,
         };
         let cmd = BrainCommand {
             move_to: attacker.pos,
@@ -825,7 +787,7 @@ mod tests {
             stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
-            interact_held: false,
+            interact_bits: 0,
         };
         let cmd = BrainCommand {
             move_to: mate.pos,
@@ -862,7 +824,7 @@ mod tests {
             stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
-            interact_held: false,
+            interact_bits: 0,
         };
         let move_to = player.pos;
 
@@ -914,7 +876,7 @@ mod tests {
             stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
-            interact_held: false,
+            interact_bits: 0,
         };
         let cmd = BrainCommand {
             move_to: Vec2::X,

@@ -98,7 +98,7 @@ pub fn setup_1v1_harness(world: &mut MatchWorld, attack_home: bool, _z_bias: f32
         p.shot_charge = 0.0;
         p.charge_warmup_left = 0.0;
         p.stamina = 1.0;
-        p.interact_held = false;
+        p.interact_bits = 0;
         if !active {
             p.pos = park_off_pitch(p.team, p.id.0, &params);
         }

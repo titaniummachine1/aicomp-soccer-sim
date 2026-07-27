@@ -340,7 +340,8 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
         "Simulation Time Remaining",
         (world.match_state.duration_s - world.match_state.clock_s).max(0.0),
     );
-    // Always FIXED_DT — viewer Fast/scrubber must not appear here (AIA clocks).
+    // Always FIXED_DT — viewer Fast/scrubber/headless burst only change how
+    // often ticks are scheduled. Scripts must never see wall-clock speed.
     floats.insert("Delta Time", crate::world::FIXED_DT);
     floats.insert("Fixed Delta Time", crate::world::FIXED_DT);
 

@@ -317,7 +317,7 @@ pub fn build_default_titanium_brain() -> Result<Box<dyn TeamBrain>, String> {
 
 /// Default Full-match brain: AIA3/AIA graph when present, else a random built-in
 /// (chase/idle). Never auto-picks Titanium — that is opt-in (`--home titanium`
-/// / Scenario 1 GK) so the sim does not silently run the Rust titanium policy.
+/// / Scenario 1 GK) and loads the graph from Unity Saves like any other team.
 pub fn default_team_brain() -> BrainInput {
     let saves = soccer_saves_dir();
     if saves.join("AIA3.txt").is_file() || saves.join("AIA.txt").is_file() {

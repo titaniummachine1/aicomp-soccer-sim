@@ -239,12 +239,10 @@ pub fn place_kickoff(
         p.facing = kickoff_facing(p.team, p.id, kickoff_team);
         p.shot_charge = 0.0;
         p.charge_warmup_left = 0.0;
-        // Clear the Interact impulse latch too. Without this it survives every
-        // goal and whistle: a graph still holding Interact when the whistle
-        // goes carries a spent press into the restart and cannot claim the new
-        // kickoff at all, with no way to recover short of releasing. The
-        // restart is a fresh input context, so the edge detector starts fresh.
-        p.interact_held = false;
+        // Clear the 64-bit Interact history. Whistle / goal / roster reset is a
+        // fresh input context — a spent rising edge must not survive into the
+        // next kickoff or tie-break shrink (3v3→2v2→1v1).
+        p.interact_bits = 0;
     }
 }
 

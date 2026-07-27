@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """CANONICAL promotion test — fixed fixtures, total goals, champion vs challenger.
 
-Opponents (NOT promotable), in order: AIA → AIA3 → Poponeta → Haialand-v2.
+Opponents (NOT promotable), in order:
+AIA → AIA3 → Poponeta → Haialand-v2 → StarCheese.
 Each titanium side plays every opponent home AND away, then champion vs
 challenger both sides. Most total goals between the two titanium builds wins;
 challenger replaces live Titanium only if it outscores the champion. Tie →
@@ -30,6 +31,9 @@ LIVE = ROOT / "data" / "titanium" / "Titanium.txt"
 BACKUPS = ROOT / "data" / "titanium" / "backups"
 CHALLENGER = ROOT.parent / "titanim-socker-engine" / "out" / "Titanium_challenger.txt"
 HAIALAND = ROOT / "data" / "titanium" / "Haialand-v2.txt"
+STARCHEESE = SAVES / "StarCheese.txt"
+if not STARCHEESE.is_file():
+    STARCHEESE = ROOT.parent / "titanim-socker-engine" / "out" / "StarCheese.txt"
 
 CHAMPION_NAME = "champion"
 CHALLENGER_NAME = "challenger"
@@ -45,6 +49,7 @@ EXTERNAL = [
     ("AIA3", SAVES / "AIA3.txt"),
     ("Poponeta", SAVES / "Poponeta.txt"),
     ("Haialand-v2", HAIALAND),
+    ("StarCheese", STARCHEESE),
 ]
 
 
@@ -138,6 +143,50 @@ def promote_challenger() -> None:
     print(f"  PROMOTED challenger -> {unity}")
 
 
+def goals_against_in_match(m, bot):
+    if m["home"] == bot:
+        return m["score_away"]
+    if m["away"] == bot:
+        return m["score_home"]
+    return 0
+
+
+def total_conceded_for(matches, bot):
+    return sum(goals_against_in_match(m, bot) for m in matches)
+
+
+def print_per_opponent_table(matches, bot):
+    """GF/GA for `bot` against every distinct opponent in the fixture list."""
+    opps = []
+    seen = set()
+    for m in matches:
+        other = m["away"] if m["home"] == bot else m["home"] if m["away"] == bot else None
+        if other is None or other in seen:
+            continue
+        seen.add(other)
+        opps.append(other)
+
+    print(f"\n== {bot}: scored / conceded by opponent ==\n")
+    print(f"  {'opponent':14s}  {'GF':>4}  {'GA':>4}  {'GD':>4}  matches")
+    tot_gf = tot_ga = 0
+    for opp in opps:
+        gf = ga = 0
+        rows = []
+        for m in matches:
+            if m["home"] == bot and m["away"] == opp:
+                gf += m["score_home"]
+                ga += m["score_away"]
+                rows.append(f"{m['score_home']}-{m['score_away']} (H)")
+            elif m["away"] == bot and m["home"] == opp:
+                gf += m["score_away"]
+                ga += m["score_home"]
+                rows.append(f"{m['score_away']}-{m['score_home']} (A)")
+        tot_gf += gf
+        tot_ga += ga
+        print(f"  {opp:14s}  {gf:4d}  {ga:4d}  {gf - ga:4d}  {', '.join(rows)}")
+    print(f"  {'TOTAL':14s}  {tot_gf:4d}  {tot_ga:4d}  {tot_gf - tot_ga:4d}")
+
+
 def run_promotion_pipeline() -> int:
     for name, path in TITANIUM:
         if not path.is_file():
@@ -152,7 +201,7 @@ def run_promotion_pipeline() -> int:
     names = [CHAMPION_NAME, CHALLENGER_NAME]
 
     print("== Promotion test (180s, both sides, total goals) ==\n")
-    print("  Order: AIA -> AIA3 -> Poponeta -> Haialand-v2 -> champion vs challenger\n")
+    print("  Order: AIA -> AIA3 -> Poponeta -> Haialand-v2 -> StarCheese -> champion vs challenger\n")
     matches = []
     for home_name, home_path, away_name, away_path, opening in fixtures:
         m = run(home_name, away_name, home_path, away_path, opening)
@@ -162,10 +211,17 @@ def run_promotion_pipeline() -> int:
             f"(opening={opening})"
         )
 
+    for n in names:
+        print_per_opponent_table(matches, n)
+
     totals = {n: total_goals_for(matches, n) for n in names}
-    print("\n== Titanium total goals (all parity fixtures) ==\n")
+    conceded = {n: total_conceded_for(matches, n) for n in names}
+    print("\n== Titanium totals (all parity fixtures) ==\n")
     for n in sorted(names, key=lambda x: -totals[x]):
-        print(f"  {n:12s}  {totals[n]} goals")
+        print(
+            f"  {n:12s}  {totals[n]} scored  /  {conceded[n]} conceded  "
+            f"(GD {totals[n] - conceded[n]:+d})"
+        )
 
     cg = totals[CHAMPION_NAME]
     tg = totals[CHALLENGER_NAME]

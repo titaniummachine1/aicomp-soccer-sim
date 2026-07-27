@@ -13,6 +13,7 @@ pub mod brain;
 pub mod debug_draw;
 pub mod graph;
 pub mod graph_vm;
+pub mod interact_history;
 pub mod keypress;
 pub mod match_state;
 pub mod params;

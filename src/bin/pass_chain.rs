@@ -46,7 +46,7 @@ fn main() {
         p.stamina = 1.0;
         p.shot_charge = 0.0;
         p.charge_warmup_left = 0.0;
-        p.interact_held = false;
+        p.interact_bits = 0;
         p.facing = Vec2::X;
         p.pos = if p.team == TeamId::Away {
             Vec2::new(0.0, 60.0)
@@ -57,7 +57,7 @@ fn main() {
     // Player 1 starts holding, and starts PRESSING — so its release next tick
     // is the first kick, exactly like every other player in the relay.
     w.possession.carrier = Some((TeamId::Home, 1));
-    w.players[0].interact_held = true;
+    w.players[0].interact_bits = 1;
     w.ball.held = true;
     w.ball.pos = w.players[0].pos + Vec2::X * params.hold_offset;
     w.ball.vel = Vec2::ZERO;

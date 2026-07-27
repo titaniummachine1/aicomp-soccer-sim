@@ -7,6 +7,11 @@
 //! - Possession via interact radius only
 //! - Brains run inline on the sim thread (no per-match worker threads in batch)
 //!
+//! **Unobservable wall-clock speed:** Fast mode, scrubber, and headless burst
+//! only change how often ticks are *scheduled*. Every step advances by
+//! [`FIXED_DT`]. SoccerGet `Delta Time` / `Fixed Delta Time` always report
+//! that constant. Scripts cannot tell realtime from max-speed.
+//!
 //! Goal-mouth entry is open through the center; outside the mouth, players
 //! remain clamped to the playable AABB. Free-ball post response is unchanged.
 
@@ -25,7 +30,7 @@ use crate::possession::{
     apply_interact, reset_possession_for_kickoff, sync_held_ball, tick_possession_timers,
     Possession,
 };
-/// Confirmed AIComp fixed step (~52.6 Hz). Independent of render FPS.
+/// Confirmed AIComp fixed step (~52.6 Hz). Independent of render FPS / Fast mode.
 pub const FIXED_DT: f32 = 0.019;
 
 #[derive(Debug, Clone)]
@@ -69,7 +74,7 @@ impl MatchWorld {
                     stamina_regen_lock_left: 0.0,
                     shot_charge: 0.0,
                     charge_warmup_left: 0.0,
-                    interact_held: false,
+                    interact_bits: 0,
                 });
             }
         }
@@ -156,7 +161,11 @@ impl MatchWorld {
     }
 
     /// One fixed tick. `home` / `away` brains evaluated by caller (or inline).
-    pub fn step_with_commands(&mut self, home: &BrainOutput, away: &BrainOutput, dt: f32) {
+    ///
+    /// `dt` is ignored — always [`FIXED_DT`]. Fast/slow wall pacing must not
+    /// change physics, clocks, or SoccerGet delta (scripts cannot observe it).
+    pub fn step_with_commands(&mut self, home: &BrainOutput, away: &BrainOutput, _dt: f32) {
+        let dt = FIXED_DT;
         self.observe_brain_outputs(home, away);
         if self.match_state.phase == MatchPhase::GoalPause {
             self.match_state.phase_timer -= dt;
@@ -471,10 +480,11 @@ impl MatchWorld {
         away: &mut A,
         dt: f32,
     ) {
+        let _ = dt; // always FIXED_DT inside step_with_commands
         let (home_api, away_api) = self.build_apis();
         let home_out = home.think(&home_api);
         let away_out = away.think(&away_api);
-        self.step_with_commands(&home_out, &away_out, dt);
+        self.step_with_commands(&home_out, &away_out, FIXED_DT);
     }
 }
 
@@ -868,11 +878,19 @@ mod tests {
         // One Home player standing on the ball, holding Interact forever.
         world.players[0].pos = Vec2::ZERO;
         let press = BrainOutput {
-            commands: [BrainCommand { move_to: Vec2::ZERO, sprint: false, interact: true }; 4],
+            commands: [BrainCommand {
+                move_to: Vec2::ZERO,
+                sprint: false,
+                interact: true,
+            }; 4],
             ..Default::default()
         };
         let release = BrainOutput {
-            commands: [BrainCommand { move_to: Vec2::ZERO, sprint: false, interact: false }; 4],
+            commands: [BrainCommand {
+                move_to: Vec2::ZERO,
+                sprint: false,
+                interact: false,
+            }; 4],
             ..Default::default()
         };
 
@@ -914,13 +932,13 @@ mod tests {
         params.kickoff_delay_s = 0.0;
         let mut world = MatchWorld::new_kickoff_opening(params, TeamId::Home);
         for p in world.players.iter_mut() {
-            p.interact_held = true;
+            p.interact_bits = 1;
         }
         world.apply_goal(EndReason::GoalHome);
         world.step_with_commands(&BrainOutput::default(), &BrainOutput::default(), FIXED_DT);
         assert_eq!(world.match_state.phase, MatchPhase::Kickoff);
         assert!(
-            world.players.iter().all(|p| !p.interact_held),
+            world.players.iter().all(|p| p.interact_bits == 0),
             "the spent press must not survive the restart"
         );
     }
@@ -935,6 +953,27 @@ mod tests {
             world.step_brains(&mut home, &mut away, FIXED_DT);
         }
         assert!(world.match_state.clock_s > 0.0 || world.match_state.phase != MatchPhase::Kickoff);
+    }
+
+    /// Fast/slow wall pacing is unobservable: a bogus `dt` argument still
+    /// advances clocks by FIXED_DT, and SoccerGet deltas stay FIXED_DT.
+    #[test]
+    fn sim_cannot_observe_wall_clock_tick_rate() {
+        let params = SimParams::default();
+        let mut world = MatchWorld::new_kickoff_opening(params, TeamId::Home);
+        world.match_state.phase = MatchPhase::Play;
+        world.match_state.clock_s = 10.0;
+        let idle = BrainOutput::default();
+        // Pretend the caller is "speeding up" by passing a huge dt.
+        world.step_with_commands(&idle, &idle, 1.0);
+        assert!(
+            (world.match_state.clock_s - (10.0 + FIXED_DT)).abs() < 1e-5,
+            "clock must advance by FIXED_DT only, got {}",
+            world.match_state.clock_s
+        );
+        let (home_api, _) = world.build_apis();
+        assert_eq!(home_api.get_float("Delta Time"), Some(FIXED_DT));
+        assert_eq!(home_api.get_float("Fixed Delta Time"), Some(FIXED_DT));
     }
 
     #[test]
@@ -955,7 +994,11 @@ mod tests {
         let target = Vec2::new(0.0, 24.0);
         let start: Vec<Vec2> = world.players.iter().map(|p| p.pos).collect();
         let cmd = BrainOutput {
-            commands: [BrainCommand { move_to: target, sprint: false, interact: false }; 4],
+            commands: [BrainCommand {
+                move_to: target,
+                sprint: false,
+                interact: false,
+            }; 4],
             ..Default::default()
         };
         for _ in 0..20 {
@@ -1106,7 +1149,7 @@ mod tests {
             stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
-            interact_held: false,
+            interact_bits: 0,
         };
         clamp_player_to_pitch(&mut p, &params);
         assert!(p.pos.x <= params.x_max + 1e-4);
@@ -1128,7 +1171,7 @@ mod tests {
             stamina_regen_lock_left: 0.0,
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
-            interact_held: false,
+            interact_bits: 0,
         };
         clamp_player_to_pitch(&mut p, &params);
         assert!(
