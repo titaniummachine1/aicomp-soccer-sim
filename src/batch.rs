@@ -81,13 +81,11 @@ impl ProgramCache {
         let _ = crate::graph_vm::take_recursion_limit_hit();
         let cached = RuntimeBrain::compile_cached(graph);
         if crate::graph_vm::take_recursion_limit_hit() {
-            // HARD FAIL, not a warning. A cycle leaves the affected ports null,
-            // so the graph still "runs" — it just makes no decisions, which
-            // looks exactly like a weak opponent and silently poisons any gate
-            // that includes it. The viewer can show a banner and let a human
-            // judge; headless has no human, so it must refuse.
+            // HARD FAIL only for runaway chains that hit MAX_LOWER_DEPTH.
+            // Unity-style feedback latches (ConditionalSet/Relay memory) are
+            // broken during lowering and must not set this flag.
             return Err(format!(
-                "recursion depth reached loading {path:?}: dependency cycle,                  cannot be lowered. Refused rather than played - it would run                  as an inert opponent and quietly invalidate every result it                  appears in."
+                "recursion depth reached loading {path:?}: runaway dependency                  chain (not a Unity memory latch). Refused rather than played."
             ));
         }
         let mut map = self.inner.lock().map_err(|e| e.to_string())?;

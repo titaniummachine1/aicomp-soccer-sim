@@ -6,7 +6,7 @@ Contenders (exactly two):
   * current challenger (`Titanium_challenger.txt`)
 
 Targets to beat (never contenders, never play each other):
-  AIA, AIA3, Poponeta, Haialand-v2, StarCheese
+  AIA, AIA3, Poponeta, Haialand-v2, StarCheese, ZudanFC3.2
   + every accepted Titanium_vN snapshot (deduped by content hash)
 
 Each contender plays every target home AND away (home team kicks off).
@@ -98,6 +98,12 @@ def discover_accepted_versions() -> list[tuple[str, Path]]:
 
 
 STARCHEESE = _resolve_graph(SAVES / "StarCheese.txt", ENGINE_OUT / "StarCheese.txt")
+ZUDANFC = _resolve_graph(
+    Path.home() / "Downloads" / "ZudanFC3.2.txt",
+    SAVES / "ZudanFC3.2.txt",
+    ENGINE_OUT / "ZudanFC3.2.txt",
+    DATA_TI / "ZudanFC3.2.txt",
+)
 
 EXTERNAL_TARGETS = [
     ("AIA", SAVES / "AIA.txt"),
@@ -105,6 +111,7 @@ EXTERNAL_TARGETS = [
     ("Poponeta", SAVES / "Poponeta.txt"),
     ("Haialand-v2", HAIALAND),
     ("StarCheese", STARCHEESE),
+    ("ZudanFC3.2", ZUDANFC),
 ]
 
 

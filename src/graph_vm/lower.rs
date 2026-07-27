@@ -1,6 +1,6 @@
 //! Demand-driven 1:1 lowerer — TeamGraph semantics match `graph::eval`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::{Vec2, Vec3};
 
@@ -112,32 +112,23 @@ struct CallFrame {
     port_regs: HashMap<String, Reg>,
 }
 
-/// Recursion-depth cap for `lower_port`/`lower_node_output`. Real, working
-/// graphs (Titanium included, thousands of nodes) sit far below this; it
-/// exists only to catch a runaway dependency chain -- most plausibly a true
-/// cycle, where a node's lowering recurses into its own not-yet-produced
-/// output -- before it overflows the thread stack. Confirmed against a real
-/// opponent graph that the actual game does not crash on this either: it
-/// silently times out / skips that tick's decision for the affected player.
-/// Matching that (return a null constant and stop recursing) instead of a
-/// hard process crash is the correct behavior, not "make the cycle resolve."
+/// Recursion-depth cap for `lower_port`/`lower_node_output`.
 ///
-/// 1500 is MEASURED, not chosen for roundness — see
-/// `a_cycle_reaches_the_depth_cap_without_overflowing`. On a 2 MB stack a true
-/// cycle survives at 1500 and overflows at 3000. This was 5000, which already
-/// overflowed: the cap meant to prevent a stack overflow was itself set past
-/// the overflow point, so a cyclic graph killed the process instead of being
-/// reported. A stack overflow aborts and cannot be caught, so the margin here
-/// is deliberate.
+/// Feedback cycles (ConditionalSet out → [Relay?] → false branch, old
+/// ConditionalSetFloat self-loops, Set/Get memos) are **not** errors: Unity
+/// treats the back-edge as previous-tick memory. Those are broken via
+/// synthetic latch variables in [`Lowerer::lower_port`].
+///
+/// This cap remains only for pathological non-progress cases that somehow
+/// avoid the in-stack check. 1500 is MEASURED — see historical notes in git;
+/// on a 2 MB stack a naive recurse-without-break overflows near 3000.
 const MAX_LOWER_DEPTH: u32 = 1_500;
 
-/// Set when a lowering hit [`MAX_LOWER_DEPTH`], i.e. the graph has a cycle.
+/// Set when a lowering hit [`MAX_LOWER_DEPTH`] without being broken as a latch.
 ///
-/// No attempt is made to salvage the graph. A cycle means the dependency chain
-/// has no base case, so there is no correct value to produce and guessing one
-/// would fabricate a decision. The real game does not survive this either. The
-/// port resolves null, the flag is set, and the caller reports it — that is the
-/// whole contract.
+/// Benign Unity memory cycles must not set this — they allocate a prev-tick
+/// latch instead. If this flag is still raised, the graph has a runaway chain
+/// we could not break; headless batch refuses those.
 static RECURSION_LIMIT_HIT: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -157,6 +148,10 @@ pub struct Lowerer {
     vars: VariableTable,
     apis: ApiSlotTable,
     lower_depth: u32,
+    /// Ports whose lowering is in progress (cycle detection).
+    lowering_stack: HashSet<String>,
+    /// Output ports that participate in a feedback latch → synthetic var id.
+    latch_vars: HashMap<String, VariableId>,
 }
 
 impl Lowerer {
@@ -180,6 +175,8 @@ impl Lowerer {
                 label_to_slot: HashMap::new(),
             },
             lower_depth: 0,
+            lowering_stack: HashSet::new(),
+            latch_vars: HashMap::new(),
         };
 
         for sid in &set_variable_sids {
@@ -524,20 +521,70 @@ impl Lowerer {
         if let Some(r) = self.cache_get(port_sid) {
             return r;
         }
+        // Unity memory cell: if this output is already being computed higher
+        // on the stack, the back-edge is previous-tick state — LoadVar latch,
+        // do not recurse (Computer basics "Memory" / Zudan ConditionalSet latch).
+        if self.lowering_stack.contains(port_sid) {
+            return self.emit_load_latch(port_sid);
+        }
         if self.lower_depth >= MAX_LOWER_DEPTH {
-            // Stop. The chain has no base case; unwind with a null and let the
-            // caller report an unusable graph.
+            // Safety net only — normal feedback cycles are broken above.
             RECURSION_LIMIT_HIT.store(true, std::sync::atomic::Ordering::Relaxed);
             return self.emit_const_null(port_sid, "depth-limit");
         }
         let Some(pref) = self.graph.ports.get(port_sid).cloned() else {
             return self.emit_const_null(port_sid, "missing");
         };
+        self.lowering_stack.insert(port_sid.to_string());
         self.lower_depth += 1;
         let reg = self.lower_node_output(&pref.node_sid, &pref.port_name);
         self.lower_depth -= 1;
+        self.lowering_stack.remove(port_sid);
         self.cache_set(port_sid.to_string(), reg);
+        // Commit new value into the latch so the next tick / later back-edge
+        // readers see what Unity holds as "previous output".
+        if self.latch_vars.contains_key(port_sid) {
+            self.emit_store_latch(port_sid, reg);
+        }
         reg
+    }
+
+    fn latch_var_id(&mut self, port_sid: &str) -> VariableId {
+        if let Some(&id) = self.latch_vars.get(port_sid) {
+            return id;
+        }
+        let name = format!("__latch__{port_sid}");
+        let id = self.vars.intern(&name);
+        self.latch_vars.insert(port_sid.to_string(), id);
+        id
+    }
+
+    fn emit_load_latch(&mut self, port_sid: &str) -> Reg {
+        let vid = self.latch_var_id(port_sid);
+        let dst = self.fresh_reg(RegisterKind::Null);
+        self.ir.push(IrInst {
+            dest: Some(dst),
+            kind: RegisterKind::Null,
+            op: OpCode::LoadVar,
+            args: vec![Reg(vid.0 as u32)],
+            immediates: vec![],
+            source_sid: port_sid.to_string(),
+            source_port: "latch".to_string(),
+        });
+        dst
+    }
+
+    fn emit_store_latch(&mut self, port_sid: &str, value: Reg) {
+        let vid = self.latch_var_id(port_sid);
+        self.ir.push(IrInst {
+            dest: None,
+            kind: RegisterKind::Null,
+            op: OpCode::StoreVar,
+            args: vec![Reg(vid.0 as u32), value],
+            immediates: vec![],
+            source_sid: port_sid.to_string(),
+            source_port: "latch".to_string(),
+        });
     }
 
     fn lower_node_output(&mut self, node_sid: &str, port_name: &str) -> Reg {
@@ -944,16 +991,19 @@ impl Lowerer {
                 .unwrap_or_else(|| self.emit_const_vec2(node_sid, "Vector31", Vec2::ZERO)),
             RegisterKind::Null => self.emit_const_null(node_sid, port_name),
         };
+        // False branch: V2 wires it explicitly (often back to self via Relay).
+        // Old ConditionalSetFloat has only Float1 — missing false means
+        // implicit previous-tick hold (Computer basics "Memory").
         let f = match kind {
-            RegisterKind::Bool => self
-                .lower_input(node_sid, "Bool3")
-                .unwrap_or_else(|| self.emit_const_bool(node_sid, "Bool3", false)),
-            RegisterKind::Float => self
-                .lower_input(node_sid, "Float2")
-                .unwrap_or_else(|| self.emit_const_float(node_sid, "Float2", 0.0)),
+            RegisterKind::Bool => self.lower_input(node_sid, "Bool3").unwrap_or_else(|| {
+                self.implicit_hold(node_sid, port_name, RegisterKind::Bool)
+            }),
+            RegisterKind::Float => self.lower_input(node_sid, "Float2").unwrap_or_else(|| {
+                self.implicit_hold(node_sid, port_name, RegisterKind::Float)
+            }),
             RegisterKind::Vector => self
                 .lower_input(node_sid, "Vector32")
-                .unwrap_or_else(|| self.emit_const_vec2(node_sid, "Vector32", Vec2::ZERO)),
+                .unwrap_or_else(|| self.implicit_hold(node_sid, port_name, RegisterKind::Vector)),
             RegisterKind::Null => self.emit_const_null(node_sid, port_name),
         };
         let dst = self.fresh_reg(kind);
@@ -974,6 +1024,26 @@ impl Lowerer {
             source_port: port_name.to_string(),
         });
         dst
+    }
+
+    /// Previous-tick value of this node's output (Unity hold when false unwired).
+    fn implicit_hold(&mut self, node_sid: &str, port_name: &str, kind: RegisterKind) -> Reg {
+        if let Some(out_sid) = self.graph.output_port_sid(node_sid, port_name) {
+            let loaded = self.emit_load_latch(&out_sid);
+            // LoadVar is untyped Null; Move into the Select's expected kind.
+            if kind == RegisterKind::Null {
+                loaded
+            } else {
+                self.emit_move(node_sid, "hold", loaded, kind)
+            }
+        } else {
+            match kind {
+                RegisterKind::Bool => self.emit_const_bool(node_sid, "hold", false),
+                RegisterKind::Float => self.emit_const_float(node_sid, "hold", 0.0),
+                RegisterKind::Vector => self.emit_const_vec2(node_sid, "hold", Vec2::ZERO),
+                RegisterKind::Null => self.emit_const_null(node_sid, "hold"),
+            }
+        }
     }
 
     fn lower_function_call(&mut self, fn_node: &GraphNode) -> Reg {
@@ -1600,18 +1670,12 @@ mod tests {
         assert_eq!(line.rgba, crate::debug_draw::named_rgba("Orange"));
     }
 
-    /// A true cycle must hit the cap WITHOUT overflowing the stack.
-    ///
-    /// This is the whole justification for whatever `MAX_LOWER_DEPTH` is set
-    /// to: two AddFloats nodes feeding each other recurse until the cap, so
-    /// this exercises the deepest path the lowerer can ever take. A stack
-    /// overflow here aborts the process (Rust cannot catch it), which in the
-    /// viewer means the game dies rather than reporting a bad graph — so the
-    /// cap has to be low enough that this test passes on a normal 2 MB test
-    /// thread, not merely on the 8 MB main thread.
+    /// Feedback cycles are broken with prev-tick latches (Unity Memory cells).
+    /// A mutual AddFloats loop must compile without overflowing the stack and
+    /// without tripping [`RECURSION_LIMIT_HIT`].
     #[test]
-    fn a_cycle_reaches_the_depth_cap_without_overflowing() {
-        // a.Float1 <- b.Float1out, b.Float1 <- a.Float1out : unbreakable loop.
+    fn a_cycle_lowers_via_prev_tick_latch_without_overflowing() {
+        // a.Float1 <- b.Float1out, b.Float1 <- a.Float1out : feedback loop.
         let raw = RawGraph {
             nodes: vec![
                 node(
@@ -1659,32 +1723,63 @@ mod tests {
                 ),
             ],
             connections: vec![
-                RawConnection { port0: "b_out".into(), port1: "a_in1".into() },
-                RawConnection { port0: "a_out".into(), port1: "b_in1".into() },
-                RawConnection { port0: "a_out".into(), port1: "cvx".into() },
-                RawConnection { port0: "zo".into(), port1: "cvy".into() },
-                RawConnection { port0: "zo".into(), port1: "cvz".into() },
-                RawConnection { port0: "cvo".into(), port1: "c1m".into() },
-                RawConnection { port0: "bfo".into(), port1: "c1s".into() },
-                RawConnection { port0: "bfo".into(), port1: "c1i".into() },
+                RawConnection {
+                    port0: "b_out".into(),
+                    port1: "a_in1".into(),
+                },
+                RawConnection {
+                    port0: "a_out".into(),
+                    port1: "b_in1".into(),
+                },
+                RawConnection {
+                    port0: "a_out".into(),
+                    port1: "cvx".into(),
+                },
+                RawConnection {
+                    port0: "zo".into(),
+                    port1: "cvy".into(),
+                },
+                RawConnection {
+                    port0: "zo".into(),
+                    port1: "cvz".into(),
+                },
+                RawConnection {
+                    port0: "cvo".into(),
+                    port1: "c1m".into(),
+                },
+                RawConnection {
+                    port0: "bfo".into(),
+                    port1: "c1s".into(),
+                },
+                RawConnection {
+                    port0: "bfo".into(),
+                    port1: "c1i".into(),
+                },
             ],
         };
         let graph = crate::graph::load::index_graph(raw, "cycle".into());
         let _ = take_recursion_limit_hit();
 
-        // Run it on a thread with an explicitly SMALL stack. Passing here means
-        // the cap is safe with margin, not merely safe on this machine's main
-        // thread.
         let handle = std::thread::Builder::new()
-            .stack_size(1 << 21) // 2 MB, the usual test-thread size
+            .stack_size(1 << 21) // 2 MB
             .spawn(move || {
-                let _ = Lowerer::compile(graph);
+                let result = Lowerer::compile(graph);
+                assert!(
+                    !take_recursion_limit_hit(),
+                    "feedback cycle must lower via latch, not trip depth cap"
+                );
+                let has_latch_load = result
+                    .controllers
+                    .instructions
+                    .iter()
+                    .chain(result.settle.instructions.iter())
+                    .any(|i| i.op == OpCode::LoadVar && i.source_port == "latch");
+                assert!(
+                    has_latch_load,
+                    "expected LoadVar latch for cycle back-edge"
+                );
             })
             .expect("spawn");
         assert!(handle.join().is_ok(), "lowering a cycle overflowed the stack");
-        assert!(
-            take_recursion_limit_hit(),
-            "a cycle must trip the recursion cap"
-        );
     }
 }
