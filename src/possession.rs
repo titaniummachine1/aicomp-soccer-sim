@@ -228,8 +228,19 @@ pub fn apply_interact(
         return InteractOutcome::default();
     }
 
-    if !impulse {
-        return InteractOutcome::default();
+    // Non-carrier interaction:
+    // When the ball is FREE (!ball.held), picking it up works continuously while `cmd.interact` is true
+    // (e.g. alternating toggle or held button).
+    // When the ball is HELD (tackle/steal), it requires a rising edge (`impulse`) so a tackler
+    // cannot continuously drain/steal every tick without releasing Interact first.
+    if ball.held {
+        if !impulse {
+            return InteractOutcome::default();
+        }
+    } else {
+        if !cmd.interact {
+            return InteractOutcome::default();
+        }
     }
 
     let since_kick = if poss.kick_exclude_left > 0.0 {
@@ -885,6 +896,49 @@ mod tests {
         };
         apply_interact(
             &mut shooter,
+            &mut ball,
+            &mut poss,
+            cmd,
+            &params,
+            0.019,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(poss.carrier, Some((TeamId::Home, 1)));
+        assert!(ball.held);
+    }
+
+    #[test]
+    fn alternating_toggle_free_ball_pickup() {
+        let params = SimParams::default();
+        let mut ball = Ball {
+            pos: Vec2::new(0.5, 0.0),
+            vel: Vec2::ZERO,
+            height: params.ball_rest_height,
+            vel_y: 0.0,
+            held: false,
+        };
+        let mut poss = Possession::default();
+        let mut player = Player {
+            team: TeamId::Home,
+            id: PlayerId(1),
+            pos: Vec2::ZERO,
+            vel: Vec2::ZERO,
+            facing: Vec2::X,
+            stamina: 1.0,
+            stamina_regen_lock_left: 0.0,
+            shot_charge: 0.0,
+            charge_warmup_left: 0.0,
+            interact_bits: 0b1010101010, // Alternating interact bits (was held last tick)
+        };
+        let cmd = BrainCommand {
+            move_to: Vec2::ZERO,
+            sprint: false,
+            interact: true, // held this tick, but interact_rising_edge is false because prev bit was 1
+        };
+        apply_interact(
+            &mut player,
             &mut ball,
             &mut poss,
             cmd,

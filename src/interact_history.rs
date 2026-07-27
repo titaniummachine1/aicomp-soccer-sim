@@ -47,11 +47,7 @@ pub fn consecutive_held_ticks(bits: u64) -> u32 {
 
 /// Shot charge 0..1 from consecutive hold length, after optional warmup ticks.
 #[inline]
-pub fn charge_from_hold(
-    bits: u64,
-    warmup_ticks: u32,
-    full_charge_ticks: u32,
-) -> f32 {
+pub fn charge_from_hold(bits: u64, warmup_ticks: u32, full_charge_ticks: u32) -> f32 {
     let streak = consecutive_held_ticks(bits);
     if streak == 0 || full_charge_ticks == 0 {
         return 0.0;
