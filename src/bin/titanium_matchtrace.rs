@@ -285,8 +285,34 @@ fn main() -> ExitCode {
         let sa = world.match_state.score_away;
         let total = sh + sa;
         if total > last_total {
+            // Ball is cleared on goal; classify from the previous sample.
+            let prev = if history.len() >= 2 {
+                history.get(history.len() - 2)
+            } else {
+                history.back()
+            };
+            let (kind, held, speed) = match prev {
+                Some(s) => {
+                    let spd = if history.len() >= 2 {
+                        let a = &history[history.len() - 2];
+                        let b = history.back().unwrap();
+                        (b.ball - a.ball).length() / FIXED_DT
+                    } else {
+                        0.0
+                    };
+                    let kind = if s.ball_held {
+                        "placement/walk-in (held)"
+                    } else if spd > 8.0 {
+                        "shot/flying (loose, fast)"
+                    } else {
+                        "loose/rolling"
+                    };
+                    (kind, s.ball_held, spd)
+                }
+                None => ("unknown", false, 0.0),
+            };
             eprintln!(
-                "=== GOAL t={:.2}s score={sh}-{sa} (last {:.1}s of positions) ===",
+                "=== GOAL t={:.2}s score={sh}-{sa} kind={kind} held={held} approx_speed={speed:.1}m/s (last {:.1}s) ===",
                 sample_t, args.window_s
             );
             for s in history.iter() {
