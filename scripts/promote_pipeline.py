@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CANONICAL promotion test — simple total-goals gate.
+"""CANONICAL promotion test - simple total-goals gate.
 
 Contenders (exactly two):
   * live champion (`Titanium.txt`)
@@ -9,9 +9,9 @@ Targets to beat (never contenders, never play each other):
   AIA, AIA3, Poponeta, Haialand-v2, StarCheese
   + every accepted Titanium_vN snapshot (deduped by content hash)
 
-Each contender plays every target home AND away.
+Each contender plays every target home AND away (home team kicks off).
 
-Plus champion ↔ challenger in all 4 side×kickoff configs:
+Plus champion vs challenger in all 4 side x kickoff configs:
   1. champ home / champ kicks
   2. champ home / challenger kicks
   3. challenger home / challenger kicks
@@ -75,7 +75,8 @@ def _file_digest(path: Path) -> str:
 
 
 def discover_accepted_versions() -> list[tuple[str, Path]]:
-    found: dict[int, Path] = {}
+    """Prefer data/titanium, then Saves, then engine out. Fail on hash conflict."""
+    found: dict[int, tuple[Path, str]] = {}
     for root in (DATA_TI, SAVES, ENGINE_OUT):
         if not root.is_dir():
             continue
@@ -83,8 +84,17 @@ def discover_accepted_versions() -> list[tuple[str, Path]]:
             m = _VERSION_RE.match(p.name)
             if not m:
                 continue
-            found.setdefault(int(m.group(1)), p)
-    return [(f"Titanium_v{n}", found[n]) for n in sorted(found)]
+            n = int(m.group(1))
+            dig = _file_digest(p)
+            if n in found:
+                prev_path, prev_dig = found[n]
+                if dig != prev_dig:
+                    raise SystemExit(
+                        f"Titanium_v{n} hash conflict:\n  {prev_path}\n  {p}"
+                    )
+                continue
+            found[n] = (p, dig)
+    return [(f"Titanium_v{n}", found[n][0]) for n in sorted(found)]
 
 
 STARCHEESE = _resolve_graph(SAVES / "StarCheese.txt", ENGINE_OUT / "StarCheese.txt")
@@ -99,21 +109,25 @@ EXTERNAL_TARGETS = [
 
 
 def build_targets() -> list[tuple[str, Path]]:
-    """Externals + Titanium_vN, deduped by content (skip graphs identical to live)."""
+    """Externals (required) + Titanium_vN, deduped; skip graphs identical to live."""
     targets: list[tuple[str, Path]] = []
     seen: dict[str, str] = {}
     live_dig = _file_digest(LIVE) if LIVE.is_file() else None
 
-    for name, path in EXTERNAL_TARGETS + discover_accepted_versions():
+    for name, path in EXTERNAL_TARGETS:
         if path is None or not path.is_file():
-            print(f"  skip {name} — missing", file=sys.stderr)
-            continue
+            raise SystemExit(f"mandatory target missing: {name}")
+        dig = _file_digest(path)
+        seen[dig] = name
+        targets.append((name, path))
+
+    for name, path in discover_accepted_versions():
         dig = _file_digest(path)
         if live_dig is not None and dig == live_dig:
-            print(f"  note: {name} identical to live champion — skip as target", file=sys.stderr)
+            print(f"  note: {name} identical to live champion - skip as target", file=sys.stderr)
             continue
         if dig in seen:
-            print(f"  note: {name} identical to {seen[dig]} — skip", file=sys.stderr)
+            print(f"  note: {name} identical to {seen[dig]} - skip", file=sys.stderr)
             continue
         seen[dig] = name
         targets.append((name, path))
@@ -173,11 +187,12 @@ def build_contenders() -> list[tuple[str, Path]]:
 
 
 def build_target_fixtures(contenders, targets):
+    """Each contender vs each target, both as home. Home team always kicks off."""
     fixtures = []
     for ti_name, ti_path in contenders:
         for opp_name, opp_path in targets:
             fixtures.append((ti_name, ti_path, opp_name, opp_path, "home"))
-            fixtures.append((opp_name, opp_path, ti_name, ti_path, "away"))
+            fixtures.append((opp_name, opp_path, ti_name, ti_path, "home"))
     return fixtures
 
 
@@ -199,7 +214,7 @@ def deploy_titanium_test(src: Path) -> None:
     import time
 
     if not src.is_file():
-        print(f"WARN: cannot auto-deploy Titanium_test — missing {src}", file=sys.stderr)
+        print(f"WARN: cannot auto-deploy Titanium_test - missing {src}", file=sys.stderr)
         return
     text = src.read_text(encoding="utf-8")
     dests = [
@@ -314,7 +329,7 @@ def print_h2h(matches):
     ]
     if not h2h:
         return
-    print("\n== Champion ↔ challenger (4 configs: side × kickoff) ==\n")
+    print("\n== Champion vs challenger (4 configs: side x kickoff) ==\n")
     for m in h2h:
         side = f"{m['home']} home"
         kick = f"{m['home']} kicks" if m["opening"] == "home" else f"{m['away']} kicks"
@@ -347,7 +362,7 @@ def run_promotion_pipeline() -> int:
     print("== Promotion test (180s, total goals) ==\n")
     print(f"  Contenders: {', '.join(names)}")
     print(f"  Targets:    {' -> '.join(target_names)}")
-    print("  + champ↔challenger × 4 (both sides × both kickoffs)")
+    print("  + champ vs challenger x4 (both sides x both kickoffs)")
     print("  Rule: highest GF across full slate wins. No self-play.\n")
     print(f"  Parallel matches: {MATCH_WORKERS} workers\n")
 
@@ -381,7 +396,7 @@ def run_promotion_pipeline() -> int:
         promote_challenger()
         deploy_titanium_test(CHALLENGER)
     else:
-        print(f"  No promotion — challenger GF {tg}, champion GF {cg}.")
+        print(f"  No promotion - challenger GF {tg}, champion GF {cg}.")
         deploy_titanium_test(CHALLENGER)
     return 0
 
