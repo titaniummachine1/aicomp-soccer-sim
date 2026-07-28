@@ -16,14 +16,16 @@ pub struct Interpreter;
 impl Backend for Interpreter {
     fn execute_settle(&mut self, program: &RuntimeProgram, ctx: &mut ExecutionContext) {
         ctx.frame.ensure_regs(program.register_count as usize);
-        for inst in program.settle_ops() {
+        let ops = program.settle_ops();
+        for inst in ops {
             run_inst(inst, ctx, &program.var_names);
         }
     }
 
     fn execute_controllers(&mut self, program: &RuntimeProgram, ctx: &mut ExecutionContext) {
         ctx.frame.ensure_regs(program.register_count as usize);
-        for inst in program.controller_ops() {
+        let ops = program.controller_ops();
+        for inst in ops {
             run_inst(inst, ctx, &program.var_names);
         }
     }
