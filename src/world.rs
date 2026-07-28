@@ -1020,6 +1020,60 @@ mod tests {
         panic!("MOB failed to pick up ball after 10 ticks. Final carrier: {:?}", world.possession.carrier);
     }
 
+    #[test]
+    #[ignore] // Requires Titanium graph file, run with: cargo test --lib -- --ignored titanium_ball_pickup
+    fn titanium_ball_pickup() {
+        use std::path::PathBuf;
+        use crate::batch::ProgramCache;
+        use crate::graph_vm::RuntimeBrain;
+        
+        let titanium_path = PathBuf::from(
+            "C:\\Users\\Terminatort8000\\AppData\\LocalLow\\Unicorn One\\AIComp\\Saves\\Soccer\\Titanium.txt"
+        );
+        
+        if !titanium_path.exists() {
+            return; // Skip test if Titanium graph not found
+        }
+        
+        let params = SimParams::default();
+        let mut world = MatchWorld::new_kickoff_opening(params, TeamId::Home);
+        world.possession.carrier = None;
+        world.ball.held = false;
+        world.ball.pos = Vec2::ZERO;
+        world.ball.vel = Vec2::ZERO;
+        
+        // Position Home P1 on the ball
+        world.players[0].pos = Vec2::ZERO;
+        world.players[0].team = TeamId::Home;
+        
+        let cache = ProgramCache::default();
+        
+        let mut home_brain = match cache.get_or_compile(&titanium_path) {
+            Ok(cached) => {
+                Box::new(RuntimeBrain::from_cached(cached)) as Box<dyn TeamBrain>
+            },
+            Err(e) => panic!("Failed to load Titanium graph: {}", e),
+        };
+        
+        let mut away_brain = Box::new(crate::brain::IdleBrain) as Box<dyn TeamBrain>;
+        
+        // Run for 10 ticks to give Titanium time to pick up the ball
+        for _ in 0..10 {
+            let (home_api, away_api) = world.build_apis();
+            let home_out = home_brain.think(&home_api);
+            let away_out = away_brain.think(&away_api);
+            
+            world.step_with_commands(&home_out, &away_out, FIXED_DT);
+            
+            // Check if ball was picked up
+            if world.possession.carrier.is_some() {
+                return; // Success
+            }
+        }
+        
+        panic!("Titanium failed to pick up ball after 10 ticks. Final carrier: {:?}", world.possession.carrier);
+    }
+
     /// The press history is per-kickoff: a whistle or goal restarts positions
     /// and the input context with them. Without this, a graph still holding
     /// Interact when the whistle goes carries a spent press into the restart
