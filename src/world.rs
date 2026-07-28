@@ -152,9 +152,11 @@ impl MatchWorld {
         // Re-place only while still on the opening tick of a kickoff. Later
         // ticks must not: players are already walking in by then, and yanking
         // them back onto their marks mid-run would show up as a teleport.
+        // Also require kickoff_ticks == 0 to ensure we only re-place on the very first tick.
         if changed
             && self.match_state.phase == MatchPhase::Kickoff
             && self.match_state.phase_timer <= 0.0
+            && self.match_state.kickoff_ticks == 0
         {
             self.reset_to_kickoff();
         }
@@ -287,6 +289,10 @@ impl MatchWorld {
                 &mut self.players[i],
                 &self.match_state,
                 &self.params,
+            );
+            clamp_receiving_team_to_own_half(
+                &mut self.players[i],
+                &self.match_state,
             );
             tick_stamina(&mut self.players[i], cmd.sprint, dt, &self.params);
             cmds.push(cmd);
@@ -676,6 +682,41 @@ fn clamp_receiving_team_outside_kickoff_circle(
     }
 }
 
+/// Receiving team cannot cross the halfway line (X=0) during kickoff.
+/// Home attacks +X, Away attacks -X. When Home kicks off, Away must stay
+/// on +X side (X >= 0). When Away kicks off, Home must stay on -X side (X <= 0).
+fn clamp_receiving_team_to_own_half(
+    player: &mut Player,
+    match_state: &MatchState,
+) {
+    if player.team == match_state.kickoff_team {
+        return;
+    }
+    if !receiving_team_circle_locked(match_state) {
+        return;
+    }
+    match player.team {
+        TeamId::Home => {
+            // Home receiving: must stay on -X side (their defensive half)
+            if player.pos.x > 0.0 {
+                player.pos.x = 0.0;
+                if player.vel.x > 0.0 {
+                    player.vel.x = 0.0;
+                }
+            }
+        }
+        TeamId::Away => {
+            // Away receiving: must stay on +X side (their defensive half)
+            if player.pos.x < 0.0 {
+                player.pos.x = 0.0;
+                if player.vel.x < 0.0 {
+                    player.vel.x = 0.0;
+                }
+            }
+        }
+    }
+}
+
 /// TimePlot 17-05-04 DB14: ~34.5s full drain while sprinting with ball,
 /// ~20s full regen while walking; Frida regen delays still applied.
 fn tick_stamina(player: &mut Player, sprint: bool, dt: f32, params: &SimParams) {
@@ -900,15 +941,15 @@ mod tests {
             "the press tick must claim the ball"
         );
 
-        // In current engine design, free ball pickup allows continuous Interact hold,
-        // while tackling a held ball requires a rising edge.
+        // After reverting to rising-edge for everything, continuous Interact hold
+        // does NOT allow free ball pickup - you need a fresh rising edge.
         world.possession.carrier = None;
         world.ball.held = false;
         world.ball.pos = world.players[0].pos + world.players[0].facing * hold;
         world.step_with_commands(&press, &release, FIXED_DT);
         assert!(
-            world.possession.carrier.is_some(),
-            "holding Interact allows free ball pickup"
+            world.possession.carrier.is_none(),
+            "holding Interact continuously does NOT allow free ball pickup (rising edge required)"
         );
 
         // Release for one tick, reset carrier, then press again — that is a new press.
@@ -921,6 +962,62 @@ mod tests {
             world.possession.carrier.is_some(),
             "a release followed by a press must claim again"
         );
+    }
+
+    /// Test that MOB graph can pick up the ball.
+    /// This is a headless test to verify the graph generates proper interact commands.
+    #[test]
+    #[ignore] // Requires MOB graph file, run with: cargo test -- --ignored mob_ball_pickup
+    fn mob_ball_pickup() {
+        use std::path::PathBuf;
+        use crate::batch::ProgramCache;
+        use crate::graph_vm::RuntimeBrain;
+        
+        let mob_path = PathBuf::from(
+            "C:\\Users\\Terminatort8000\\AppData\\LocalLow\\Unicorn One\\AIComp\\Saves\\Soccer\\MOB_2.txt"
+        );
+        
+        if !mob_path.exists() {
+            return; // Skip test if MOB graph not found
+        }
+        
+        let params = SimParams::default();
+        let mut world = MatchWorld::new_kickoff_opening(params, TeamId::Home);
+        world.possession.carrier = None;
+        world.ball.held = false;
+        world.ball.pos = Vec2::ZERO;
+        world.ball.vel = Vec2::ZERO;
+        
+        // Position Home P1 on the ball
+        world.players[0].pos = Vec2::ZERO;
+        world.players[0].team = TeamId::Home;
+        
+        let cache = ProgramCache::default();
+        
+        let mut home_brain = match cache.get_or_compile(&mob_path) {
+            Ok(cached) => {
+                Box::new(RuntimeBrain::from_cached(cached)) as Box<dyn TeamBrain>
+            },
+            Err(e) => panic!("Failed to load MOB graph: {}", e),
+        };
+        
+        let mut away_brain = Box::new(crate::brain::IdleBrain) as Box<dyn TeamBrain>;
+        
+        // Run for 10 ticks to give MOB time to pick up the ball
+        for _ in 0..10 {
+            let (home_api, away_api) = world.build_apis();
+            let home_out = home_brain.think(&home_api);
+            let away_out = away_brain.think(&away_api);
+            
+            world.step_with_commands(&home_out, &away_out, FIXED_DT);
+            
+            // Check if ball was picked up
+            if world.possession.carrier.is_some() {
+                return; // Success
+            }
+        }
+        
+        panic!("MOB failed to pick up ball after 10 ticks. Final carrier: {:?}", world.possession.carrier);
     }
 
     /// The press history is per-kickoff: a whistle or goal restarts positions
@@ -1055,6 +1152,27 @@ mod tests {
         state.on_goal(TeamId::Away, 1.0);
         assert_eq!(state.score_home, 1);
         assert_eq!(state.kickoff_team, TeamId::Away);
+    }
+
+    #[test]
+    fn kickoff_side_is_random_across_matches() {
+        // Run 10 matches and verify kickoff side is not always the same
+        let params = SimParams::default();
+        let mut home_count = 0;
+        let mut away_count = 0;
+        for _ in 0..10 {
+            let world = MatchWorld::new_kickoff(params.clone());
+            match world.match_state.kickoff_team {
+                TeamId::Home => home_count += 1,
+                TeamId::Away => away_count += 1,
+            }
+        }
+        // With true randomness, it's extremely unlikely to get 10 of the same side
+        // (probability = 2 * (0.5)^10 = 0.00195, less than 0.2%)
+        assert!(
+            home_count > 0 && away_count > 0,
+            "kickoff side should vary across matches: got Home={home_count}, Away={away_count}"
+        );
     }
 
     #[test]

@@ -228,19 +228,13 @@ pub fn apply_interact(
         return InteractOutcome::default();
     }
 
-    // Non-carrier interaction:
-    // When the ball is FREE (!ball.held), picking it up works continuously while `cmd.interact` is true
-    // (e.g. alternating toggle or held button).
-    // When the ball is HELD (tackle/steal), it requires a rising edge (`impulse`) so a tackler
-    // cannot continuously drain/steal every tick without releasing Interact first.
-    if ball.held {
-        if !impulse {
-            return InteractOutcome::default();
-        }
-    } else {
-        if !cmd.interact {
-            return InteractOutcome::default();
-        }
+    // Non-carrier interaction: rising edge only (pressed this tick, not held last tick).
+    // This is per-player — each player has their own 64-bit interact_bits shift register.
+    // A player who held Interact last tick must release before they can claim or tackle again.
+    // Mob's alternating toggle (flip each tick) generates a rising edge every other tick,
+    // which is exactly what allows rapid sequential claims without continuous hold.
+    if !impulse {
+        return InteractOutcome::default();
     }
 
     let since_kick = if poss.kick_exclude_left > 0.0 {

@@ -69,7 +69,11 @@ impl RuntimeBrain {
         vars: VariableTable,
         apis: ApiSlotTable,
     ) -> Self {
-        let persistent_vars = vec![VmValue::Null; program.variable_count as usize];
+        // Initialize variables as Bool(false) instead of Null so alternating toggle graphs
+        // (like MOB) work correctly from the first tick without needing a warmup period.
+        let persistent_vars = (0..program.variable_count as usize)
+            .map(|_| VmValue::Bool(false))
+            .collect();
         Self {
             program,
             vars,
@@ -118,10 +122,9 @@ impl TeamBrain for RuntimeBrain {
             ctx.trace = Some(ObservableTrace::empty());
         }
 
-        for pass in 0..8 {
-            ctx.begin_pass(pass);
-            self.backend.execute_settle(&self.program, &mut ctx);
-        }
+        // Unity runs settle once per tick, not 8 times
+        ctx.begin_pass(0);
+        self.backend.execute_settle(&self.program, &mut ctx);
 
         ctx.begin_pass(8);
         self.backend.execute_controllers(&self.program, &mut ctx);

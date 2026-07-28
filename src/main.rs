@@ -534,7 +534,13 @@ fn main() {
         })
         .insert_resource(Scenario1Round::default())
         .insert_resource({
-            let mut world = MatchWorld::new_kickoff_opening(params, args.opening);
+            // For full matches, use random opening. For scenarios, use deterministic opening.
+            let world = if args.scenario.is_scenario1() || args.scenario.is_scenario_4v1() {
+                MatchWorld::new_kickoff_opening(params, args.opening)
+            } else {
+                MatchWorld::new_kickoff(params)
+            };
+            let mut world = world;
             // Faceoff spots come off each graph's ConstructSoccerProperties.
             world.set_kickoff_formation(TeamId::Home, home_brain.kickoff_formation());
             world.set_kickoff_formation(TeamId::Away, away_brain.kickoff_formation());
@@ -2430,7 +2436,12 @@ fn restart_match(
 ) {
     let mut params = viewer.world.params.clone();
     params.kickoff_delay_s = 0.0;
-    viewer.world = MatchWorld::new_kickoff_opening(params, opening);
+    // For full matches, use random opening. For scenarios, use deterministic opening.
+    viewer.world = if one_v_one.scenario.is_scenario1() || one_v_one.scenario.is_scenario_4v1() {
+        MatchWorld::new_kickoff_opening(params, opening)
+    } else {
+        MatchWorld::new_kickoff(params)
+    };
     if one_v_one.scenario.is_scenario1() {
         setup_1v1_harness(&mut viewer.world, one_v_one.attack_home, one_v_one.z_bias);
         *round = Scenario1Round::arm(&viewer.world);
