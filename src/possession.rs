@@ -123,7 +123,11 @@ pub struct InteractOutcome {
 /// Interact uses the nearer of BallHoldLocation and the player's body center.
 /// Being inside the body radius is therefore still a valid interaction; the
 /// ball is never physically pushed by that overlap.
-/// `carrier_stamina` is required for contested tackles (read before mut borrow).
+/// `carrier_stamina` and `carrier_pos` are required for contested tackles
+/// (read before mut borrow). The tackle distance check uses the carrier's
+/// center, not the ball position — confirmed by real-game TimePlot
+/// 2026-07-29: a tackler 1.31 m from the carrier but 2.98 m from the ball
+/// still steals, proving the check is center-to-center vs interact_radius.
 pub fn apply_interact(
     player: &mut Player,
     ball: &mut Ball,
@@ -135,6 +139,7 @@ pub fn apply_interact(
     _carrier_shot_charge: Option<f32>,
     // Retained for callers; the claim path no longer gates on it.
     _kickoff_elapsed_s: Option<f32>,
+    carrier_pos: Option<Vec2>,
 ) -> InteractOutcome {
     let hold = player.hold_pos_playable(params);
     // Per-player 64-bit Interact history: each tick shift left, LSB = current.
@@ -296,21 +301,18 @@ pub fn apply_interact(
                 // from BOTH, so two full-stamina teammates swapping the ball
                 // this way both end at zero.
                 //
-                // Body to ball, and nothing else. A tackle happens if you can
-                // reach the BALL, so the only distance that means anything is
-                // from the tackler's own position to it.
+                // Center-to-center: a tackle happens if the tackler's center
+                // is within interact_radius of the CARRIER's center, not the
+                // ball. The ball sits at a hold offset from the carrier, so
+                // checking distance to the ball would grant or deny reach
+                // based on facing direction — the real game does not.
                 //
-                // This used to be min(tackler_hold_to_ball, body_to_ball),
-                // where the hold point sits hold_offset (1.67 m) ahead of the
-                // tackler along their facing - handing them up to 3.42 m of
-                // reach instead of 1.75 m. That second origin does not exist in
-                // the real game. It arrived in ffa398a inside a large
-                // "Frida-measured Unity physics" commit with no note, no test,
-                // and nothing in the diff showing it was measured rather than
-                // assumed - and it is what made Titanium's anti-tackle wrong:
-                // measured against Poponeta over 180 s, 19 balls lost, ZERO
-                // unavoidable, ~90% on headings the model had judged safe.
-                let dist = (player.pos - ball.pos).length();
+                // Confirmed by real-game TimePlot 2026-07-29_01-51-57:
+                // P2 at 1.31 m from carrier P1 but 2.98 m from the ball
+                // still steals. If the check were ball-distance (2.98 > 1.75)
+                // it would not have triggered.
+                let carrier_center = carrier_pos.unwrap_or(ball.pos);
+                let dist = (player.pos - carrier_center).length();
                 if dist <= params.interact_radius {
                     let tackler_stam = player.stamina;
                     let carrier_stam = carrier_stamina.unwrap_or(0.0);
@@ -583,6 +585,7 @@ mod tests {
             Some(1.0),
             Some(0.0),
             None,
+            None,
         )
         .drain
         .expect("equal-stam tackle returns drain");
@@ -643,6 +646,7 @@ mod tests {
             Some(0.0),
             Some(0.0),
             None,
+            None,
         )
         .drain
         .expect("0/0 duel returns drain");
@@ -695,6 +699,7 @@ mod tests {
             0.019,
             Some(0.5),
             Some(0.0),
+            None,
             None,
         )
         .drain
@@ -754,6 +759,7 @@ mod tests {
             Some(0.8),
             Some(0.0),
             None,
+            None,
         )
         .drain
         .expect("lower-stam tackle returns drain");
@@ -806,7 +812,7 @@ mod tests {
             interact: true,
         };
         apply_interact(
-            &mut mate, &mut ball, &mut poss, cmd, &params, 0.019, None, None, None,
+            &mut mate, &mut ball, &mut poss, cmd, &params, 0.019, None, None, None, None,
         );
         assert_eq!(poss.carrier, Some((TeamId::Home, 2)));
         assert!(ball.held);
@@ -850,6 +856,7 @@ mod tests {
             },
             &params,
             0.019,
+            None,
             None,
             None,
             None,
@@ -904,6 +911,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         assert_eq!(poss.carrier, Some((TeamId::Home, 1)));
         assert!(ball.held);
@@ -944,6 +952,7 @@ mod tests {
             cmd,
             &params,
             0.019,
+            None,
             None,
             None,
             None,

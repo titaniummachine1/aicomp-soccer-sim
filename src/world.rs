@@ -369,6 +369,12 @@ impl MatchWorld {
                     .find(|p| p.team == t && p.id.0 == cid)
                     .map(|p| p.shot_charge)
             });
+            let carrier_pos = self.possession.carrier.and_then(|(t, cid)| {
+                self.players
+                    .iter()
+                    .find(|p| p.team == t && p.id.0 == cid)
+                    .map(|p| p.pos)
+            });
             let kickoff_elapsed = if self.match_state.phase == MatchPhase::Kickoff {
                 Some(self.match_state.phase_timer)
             } else {
@@ -384,6 +390,7 @@ impl MatchWorld {
                 carrier_stam,
                 carrier_charge,
                 kickoff_elapsed,
+                carrier_pos,
             );
             if outcome.shot {
                 self.match_state.record_shot(team);

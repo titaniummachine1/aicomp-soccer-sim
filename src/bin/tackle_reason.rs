@@ -68,11 +68,11 @@ fn heading_is_safe(
         if *stam < my_stam {
             return false;
         }
-        // Interact distance from the tackler's POSITION to the ball, matching
-        // apply_interact exactly. Reach is granted by interact radius alone;
-        // body radius is wall collision and grants nothing here.
+        // Interact distance from the tackler's POSITION to the CARRIER's
+        // center, matching apply_interact exactly. The ball sits at a hold
+        // offset from the carrier; the real game checks center-to-center.
         let _ = opp_facing;
-        (*opp_end - ball_end).length() <= params.interact_radius
+        (*opp_end - me_end).length() <= params.interact_radius
     })
 }
 

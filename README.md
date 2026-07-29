@@ -1,135 +1,103 @@
 # AIComp Soccer Sim
 
-**Reverse-engineered 2D close copy of AIComp Soccer** for offline AI work.
-Agents should **self-test here** (headless / unit tests) instead of asking a
-human to click around in Unity.
+A reverse-engineered 2D simulation of [AIComp Soccer](https://github.com/UnicornOne/AIComp) for offline AI development and testing. Built with [Bevy](https://bevyengine.org) in Rust.
 
-Measured quirks live in [`docs/AIA_UPSTREAM_QUIRKS.md`](docs/AIA_UPSTREAM_QUIRKS.md).
-Agent-oriented commands: [`AGENTS.md`](AGENTS.md).
-Reference dumps: [`data/reference/`](data/reference/).
+## Quick Start
 
-| Need                       | Command                                               |
-| -------------------------- | ----------------------------------------------------- |
-| **Viewer** (window)        | `cargo run --release`                                 |
-| **Headless match** (JSON)  | `cargo run --release --bin soccer_headless -- --help` |
-| **Unit / parity tests**    | `cargo test --lib`                                    |
-| **Scripted tackle assert** | `cargo run --release --bin debug_tackle_test -- 45`   |
+**Easiest way:** double-click `run_simulation.bat` in the repository root.
 
-**Compile / rebuild layers** (go one step deeper only if something is wrong):
-
-| Layer | When | Command |
-| ----- | ---- | ------- |
-| **1 Normal** | Everyday | `cargo run --release` — Bevy stays prepared |
-| **2 Static** | Shareable .exe | `cargo run-static` |
-| **3 Crate-only** | Stale/wrong binary | `scripts\rebuild_crate.bat` — cleans **this** crate only |
-| **4 DEEP** | Still broken | `scripts\rebuild_deep.bat` — wipes Bevy + all deps |
-
-Do **not** jump to layer 4 between small edits.
----
-
-## Quick start
+**From terminal:**
 
 ```bat
-rustup update
-cd aicomp-soccer-sim
 cargo run --release
-cargo run --release --bin soccer_headless -- --secs 20 --home chase --away idle
 ```
 
-Or double-click / run:
+This opens the Bevy viewer with a top-down pitch view. Press **Space** to pause, **R** to reload params.
 
-- [`scripts/run_viewer.bat`](scripts/run_viewer.bat)
-- [`scripts/run_viewer_static.bat`](scripts/run_viewer_static.bat) — layer 2 static
-- [`scripts/rebuild_crate.bat`](scripts/rebuild_crate.bat) — layer 3, Bevy kept
-- [`scripts/rebuild_deep.bat`](scripts/rebuild_deep.bat) — layer 4, wipe + Bevy
-- [`scripts/run_headless.bat`](scripts/run_headless.bat)
+## Features
 
----
+- **2D physics simulation** matching the real game's ball, player movement, and interaction rules
+- **Graph VM** that loads and executes the same AI graph format the game uses
+- **Headless mode** for batch testing — outputs JSON results per match
+- **TimePlot recording** for position/velocity/charge data collection
+- **Scripted test brains** for reproducible parity checks
 
-## Headless (fishtest-style)
+## Commands
 
-No window. Fixed dt `0.019`. One **JSON result on stdout** per run — aggregate
-these for strength tests / CI.
+| Task | Command |
+|------|---------|
+| Viewer (windowed) | `cargo run --release` or `run_simulation.bat` |
+| Headless match | `cargo run --release --bin soccer_headless -- --secs 30 --home chase --away chase` |
+| Unit tests | `cargo test --lib` |
+| Tackle test | `cargo run --release --bin debug_tackle_test -- 45` |
+
+### Available brains
+
+`chase` | `idle` | `test1` | `test2` | `perfect` | `aia` | `graph:<path>`
+
+### Headless example
 
 ```bat
-cargo run --release --bin soccer_headless -- --secs 30 --home chase --away chase
-cargo run --release --bin soccer_headless -- --secs 40 --home test1 --away test2
-cargo run --release --bin soccer_headless -- --home aia --away aia --until-goal --secs 90
-cargo run --release --bin soccer_headless -- --home graph:C:\path\Team.txt --away idle --json out.json
+cargo run --release --bin soccer_headless -- --secs 60 --home chase --away chase --seed 7 --until-goal
 ```
 
-**Brains:** `chase` | `idle` | `test1` | `test2` | `aia` | `graph:<path>`
-
-**Exit:** `0` ok · `1` bad args / load fail
-
-Stdout example:
+Output (one JSON object per match):
 
 ```json
 {
   "ok": true,
-  "fixed_dt": 0.019,
-  "secs_requested": 30.0,
-  "clock_s": 30.0,
-  "ticks": 1579,
-  "opening": "home",
-  "seed": null,
-  "home": "chase",
-  "away": "idle",
-  "score_home": 0,
-  "score_away": 0,
-  "phase": "Playing",
-  "until_goal": false,
-  "goal_stopped": false
+  "score_home": 2,
+  "score_away": 1,
+  "clock_s": 60.0,
+  "ticks": 3158
 }
 ```
 
-Parallelize **across matches** (many processes / jobs), not with 2 threads per match.
+## Project Structure
 
-### Lib loop (custom brains)
-
-```rust
-use aicomp_soccer_sim::{ChaseBallBrain, IdleBrain, MatchWorld, TeamId, FIXED_DT};
-
-let mut world = MatchWorld::new_kickoff_opening(params, TeamId::Home);
-let mut home = ChaseBallBrain;
-let mut away = IdleBrain;
-while world.match_state.clock_s < 30.0 {
-    world.step_brains(&mut home, &mut away, FIXED_DT);
-}
-// read world.match_state.score_home / score_away
+```
+src/
+  main.rs            Bevy viewer entry point
+  world.rs           Core simulation (fixed-dt tick, player/ball/interaction)
+  possession.rs      Tackle/pickup/charge logic
+  ball.rs            Ball physics (Coulomb friction, wall bounces, goals)
+  player.rs          Player movement, stamina, hold-point
+  params.rs          Sim constants (measured from real game)
+  brain.rs           Brain trait + command types
+  api/               SoccerGet* API layer (what graphs see)
+  graph/             Graph loader (JSON → node tree)
+  graph_vm/          Graph VM (interpreter, optimizer, runtime brain)
+  probe_brains.rs    Scripted test brains (Test1, Test2, PerfectController)
+  timeplot.rs        TimePlot recorder (JSON output)
+  bin/               Additional binaries (headless, tests, drills)
+scripts/             Helper scripts (build, deploy, analyze)
+docs/                Documentation and measured quirks
+data/reference/      API dumps and measured constants from the real game
 ```
 
----
+## Physics Model
 
-## Viewer
+| Parameter | Value | Source |
+|-----------|-------|--------|
+| Fixed dt | 0.019s (~52.6 Hz) | Measured |
+| Player walk speed | 7 m/s | Measured |
+| Player sprint speed | 8 m/s | Measured |
+| Interact/tackle radius | 1.75 m | Measured |
+| Body collision radius | 0.655 m | Measured |
+| Ball friction (Coulomb) | 5.95 m/s² | Measured |
+| Wall restitution | 0.2 | Measured |
+| Kick speed formula | (10 + 290c) / 9, capped at 30 | Measured |
+| Gravity (ball height) | 17.0 m/s² | Measured |
 
-```bat
-cargo run --release
-```
+All constants are measured from real-game TimePlot recordings. See `docs/AIA_UPSTREAM_QUIRKS.md` for details.
 
-- **Space** — pause / resume
-- **R** — reload params
-- Loads `AIA.txt` from AIComp Saves when present; otherwise chase fallback
+## Documentation
 
----
+- [`docs/SOCCER_GAME_MODEL.md`](docs/SOCCER_GAME_MODEL.md) — Game model reference
+- [`docs/AIA_UPSTREAM_QUIRKS.md`](docs/AIA_UPSTREAM_QUIRKS.md) — Measured quirks and parity checklist
+- [`docs/API_GAPS.md`](docs/API_GAPS.md) — Unimplemented or uncertain API getters
+- [`AGENTS.md`](AGENTS.md) — Guide for AI agents working on this codebase
 
-## Other bins
+## License
 
-| Bin                   | Purpose                                    |
-| --------------------- | ------------------------------------------ |
-| `soccer_sim`          | Bevy top-down viewer (default)             |
-| `soccer_headless`     | Batch matches → JSON                       |
-| `debug_tackle_test`   | Test1 vs Test2 steal; exit `2` if no steal |
-| `timeplot_until_goal` | AIA vs AIA TimePlot JSON under Saves       |
-
----
-
-## Model rules (cheap core)
-
-- **No navmesh** — pitch AABB clamp only
-- Ball: Coulomb **5.95**, wall **e≈0.2**, open mouths score
-- Players: walk **7** / sprint **8**; stamina does **not** throttle speed
-- Interact / tackle radius **1.75**; equal stam keeps carrier; higher stam steals (no mutual dump)
-- Fixed dt **0.019** (~52.6 Hz), independent of render FPS
-
-Params: `bevy_sim_params_v05.json` (next to exe or crate root).
+MIT

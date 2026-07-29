@@ -6,10 +6,10 @@ license = "MIT"
 description = "Fully 2D top-down close copy of AIComp Soccer for rapid offline testing"
 default-run = "soccer_sim"
 
-# Bins (easy entry points):
-#   soccer_sim          — Bevy viewer (window)
-#   soccer_headless     — batch / fishtest-style matches (JSON stdout, no window)
-#   debug_tackle_test   — scripted Test1/Test2 steal assert
+# Bins:
+#   soccer_sim          — Bevy viewer (default)
+#   soccer_headless     — batch matches (JSON stdout, no window)
+#   debug_tackle_test   — scripted steal assert
 #   timeplot_until_goal — AIA graph TimePlot capture
 
 [[bin]]
