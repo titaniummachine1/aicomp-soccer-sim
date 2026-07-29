@@ -243,6 +243,7 @@ pub fn place_kickoff(
         // fresh input context — a spent rising edge must not survive into the
         // next kickoff or tie-break shrink (3v3→2v2→1v1).
         p.interact_bits = 0;
+        p.grab_hold_active = false;
     }
 }
 

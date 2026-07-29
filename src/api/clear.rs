@@ -13,6 +13,10 @@ use bevy::prelude::*;
 pub const SPHERECAST_RADIUS: f32 = 0.25;
 /// AIA graph Spherecast max distance.
 pub const SPHERECAST_DISTANCE: f32 = 20.0;
+/// Effective hit radius = player_collider + spherecast_radius.
+/// Measured from real-game AIA_Debug sensor timeplot: every hit shows
+/// dist_to_hit = 0.769m consistently across all 8 directions (AIA_Debug DB35).
+pub const SPHERECAST_HIT_RADIUS: f32 = 0.769;
 
 /// HitInfo String tags observed in Unity (sensor Debug).
 pub mod hit_tags {

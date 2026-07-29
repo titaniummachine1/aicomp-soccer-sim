@@ -70,15 +70,12 @@ impl TeamBrain for GraphBrain {
             current_pass: None,
         };
 
-        // Multi-pass so SetVariables that depend on other GetVariables settle.
-        for pass in 0..8 {
-            ctx.current_pass = Some(pass);
-            for sid in &set_vars {
-                ctx.commit_set_variable(sid);
-            }
-            // Clear port cache between passes so GetVariable sees fresh vars.
-            ctx.cache.clear();
+        // Unity runs settle once per tick, not 8 times.
+        ctx.current_pass = Some(0);
+        for sid in &set_vars {
+            ctx.commit_set_variable(sid);
         }
+        ctx.cache.clear();
         // Controller eval may still hit SetVariable sinks; do not TRACE those.
         ctx.current_pass = None;
 

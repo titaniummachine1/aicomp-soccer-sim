@@ -543,8 +543,9 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
     vectors.insert("Lower Midfield", Some(Vec2::new(0.0, -params.z_max * 0.5)));
 
     // AIA Spherecast Floats: radius=0.25, distance=20 (graph + Debug rays).
-    // Geometric blocker disc ≈ cast_r + body (Unity hits player colliders).
-    let blocker_r = params.body_radius + crate::api::SPHERECAST_RADIUS;
+    // Effective hit radius measured from real-game sensor data: 0.769m
+    // consistently across all 8 directions (player collider + spherecast).
+    let blocker_r = crate::api::SPHERECAST_HIT_RADIUS;
     let range = crate::api::SPHERECAST_DISTANCE;
     let all_others = |except: Option<(TeamId, u8)>| -> Vec<Vec2> {
         world
@@ -590,7 +591,7 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
             // midfield E often misses opponents by <1m with slim r → OppGoal
             // Present → Ready at charge≈0.5 → early dump. Real OppGoal null
             // ~90% until near box (AIA: null if no clear sensor dir of goal).
-            let goal_blocker_r = params.interact_radius;
+            let goal_blocker_r = crate::api::SPHERECAST_HIT_RADIUS;
             vectors.insert(
                 from_opp_goal,
                 clear_dir_into_goal_mouth(
@@ -779,7 +780,7 @@ pub fn build_team_api(team: TeamId, world: &WorldSensors<'_>) -> TeamApi {
         // Opponents only here; clear_dir_toward_teammate also treats *other*
         // mates as blockers (not the target mate).
         let opp_blockers: Vec<Vec2> = opp_players.iter().map(|p| p.pos).collect();
-        let mate_blocker_r = params.body_radius * 2.8;
+        let mate_blocker_r = crate::api::SPHERECAST_HIT_RADIUS;
         vectors.insert(
             t_label,
             from_t.and_then(|o| {

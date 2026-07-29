@@ -32,6 +32,10 @@ pub struct Player {
     /// Rising edge (claim/tackle): LSB set, bit1 clear. Shot charge uses the
     /// consecutive held run in the low bits; release (falling edge) kicks.
     pub interact_bits: u64,
+    /// After pickup/tackle, the carrier must RELEASE Interact before charging
+    /// or kicking. While true, holding Interact does NOT charge and releasing
+    /// does NOT kick — the ball stays held. Cleared on the first release.
+    pub grab_hold_active: bool,
 }
 
 impl Player {
@@ -295,9 +299,8 @@ pub fn kickoff_spawn(
 /// Home's (30,0) and Away's (-25,0) both spawn at (0,0) — and Z is left
 /// alone. No body-radius standoff, and no rejection back to a default.
 fn clamp_to_own_half(team: TeamId, pos: Vec2, params: &SimParams) -> Vec2 {
-    let r = params.body_radius;
-    let x_limit = (params.x_max - r).max(0.0);
-    let z_limit = (params.z_max - r).max(0.0);
+    let x_limit = params.x_max.max(0.0);
+    let z_limit = params.z_max.max(0.0);
     let x = match team {
         TeamId::Home => pos.x.clamp(-x_limit, 0.0),
         TeamId::Away => pos.x.clamp(0.0, x_limit),
@@ -319,11 +322,17 @@ fn clamp_to_own_half(team: TeamId, pos: Vec2, params: &SimParams) -> Vec2 {
 /// pushed radially (assumed here) or also snapped to +Z is NOT measured.
 fn push_out_of_kickoff_circle(pos: Vec2, _team: TeamId, params: &SimParams) -> Vec2 {
     let edge = params.kickoff_circle_r + KICKOFF_PUSH_CLEARANCE;
+    // Nudge exact-center +Z by 1 unit first so there's a direction to push along.
+    let pos = if pos.length() <= 1e-4 {
+        Vec2::new(0.0, 1.0)
+    } else {
+        pos
+    };
     let d = pos.length();
     if d >= edge {
         return pos;
     }
-    let dir = if d > 1e-4 { pos / d } else { Vec2::Y };
+    let dir = pos / d;
     dir * edge
 }
 
@@ -358,6 +367,7 @@ mod tests {
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
             interact_bits: 0,
+            grab_hold_active: false,
         }
     }
 
@@ -421,6 +431,7 @@ mod tests {
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
             interact_bits: 0,
+            grab_hold_active: false,
         };
         let desired = player.hold_pos(params.hold_offset);
         let actual = player.hold_pos_playable(&params);
@@ -635,7 +646,6 @@ mod tests {
     #[test]
     fn a_spot_outside_the_pitch_is_pulled_inside() {
         let params = SimParams::default();
-        let r = params.body_radius;
         let p = kickoff_spawn(
             TeamId::Home,
             PlayerId(1),
@@ -643,7 +653,7 @@ mod tests {
             Some(Vec2::new(-999.0, 999.0)),
             &params,
         );
-        assert!(p.x >= -(params.x_max - r) - 1e-4, "off the back line: {p}");
-        assert!(p.y <= params.z_max - r + 1e-4, "off the touchline: {p}");
+        assert!(p.x >= -params.x_max - 1e-4, "off the back line: {p}");
+        assert!(p.y <= params.z_max + 1e-4, "off the touchline: {p}");
     }
 }

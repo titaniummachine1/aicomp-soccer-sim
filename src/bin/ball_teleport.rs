@@ -56,6 +56,7 @@ fn main() {
         p.shot_charge = 0.0;
         p.charge_warmup_left = 0.0;
         p.interact_bits = 0;
+        p.grab_hold_active = false;
         p.pos = if p.team == TeamId::Away {
             Vec2::new(0.0, 60.0)
         } else {

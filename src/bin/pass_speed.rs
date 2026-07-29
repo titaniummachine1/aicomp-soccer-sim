@@ -53,6 +53,7 @@ fn trace(params: &SimParams, press: u32, fresh: bool, swap: bool) {
         p.shot_charge = 0.0;
         p.charge_warmup_left = 0.0;
         p.interact_bits = 0;
+        p.grab_hold_active = false;
     }
 
     // Passer on the centre spot, facing +X — straight at the receiver.

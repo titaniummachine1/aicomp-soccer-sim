@@ -42,6 +42,11 @@ pub struct Possession {
     /// Ball-side flag: only the opening dump allows the fat opponent hot-reclaim
     /// window. Mid-game kicks keep the ball lockout (no same-tick snatch).
     pub opening_hot_reclaim: bool,
+    /// Global tackle cooldown: sim time of the last tackle. No tackle may fire
+    /// within 0.125 s of the previous one.
+    pub last_tackle_time: f32,
+    /// Global tackle cooldown in seconds.
+    pub tackle_cooldown_s: f32,
 }
 
 impl Default for Possession {
@@ -55,6 +60,8 @@ impl Default for Possession {
             kickoff_touch_done: false,
             opening_dump_hang: false,
             opening_hot_reclaim: false,
+            last_tackle_time: -1.0,
+            tackle_cooldown_s: 0.125,
         }
     }
 }
@@ -140,6 +147,7 @@ pub fn apply_interact(
     // Retained for callers; the claim path no longer gates on it.
     _kickoff_elapsed_s: Option<f32>,
     carrier_pos: Option<Vec2>,
+    clock_s: f32,
 ) -> InteractOutcome {
     let hold = player.hold_pos_playable(params);
     // Per-player 64-bit Interact history: each tick shift left, LSB = current.
@@ -168,6 +176,16 @@ pub fn apply_interact(
             player.charge_warmup_left = (player.charge_warmup_left - dt).max(0.0);
         }
 
+        // Grab-hold gate: after pickup/tackle, the carrier must RELEASE Interact
+        // before charging or kicking. While active, holding does NOT charge and
+        // releasing does NOT kick — the ball stays held. Cleared on first release.
+        if player.grab_hold_active {
+            if !cmd.interact {
+                player.grab_hold_active = false;
+            }
+            return InteractOutcome::default();
+        }
+
         if cmd.interact {
             // Hold-to-charge: accumulate after post-pickup warmup. The bit
             // buffer's consecutive-held run is the same clock (one bit per
@@ -181,8 +199,10 @@ pub fn apply_interact(
             return InteractOutcome::default();
         }
 
-        // Release = kick on the falling edge.
-        if released {
+        // Release = kick on the falling edge, but only if charge > 0.
+        // The real game does not fire a shot with zero charge — releasing
+        // interact with no accumulated charge just resets the state.
+        if released && player.shot_charge > 0.0 {
             let dir = if player.facing.length_squared() > 1e-6 {
                 player.facing.normalize()
             } else {
@@ -222,30 +242,25 @@ pub fn apply_interact(
                 shot: true,
             };
         }
+        // Only clear charge + warmup when charge was actually building.
+        // When charge == 0 (still in warmup or clearing grab_hold), keep
+        // warmup so a brief release doesn't reset the warmup countdown.
         if player.shot_charge > 0.0 {
             trace(format!(
                 "CHARGE_CLEAR_NO_KICK {:?} P{} charge was {:.2} (Interact false, no falling edge)",
                 player.team, player.id.0, player.shot_charge
             ));
+            player.shot_charge = 0.0;
+            player.charge_warmup_left = 0.0;
         }
-        player.shot_charge = 0.0;
-        player.charge_warmup_left = 0.0;
         return InteractOutcome::default();
     }
 
-    // Non-carrier interaction:
-    // When the ball is FREE (!ball.held), picking it up works continuously while `cmd.interact` is true
-    // (e.g. alternating toggle or held button).
-    // When the ball is HELD (tackle/steal), it requires a rising edge (`impulse`) so a tackler
-    // cannot continuously drain/steal every tick without releasing Interact first.
-    if ball.held {
-        if !impulse {
-            return InteractOutcome::default();
-        }
-    } else {
-        if !cmd.interact {
-            return InteractOutcome::default();
-        }
+    // Non-carrier interaction: pickup and tackle both require an Interact rising edge.
+    // Holding Interact continuously and walking into a loose ball does nothing; you
+    // must press Interact (fresh rising edge) to claim it, matching the real game.
+    if !impulse {
+        return InteractOutcome::default();
     }
 
     let since_kick = if poss.kick_exclude_left > 0.0 {
@@ -314,6 +329,12 @@ pub fn apply_interact(
                 let carrier_center = carrier_pos.unwrap_or(ball.pos);
                 let dist = (player.pos - carrier_center).length();
                 if dist <= params.interact_radius {
+                    // Global tackle cooldown: only one tackle per 0.125s.
+                    let since_tackle = clock_s - poss.last_tackle_time;
+                    if since_tackle < poss.tackle_cooldown_s {
+                        return InteractOutcome::default();
+                    }
+                    poss.last_tackle_time = clock_s;
                     let tackler_stam = player.stamina;
                     let carrier_stam = carrier_stamina.unwrap_or(0.0);
                     let eps = 1e-4;
@@ -336,6 +357,7 @@ pub fn apply_interact(
                         ball.pos = hold;
                         player.shot_charge = 0.0;
                         player.charge_warmup_left = params.shot_charge_warmup_s;
+                        player.grab_hold_active = true;
                         trace(format!(
                             "STEAL {:?} P{} from {:?} P{} drain={drain:.2} tackler={tackler_stam:.2} carrier={carrier_stam:.2}",
                             player.team, player.id.0, ct, cid,
@@ -417,6 +439,7 @@ pub fn apply_interact(
             ball.pos = hold;
             player.shot_charge = 0.0;
             player.charge_warmup_left = params.shot_charge_warmup_s;
+            player.grab_hold_active = true;
             // NO lockout on an uncontested pickup. `pickup_delay_after_exchange_s`
             // is, by its own definition, `Ball.pickupDelayAfterExchange` — wired
             // on a successful tackle EXCHANGE, which this is not. It was applied
@@ -494,6 +517,7 @@ mod tests {
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
             interact_bits: 0,
+            grab_hold_active: false,
         };
         let mut ball = Ball {
             pos: carrier.hold_pos(params.hold_offset),
@@ -569,6 +593,7 @@ mod tests {
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
             interact_bits: 0,
+            grab_hold_active: false,
         };
         let cmd = BrainCommand {
             move_to: attacker.pos,
@@ -586,6 +611,7 @@ mod tests {
             Some(0.0),
             None,
             None,
+            1.0,
         )
         .drain
         .expect("equal-stam tackle returns drain");
@@ -630,6 +656,7 @@ mod tests {
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
             interact_bits: 0,
+            grab_hold_active: false,
         };
         let cmd = BrainCommand {
             move_to: attacker.pos,
@@ -647,6 +674,7 @@ mod tests {
             Some(0.0),
             None,
             None,
+            1.0,
         )
         .drain
         .expect("0/0 duel returns drain");
@@ -684,6 +712,7 @@ mod tests {
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
             interact_bits: 0,
+            grab_hold_active: false,
         };
         let cmd = BrainCommand {
             move_to: attacker.pos,
@@ -701,6 +730,7 @@ mod tests {
             Some(0.0),
             None,
             None,
+            1.0,
         )
         .drain
         .expect("higher-stam tackle returns drain");
@@ -743,6 +773,7 @@ mod tests {
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
             interact_bits: 0,
+            grab_hold_active: false,
         };
         let cmd = BrainCommand {
             move_to: attacker.pos,
@@ -760,6 +791,7 @@ mod tests {
             Some(0.0),
             None,
             None,
+            1.0,
         )
         .drain
         .expect("lower-stam tackle returns drain");
@@ -805,6 +837,7 @@ mod tests {
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
             interact_bits: 0,
+            grab_hold_active: false,
         };
         let cmd = BrainCommand {
             move_to: mate.pos,
@@ -812,7 +845,7 @@ mod tests {
             interact: true,
         };
         apply_interact(
-            &mut mate, &mut ball, &mut poss, cmd, &params, 0.019, None, None, None, None,
+            &mut mate, &mut ball, &mut poss, cmd, &params, 0.019, None, None, None, None, 1.0,
         );
         assert_eq!(poss.carrier, Some((TeamId::Home, 2)));
         assert!(ball.held);
@@ -842,6 +875,7 @@ mod tests {
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
             interact_bits: 0,
+            grab_hold_active: false,
         };
         let move_to = player.pos;
 
@@ -860,6 +894,7 @@ mod tests {
             None,
             None,
             None,
+            1.0,
         );
 
         assert_eq!(poss.carrier, Some((TeamId::Home, 4)));
@@ -895,6 +930,7 @@ mod tests {
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
             interact_bits: 0,
+            grab_hold_active: false,
         };
         let cmd = BrainCommand {
             move_to: Vec2::X,
@@ -912,6 +948,7 @@ mod tests {
             None,
             None,
             None,
+            1.0,
         );
         assert_eq!(poss.carrier, Some((TeamId::Home, 1)));
         assert!(ball.held);
@@ -939,6 +976,7 @@ mod tests {
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
             interact_bits: 0b1010101010, // Alternating interact bits (was held last tick)
+            grab_hold_active: false,
         };
         let cmd = BrainCommand {
             move_to: Vec2::ZERO,
@@ -956,6 +994,7 @@ mod tests {
             None,
             None,
             None,
+            1.0,
         );
         assert_eq!(poss.carrier, Some((TeamId::Home, 1)));
         assert!(ball.held);

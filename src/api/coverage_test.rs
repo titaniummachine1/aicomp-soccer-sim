@@ -28,6 +28,7 @@ mod tests {
                     shot_charge: 0.0,
                     charge_warmup_left: 0.0,
                     interact_bits: 0,
+                    grab_hold_active: false,
                 });
             }
         }

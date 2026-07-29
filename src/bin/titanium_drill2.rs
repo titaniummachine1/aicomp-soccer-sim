@@ -231,7 +231,7 @@ fn run_trial(
         receiver_pos,
         receiver_run_target,
         receiver_run_speed: 8.0,
-        pass_speed: world.params.kick_horiz_cap,
+        pass_speed: 25.0,
         goal_half_width: world.params.goal_half_width,
     });
     let mut def_brain: Box<dyn TeamBrain> = build_gk_brain(gk_graph)?;

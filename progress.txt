@@ -1,0 +1,162 @@
+﻿HOME vs chase: cargo : warning: unused import: `Vec2`
+At line:1 char:213
++ ... nts) { $h = cargo run --release --bin soccer_headless -- --home graph ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warning: unused import: `Vec2`:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ --> src\graph_vm\interpreter.rs:3:21
+  |
+3 | use bevy::prelude::{Vec2, Vec3};
+  |                     ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `aicomp-soccer-sim` (lib) generated 1 warning (run `cargo fix --lib -p aicomp-soccer-sim` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 0.90s
+     Running `target\release\soccer_headless.exe --home graph:data/titanium/Titanium.txt --away chase --secs 120 --batch 2 --jobs 2 --quiet`
+{"mercy_stopped":false,"ok":true,"fixed_dt":0.019,"secs_requested":120.0,"clock_s":120.004,"ticks":6316,"opening":"home","seed":0,"home":"graph:data/titanium/Titanium.txt","away":"chase","score_home":8,"score_away":1,"possession_s_home":58.824703,"possession_s_away":9.804024,"phase":"Play","until_goal":false,"goal_stopped":false,"job_index":0,"wall_ms":1754}
+{"mercy_stopped":false,"ok":true,"fixed_dt":0.019,"secs_requested":120.0,"clock_s":120.004,"ticks":6316,"opening":"away","seed":1,"home":"graph:data/titanium/Titanium.txt","away":"chase","score_home":9,"score_away":1,"possession_s_home":57.83665,"possession_s_away":8.987021,"phase":"GoalPause","until_goal":false,"goal_stopped":false,"job_index":1,"wall_ms":1737}
+
+AWAY vs chase: cargo : warning: unused import: `Vec2`
+At line:1 char:372
++ ... tring; $a = cargo run --release --bin soccer_headless -- --home $opp  ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warning: unused import: `Vec2`:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ --> src\graph_vm\interpreter.rs:3:21
+  |
+3 | use bevy::prelude::{Vec2, Vec3};
+  |                     ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `aicomp-soccer-sim` (lib) generated 1 warning (run `cargo fix --lib -p aicomp-soccer-sim` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 0.99s
+     Running `target\release\soccer_headless.exe --home chase --away graph:data/titanium/Titanium.txt --secs 120 --batch 2 --jobs 2 --quiet`
+{"mercy_stopped":false,"ok":true,"fixed_dt":0.019,"secs_requested":120.0,"clock_s":120.004,"ticks":6316,"opening":"home","seed":0,"home":"chase","away":"graph:data/titanium/Titanium.txt","score_home":1,"score_away":6,"possession_s_home":25.611586,"possession_s_away":54.62548,"phase":"Play","until_goal":false,"goal_stopped":false,"job_index":0,"wall_ms":1657}
+{"mercy_stopped":false,"ok":true,"fixed_dt":0.019,"secs_requested":120.0,"clock_s":120.004,"ticks":6316,"opening":"away","seed":1,"home":"chase","away":"graph:data/titanium/Titanium.txt","score_home":1,"score_away":6,"possession_s_home":23.61668,"possession_s_away":53.409416,"phase":"Play","until_goal":false,"goal_stopped":false,"job_index":1,"wall_ms":1647}
+
+HOME vs graph:data/titanium/Haialand-v2.txt: cargo : warning: unused import: `Vec2`
+At line:1 char:213
++ ... nts) { $h = cargo run --release --bin soccer_headless -- --home graph ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warning: unused import: `Vec2`:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ --> src\graph_vm\interpreter.rs:3:21
+  |
+3 | use bevy::prelude::{Vec2, Vec3};
+  |                     ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `aicomp-soccer-sim` (lib) generated 1 warning (run `cargo fix --lib -p aicomp-soccer-sim` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 0.82s
+     Running `target\release\soccer_headless.exe --home graph:data/titanium/Titanium.txt --away graph:data/titanium/Haialand-v2.txt --secs 120 --batch 2 --jobs 2 --quiet`
+{"mercy_stopped":true,"ok":true,"fixed_dt":0.019,"secs_requested":120.0,"clock_s":86.811,"ticks":4569,"opening":"home","seed":0,"home":"graph:data/titanium/Titanium.txt","away":"graph:data/titanium/Haialand-v2.txt","score_home":7,"score_away":0,"possession_s_home":53.143402,"possession_s_away":3.914008,"phase":"GoalPause","until_goal":false,"goal_stopped":true,"job_index":0,"wall_ms":1883}
+{"mercy_stopped":true,"ok":true,"fixed_dt":0.019,"secs_requested":120.0,"clock_s":87.989,"ticks":4631,"opening":"away","seed":1,"home":"graph:data/titanium/Titanium.txt","away":"graph:data/titanium/Haialand-v2.txt","score_home":7,"score_away":0,"possession_s_home":53.428417,"possession_s_away":4.8830104,"phase":"GoalPause","until_goal":false,"goal_stopped":true,"job_index":1,"wall_ms":1867}
+
+AWAY vs graph:data/titanium/Haialand-v2.txt: cargo : warning: unused import: `Vec2`
+At line:1 char:372
++ ... tring; $a = cargo run --release --bin soccer_headless -- --home $opp  ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warning: unused import: `Vec2`:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ --> src\graph_vm\interpreter.rs:3:21
+  |
+3 | use bevy::prelude::{Vec2, Vec3};
+  |                     ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `aicomp-soccer-sim` (lib) generated 1 warning (run `cargo fix --lib -p aicomp-soccer-sim` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 0.86s
+     Running `target\release\soccer_headless.exe --home graph:data/titanium/Haialand-v2.txt --away graph:data/titanium/Titanium.txt --secs 120 --batch 2 --jobs 2 --quiet`
+{"mercy_stopped":false,"ok":true,"fixed_dt":0.019,"secs_requested":120.0,"clock_s":120.004,"ticks":6316,"opening":"home","seed":0,"home":"graph:data/titanium/Haialand-v2.txt","away":"graph:data/titanium/Titanium.txt","score_home":2,"score_away":4,"possession_s_home":33.914383,"possession_s_away":53.143402,"phase":"Play","until_goal":false,"goal_stopped":false,"job_index":0,"wall_ms":2516}
+{"mercy_stopped":true,"ok":true,"fixed_dt":0.019,"secs_requested":120.0,"clock_s":112.214,"ticks":5906,"opening":"away","seed":1,"home":"graph:data/titanium/Haialand-v2.txt","away":"graph:data/titanium/Titanium.txt","score_home":0,"score_away":7,"possession_s_home":17.612965,"possession_s_away":57.45663,"phase":"GoalPause","until_goal":false,"goal_stopped":true,"job_index":1,"wall_ms":2328}
+
+HOME vs aia3: cargo : warning: unused import: `Vec2`
+At line:1 char:213
++ ... nts) { $h = cargo run --release --bin soccer_headless -- --home graph ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warning: unused import: `Vec2`:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ --> src\graph_vm\interpreter.rs:3:21
+  |
+3 | use bevy::prelude::{Vec2, Vec3};
+  |                     ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `aicomp-soccer-sim` (lib) generated 1 warning (run `cargo fix --lib -p aicomp-soccer-sim` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 0.90s
+     Running `target\release\soccer_headless.exe --home graph:data/titanium/Titanium.txt --away aia3 --secs 120 --batch 2 --jobs 2 --quiet`
+{"mercy_stopped":false,"ok":true,"fixed_dt":0.019,"secs_requested":120.0,"clock_s":120.004,"ticks":6316,"opening":"home","seed":0,"home":"graph:data/titanium/Titanium.txt","away":"aia3","score_home":6,"score_away":0,"possession_s_home":55.233513,"possession_s_away":29.373407,"phase":"Play","until_goal":false,"goal_stopped":false,"job_index":0,"wall_ms":1715}
+{"mercy_stopped":false,"ok":true,"fixed_dt":0.019,"secs_requested":120.0,"clock_s":120.004,"ticks":6316,"opening":"away","seed":1,"home":"graph:data/titanium/Titanium.txt","away":"aia3","score_home":3,"score_away":3,"possession_s_home":40.982758,"possession_s_away":42.825855,"phase":"GoalPause","until_goal":false,"goal_stopped":false,"job_index":1,"wall_ms":1715}
+
+AWAY vs aia3: cargo : warning: unused import: `Vec2`
+At line:1 char:372
++ ... tring; $a = cargo run --release --bin soccer_headless -- --home $opp  ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warning: unused import: `Vec2`:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ --> src\graph_vm\interpreter.rs:3:21
+  |
+3 | use bevy::prelude::{Vec2, Vec3};
+  |                     ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `aicomp-soccer-sim` (lib) generated 1 warning (run `cargo fix --lib -p aicomp-soccer-sim` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 1.00s
+     Running `target\release\soccer_headless.exe --home aia3 --away graph:data/titanium/Titanium.txt --secs 120 --batch 2 --jobs 2 --quiet`
+{"mercy_stopped":false,"ok":true,"fixed_dt":0.019,"secs_requested":120.0,"clock_s":120.004,"ticks":6316,"opening":"home","seed":0,"home":"aia3","away":"graph:data/titanium/Titanium.txt","score_home":5,"score_away":3,"possession_s_home":43.31988,"possession_s_away":29.829386,"phase":"Play","until_goal":false,"goal_stopped":false,"job_index":0,"wall_ms":1640}
+{"mercy_stopped":false,"ok":true,"fixed_dt":0.019,"secs_requested":120.0,"clock_s":120.004,"ticks":6316,"opening":"away","seed":1,"home":"aia3","away":"graph:data/titanium/Titanium.txt","score_home":4,"score_away":4,"possession_s_home":36.422516,"possession_s_away":38.18961,"phase":"GoalPause","until_goal":false,"goal_stopped":false,"job_index":1,"wall_ms":1628}
+
+HOME vs graph:C:\Users\Terminatort8000\AppData\LocalLow\Unicorn One\AIComp\Saves\Soccer\Poponeta.txt: cargo : warning: unused import: `Vec2`
+At line:1 char:213
++ ... nts) { $h = cargo run --release --bin soccer_headless -- --home graph ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warning: unused import: `Vec2`:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ --> src\graph_vm\interpreter.rs:3:21
+  |
+3 | use bevy::prelude::{Vec2, Vec3};
+  |                     ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `aicomp-soccer-sim` (lib) generated 1 warning (run `cargo fix --lib -p aicomp-soccer-sim` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 0.83s
+     Running `target\release\soccer_headless.exe --home graph:data/titanium/Titanium.txt --away "graph:C:\Users\Terminatort8000\AppData\LocalLow\Unicorn One\AIComp\Saves\Soccer\Poponeta.txt" --s
+ecs 120 --batch 2 --jobs 2 --quiet`
+{"mercy_stopped":false,"ok":true,"fixed_dt":0.019,"secs_requested":120.0,"clock_s":120.004,"ticks":6316,"opening":"home","seed":0,"home":"graph:data/titanium/Titanium.txt","away":"graph:C:\\Users\\Terminatort8000\\AppData\\LocalLow\\Unicorn One\\AIComp\\Saves\\Soccer\\Poponeta.txt","score_home":6,"score_away":2,"possession_s_home":16.985994,"possession_s_away":36.28951,"phase":"Play","until_goal":false,"goal_stopped":false,"job_index":0,"wall_ms":1966}
+{"mercy_stopped":false,"ok":true,"fixed_dt":0.019,"secs_requested":120.0,"clock_s":120.004,"ticks":6316,"opening":"away","seed":1,"home":"graph:data/titanium/Titanium.txt","away":"graph:C:\\Users\\Terminatort8000\\AppData\\LocalLow\\Unicorn One\\AIComp\\Saves\\Soccer\\Poponeta.txt","score_home":5,"score_away":3,"possession_s_home":30.741343,"possession_s_away":26.675535,"phase":"GoalPause","until_goal":false,"goal_stopped":false,"job_index":1,"wall_ms":1991}
+
+AWAY vs graph:C:\Users\Terminatort8000\AppData\LocalLow\Unicorn One\AIComp\Saves\Soccer\Poponeta.txt: cargo : warning: unused import: `Vec2`
+At line:1 char:372
++ ... tring; $a = cargo run --release --bin soccer_headless -- --home $opp  ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warning: unused import: `Vec2`:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ --> src\graph_vm\interpreter.rs:3:21
+  |
+3 | use bevy::prelude::{Vec2, Vec3};
+  |                     ^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `aicomp-soccer-sim` (lib) generated 1 warning (run `cargo fix --lib -p aicomp-soccer-sim` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 0.80s
+     Running `target\release\soccer_headless.exe --home "graph:C:\Users\Terminatort8000\AppData\LocalLow\Unicorn One\AIComp\Saves\Soccer\Poponeta.txt" --away graph:data/titanium/Titanium.txt --s
+ecs 120 --batch 2 --jobs 2 --quiet`
+{"mercy_stopped":false,"ok":true,"fixed_dt":0.019,"secs_requested":120.0,"clock_s":120.004,"ticks":6316,"opening":"home","seed":0,"home":"graph:C:\\Users\\Terminatort8000\\AppData\\LocalLow\\Unicorn One\\AIComp\\Saves\\Soccer\\Poponeta.txt","away":"graph:data/titanium/Titanium.txt","score_home":5,"score_away":3,"possession_s_home":26.884525,"possession_s_away":28.04347,"phase":"Play","until_goal":false,"goal_stopped":false,"job_index":0,"wall_ms":1805}
+{"mercy_stopped":false,"ok":true,"fixed_dt":0.019,"secs_requested":120.0,"clock_s":120.004,"ticks":6316,"opening":"away","seed":1,"home":"graph:C:\\Users\\Terminatort8000\\AppData\\LocalLow\\Unicorn One\\AIComp\\Saves\\Soccer\\Poponeta.txt","away":"graph:data/titanium/Titanium.txt","score_home":5,"score_away":6,"possession_s_home":25.174606,"possession_s_away":30.57035,"phase":"GoalPause","until_goal":false,"goal_stopped":false,"job_index":1,"wall_ms":1796}
+

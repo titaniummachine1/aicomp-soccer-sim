@@ -306,9 +306,9 @@ mod tests {
         assert!((h05 - 2.722222).abs() < 1e-3, "h05={h05}");
         assert!((h50 - 17.222222).abs() < 1e-3, "h50={h50}");
         assert!((h85 - 28.5).abs() < 1e-3, "h85={h85}");
-        assert!(h95 <= 29.42 + 0.05, "h95={h95}");
         let spd = (h95 * h95 + l95 * l95).sqrt();
         assert!(spd <= p.kick_max_speed + 1e-3, "spd={spd}");
+        assert!(h95 <= 30.0 + 0.05, "h95={h95}");
     }
 
     #[test]
@@ -413,6 +413,7 @@ mod tests {
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
             interact_bits: 0,
+            grab_hold_active: false,
         };
         resolve_player_bodies(&mut ball, &[pusher], &params);
         assert_eq!(ball.pos, start);

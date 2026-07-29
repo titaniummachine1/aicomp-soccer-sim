@@ -75,6 +75,7 @@ impl MatchWorld {
                     shot_charge: 0.0,
                     charge_warmup_left: 0.0,
                     interact_bits: 0,
+                    grab_hold_active: false,
                 });
             }
         }
@@ -219,7 +220,7 @@ impl MatchWorld {
 
         tick_possession_timers(&mut self.possession, dt);
 
-        // ---------------------------------------------------------------
+        // -----------------------------------------------------------
         // PHASE 1 — DIRECTION, then MOVEMENT, for EVERY player.
         //
         // Interaction cannot start until this loop finishes. A tackle resolved
@@ -227,7 +228,7 @@ impl MatchWorld {
         // never existed, and it is exactly the state an anti-tackle solver
         // cannot predict: the carrier would have to know its own index in the
         // player array to know whose positions were already updated.
-        // ---------------------------------------------------------------
+        // -----------------------------------------------------------
         let mut cmds: Vec<BrainCommand> = Vec::with_capacity(self.players.len());
         for i in 0..self.players.len() {
             let (team, id) = (self.players[i].team, self.players[i].id);
@@ -391,6 +392,7 @@ impl MatchWorld {
                 carrier_charge,
                 kickoff_elapsed,
                 carrier_pos,
+                self.match_state.clock_s,
             );
             if outcome.shot {
                 self.match_state.record_shot(team);
@@ -627,7 +629,6 @@ pub fn clamp_player_to_pitch(player: &mut Player, params: &SimParams) {
     player.pos.y = player.pos.y.clamp(params.z_min, params.z_max);
 
     let in_mouth = player.pos.y.abs() <= params.goal_half_width;
-    // Past the goal line into the net (posts sit ~0.7m past the line).
     let net_back = params.goal_line_x.abs() + 3.0;
     if in_mouth {
         player.pos.x = player.pos.x.clamp(-net_back, net_back);
@@ -674,18 +675,20 @@ fn clamp_receiving_team_outside_kickoff_circle(
         return;
     }
     let min_r = params.kickoff_circle_r;
-    let d = player.pos.length();
-    if d < min_r && d > 1e-4 {
-        let n = player.pos / d;
+    // Nudge exact-center +Z by 1 unit first so there's a direction to push along.
+    let pos = if player.pos.length() <= 1e-4 {
+        Vec2::new(0.0, 1.0)
+    } else {
+        player.pos
+    };
+    let d = pos.length();
+    if d < min_r {
+        let n = pos / d;
         player.pos = n * min_r;
         let inward = player.vel.dot(n);
         if inward < 0.0 {
             player.vel -= n * inward;
         }
-    } else if d <= 1e-4 {
-        // Degenerate: push to +Z edge.
-        player.pos = Vec2::new(0.0, min_r);
-        player.vel = Vec2::ZERO;
     }
 }
 
@@ -1330,6 +1333,7 @@ mod tests {
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
             interact_bits: 0,
+            grab_hold_active: false,
         };
         clamp_player_to_pitch(&mut p, &params);
         assert!(p.pos.x <= params.x_max + 1e-4);
@@ -1352,6 +1356,7 @@ mod tests {
             shot_charge: 0.0,
             charge_warmup_left: 0.0,
             interact_bits: 0,
+            grab_hold_active: false,
         };
         clamp_player_to_pitch(&mut p, &params);
         assert!(

@@ -20,7 +20,8 @@ mod coverage_test;
 
 pub use clear::{
     first_clear_dir, hit_tags, CLEAR_ORDER_AWAY,
-    CLEAR_ORDER_HOME, SensorDir, SPHERECAST_DISTANCE, SPHERECAST_RADIUS,
+    CLEAR_ORDER_HOME, SensorDir, SPHERECAST_DISTANCE, SPHERECAST_HIT_RADIUS,
+    SPHERECAST_RADIUS,
 };
 pub use dense::{
     bool_index, float_index, transform_index, vector_index, DenseTeamApi, UNKNOWN_ID,

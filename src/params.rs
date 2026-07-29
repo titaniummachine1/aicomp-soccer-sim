@@ -32,9 +32,11 @@ pub struct SimParams {
     pub player_accel: f32,
     /// Brake-to-rest magnitude (TimePlot median 200 — exactly 2× accel).
     pub player_decel: f32,
-    /// Soft cap on launch |v| (TimePlot ~29.94; ball maxSpeed ~30).
+    /// Soft cap on launch |v| (user-confirmed exactly 30.0).
     pub kick_max_speed: f32,
-    /// Planar launch: `min(base + per_charge * c, kick_horiz_cap)` (TimePlot sweep).
+    /// Planar launch: `min(base + per_charge * c, kick_horiz_cap)` — cap set to
+    /// max formula output (300/9) so it never clamps; only the total |v| cap
+    /// at `kick_max_speed` applies, matching the real game.
     pub kick_speed_base: f32,
     pub kick_speed_per_charge: f32,
     pub kick_horiz_cap: f32,
@@ -135,11 +137,11 @@ impl SimParams {
             player_accel: 100.0,
             // TimePlot 2026-07-25: decel-to-rest median 200.000 (n=279).
             player_decel: 200.0,
-            kick_max_speed: 29.94,
+            kick_max_speed: 30.0,
             // (10 + 290 c) / 9  — TimePlot charge sweep 2026-07-22
             kick_speed_base: 10.0 / 9.0,
             kick_speed_per_charge: 290.0 / 9.0,
-            kick_horiz_cap: 29.42,
+            kick_horiz_cap: 300.0 / 9.0,
             kick_lift_base: -0.323,
             kick_lift_per_charge: 6.6667,
             gravity: 17.0,
@@ -441,7 +443,7 @@ struct RawMarks {
 #[derive(Deserialize)]
 struct RawKick {
     max_power_speed_mps: Option<f32>,
-    /// Soft planar launch cap (TimePlot ~29.42).
+    /// Soft planar launch cap (unused — set to max formula output).
     horiz_cap_mps: Option<f32>,
     speed_base_mps: Option<f32>,
     speed_per_charge_mps: Option<f32>,
