@@ -274,6 +274,7 @@ impl MatchWorld {
                 self.possession.carrier,
                 Some((t, _)) if t != team
             );
+            tick_stamina(&mut self.players[i], cmd.sprint, dt, &self.params);
             step_mover(
                 &mut self.players[i],
                 &self.mover,
@@ -294,7 +295,6 @@ impl MatchWorld {
                 &mut self.players[i],
                 &self.match_state,
             );
-            tick_stamina(&mut self.players[i], cmd.sprint, dt, &self.params);
             cmds.push(cmd);
         }
 
