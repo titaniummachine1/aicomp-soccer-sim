@@ -643,8 +643,8 @@ fn refresh_recursion_alert(
 /// Player numbers and interaction rings are debug output, not part of the normal view.
 fn sync_player_number_visibility(
     show_debug: Res<SimDebugDraw>,
-    mut q_num: Query<&mut Visibility, With<PlayerNum>>,
-    mut q_ring: Query<&mut Visibility, With<InteractionRing>>,
+    mut q_num: Query<&mut Visibility, (With<PlayerNum>, Without<InteractionRing>)>,
+    mut q_ring: Query<&mut Visibility, (With<InteractionRing>, Without<PlayerNum>)>,
 ) {
     let want = if show_debug.0 {
         Visibility::Inherited
@@ -3009,7 +3009,7 @@ fn refresh_tick_hud(
 fn sync_stamina_arcs(
     viewer: Res<ViewerWorld>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut q: Query<(&PlayerStaminaArc, &Mesh2d, &mut Visibility)>,
+    mut q: Query<(&PlayerStaminaArc, &Mesh2d, &mut Visibility), Without<InteractionRing>>,
 ) {
     let interact_px = viewer.world.params.interact_radius * PPM;
     let arc_r = 1.0 + STAMINA_ARC_PAD_PX / interact_px;
