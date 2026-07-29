@@ -28,7 +28,7 @@ if (Test-Path $tp) {
   }
   Copy-Item -Force $tp (Join-Path $pkg "timeplot_until_goal.exe")
 }
-Copy-Item -Force (Join-Path $root "bevy_sim_params_v05.json") $pkg
+Copy-Item -Force (Join-Path $root "data\bevy_sim_params_v05.json") $pkg
 if (Test-Path (Join-Path $root "assets")) {
   Copy-Item -Recurse -Force (Join-Path $root "assets") (Join-Path $pkg "assets")
 }

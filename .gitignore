@@ -3,9 +3,6 @@
 Cargo.lock
 .DS_Store
 *.pdb
-cargo_check_out.txt
-parity_capture_report.json
-bruteforce_timeplot_analysis.json
 *.orig
 *.bak
 
@@ -23,9 +20,13 @@ scripts/debug_multigoal.py
 scripts/__pycache__/
 data/titanium/
 target_ti/
-txt.txt
 # Not mine to publish -- a teammate's local reference capture, not part of
 # this session's work. Something in this environment auto-commits saved
 # files regardless of git add state, which swept it in twice already.
 data/reference/Position.txt
+
+# Generated output / temporary analysis
+data/parity_capture_report.json
+data/bruteforce_timeplot_analysis.json
+data/promotion_*.txt
 

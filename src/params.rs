@@ -356,20 +356,27 @@ impl SimParams {
 }
 
 pub fn default_params_path() -> PathBuf {
-    // Prefer JSON next to the exe (portable alpha builds), then CARGO_MANIFEST_DIR (dev).
+    let filename = "bevy_sim_params_v05.json";
+    // Prefer JSON next to the exe (portable alpha builds), then CWD, then
+    // CARGO_MANIFEST_DIR/data (dev), then CARGO_MANIFEST_DIR (legacy).
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let beside = dir.join("bevy_sim_params_v05.json");
+            let beside = dir.join(filename);
             if beside.is_file() {
                 return beside;
             }
         }
     }
-    let cwd = PathBuf::from("bevy_sim_params_v05.json");
+    let cwd = PathBuf::from(filename);
     if cwd.is_file() {
         return cwd;
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bevy_sim_params_v05.json")
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let in_data = manifest.join("data").join(filename);
+    if in_data.is_file() {
+        return in_data;
+    }
+    manifest.join(filename)
 }
 
 #[derive(Deserialize)]
