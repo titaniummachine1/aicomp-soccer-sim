@@ -640,10 +640,11 @@ fn refresh_recursion_alert(
     }
 }
 
-/// Player numbers are debug output, not part of the normal view.
+/// Player numbers and interaction rings are debug output, not part of the normal view.
 fn sync_player_number_visibility(
     show_debug: Res<SimDebugDraw>,
     mut q_num: Query<&mut Visibility, With<PlayerNum>>,
+    mut q_ring: Query<&mut Visibility, With<InteractionRing>>,
 ) {
     let want = if show_debug.0 {
         Visibility::Inherited
@@ -651,6 +652,11 @@ fn sync_player_number_visibility(
         Visibility::Hidden
     };
     for mut vis in &mut q_num {
+        if *vis != want {
+            *vis = want;
+        }
+    }
+    for mut vis in &mut q_ring {
         if *vis != want {
             *vis = want;
         }
@@ -1114,6 +1120,10 @@ struct PlayerStaminaArc {
     filled: bool,
 }
 
+/// Interaction radius ring — debug-only visual.
+#[derive(Component)]
+struct InteractionRing;
+
 #[derive(Component)]
 struct BallDisc;
 
@@ -1376,6 +1386,7 @@ fn setup_board(
             ))
             .with_children(|child| {
                 child.spawn((
+                    InteractionRing,
                     Mesh2d(interaction_ring_mesh.clone()),
                     MeshMaterial2d(materials.add(Color::srgba(1.0, 1.0, 1.0, 0.72))),
                     // Same player layer; the ring is only the interaction
@@ -3013,7 +3024,13 @@ fn sync_stamina_arcs(
             .map(|p| p.stamina.clamp(0.0, 1.0))
             .unwrap_or(1.0);
 
+        if stamina >= 0.999 {
+            *vis = Visibility::Hidden;
+            continue;
+        }
+
         if !arc.filled {
+            *vis = Visibility::Visible;
             continue;
         }
         if stamina > 0.001 {
