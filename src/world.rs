@@ -17,7 +17,7 @@
 
 use bevy::prelude::Vec2;
 
-use crate::api::{build_team_api, TeamApi, WorldSensors};
+use crate::api::{build_team_api, build_team_api_masked, ApiFieldMask, TeamApi, WorldSensors};
 use crate::ball::{goal_at, step_free_ball, Ball, EndReason};
 use crate::brain::{BrainCommand, BrainOutput, TeamBrain, TeamId};
 use crate::match_state::{
@@ -41,10 +41,18 @@ pub struct MatchWorld {
     pub ball: Ball,
     pub players: Vec<Player>,
     pub mover: SimpleMover,
+    /// Players removed by tiebreaker rules (sent to sideline, commands ignored).
+    /// Stores (team, player_index_in_self.players).
+    pub disabled_players: std::collections::HashSet<(TeamId, u8)>,
     /// Faceoff spots each side's graph declared. Empty by default, which
     /// keeps the engine-default formation — set it from the brains before the
     /// first tick (see [`MatchWorld::set_kickoff_formation`]).
     pub kickoff_formations: KickoffFormations,
+    /// Deterministic override caches (auto-shot / auto-pass logic).
+    pub det_cache_home: crate::deterministic::DeterministicCache,
+    pub det_cache_away: crate::deterministic::DeterministicCache,
+    /// Enable deterministic overrides (auto-shot, auto-pass). Default true.
+    pub det_enabled: bool,
 }
 
 impl MatchWorld {
@@ -86,7 +94,11 @@ impl MatchWorld {
             ball: Ball::default(),
             players,
             mover,
+            disabled_players: std::collections::HashSet::new(),
             kickoff_formations: KickoffFormations::default(),
+            det_cache_home: crate::deterministic::DeterministicCache::default(),
+            det_cache_away: crate::deterministic::DeterministicCache::default(),
+            det_enabled: true,
         };
         world.reset_to_kickoff();
         world
@@ -104,7 +116,8 @@ impl MatchWorld {
         }
     }
 
-    fn reset_to_kickoff(&mut self) {
+    /// Reset for a new kickoff (public for tiebreaker use).
+    pub fn reset_to_kickoff(&mut self) {
         place_kickoff(
             &mut self.ball,
             &mut self.players,
@@ -112,6 +125,53 @@ impl MatchWorld {
             &self.params,
             &self.kickoff_formations,
         );
+        // Park disabled players on the sideline.
+        for p in &mut self.players {
+            if self.disabled_players.contains(&(p.team, p.id.0)) {
+                let sideline_y = if p.team == TeamId::Home { -1.0 } else { 1.0 };
+                p.pos = Vec2::new(0.0, sideline_y * (self.params.z_max + 5.0));
+                p.vel = Vec2::ZERO;
+                p.shot_charge = 0.0;
+                p.charge_warmup_left = 0.0;
+                p.interact_bits = 0;
+                p.grab_hold_active = false;
+            }
+        }
+    }
+
+    /// Disable a player (tiebreaker removal). They are parked on the sideline
+    /// and their commands are ignored for the rest of the match.
+    pub fn disable_player(&mut self, team: TeamId, player_id: u8) {
+        self.disabled_players.insert((team, player_id));
+        for p in &mut self.players {
+            if p.team == team && p.id.0 == player_id {
+                let sideline_y = if team == TeamId::Home { -1.0 } else { 1.0 };
+                p.pos = Vec2::new(0.0, sideline_y * (self.params.z_max + 5.0));
+                p.vel = Vec2::ZERO;
+                p.shot_charge = 0.0;
+                p.charge_warmup_left = 0.0;
+                p.interact_bits = 0;
+                p.grab_hold_active = false;
+            }
+        }
+        // If the disabled player was the carrier, drop the ball.
+        if matches!(self.possession.carrier, Some((t, id)) if t == team && id == player_id) {
+            self.possession.carrier = None;
+            self.ball.held = false;
+        }
+    }
+
+    /// Re-enable all players (for a fresh match).
+    pub fn enable_all_players(&mut self) {
+        self.disabled_players.clear();
+    }
+
+    /// Count active (non-disabled) players for a team.
+    pub fn active_player_count(&self, team: TeamId) -> usize {
+        self.players
+            .iter()
+            .filter(|p| p.team == team && !self.disabled_players.contains(&(p.team, p.id.0)))
+            .count()
     }
 
     pub fn build_apis(&self) -> (TeamApi, TeamApi) {
@@ -126,6 +186,29 @@ impl MatchWorld {
             build_team_api(TeamId::Home, &sensors),
             build_team_api(TeamId::Away, &sensors),
         )
+    }
+
+    pub fn build_apis_masked(
+        &self,
+        home_mask: Option<&ApiFieldMask>,
+        away_mask: Option<&ApiFieldMask>,
+    ) -> (TeamApi, TeamApi) {
+        let sensors = WorldSensors {
+            ball: &self.ball,
+            players: &self.players,
+            possession: &self.possession,
+            match_state: &self.match_state,
+            params: &self.params,
+        };
+        let home = match home_mask {
+            Some(m) => build_team_api_masked(TeamId::Home, &sensors, m),
+            None => build_team_api(TeamId::Home, &sensors),
+        };
+        let away = match away_mask {
+            Some(m) => build_team_api_masked(TeamId::Away, &sensors, m),
+            None => build_team_api(TeamId::Away, &sensors),
+        };
+        (home, away)
     }
 
     /// Adopt the faceoff spots this tick's brain evaluation produced.
@@ -232,6 +315,13 @@ impl MatchWorld {
         let mut cmds: Vec<BrainCommand> = Vec::with_capacity(self.players.len());
         for i in 0..self.players.len() {
             let (team, id) = (self.players[i].team, self.players[i].id);
+
+            // Disabled players (tiebreaker removal) get idle commands.
+            if self.disabled_players.contains(&(team, id.0)) {
+                cmds.push(BrainCommand::default());
+                continue;
+            }
+
             let raw = match team {
                 TeamId::Home => home.for_player(id),
                 TeamId::Away => away.for_player(id),
@@ -358,6 +448,12 @@ impl MatchWorld {
         for i in order {
             let team = self.players[i].team;
             let cmd = cmds[i];
+
+            // Disabled players can't interact with the ball.
+            if self.disabled_players.contains(&(team, self.players[i].id.0)) {
+                continue;
+            }
+
             let carrier_stam = self.possession.carrier.and_then(|(t, cid)| {
                 self.players
                     .iter()
@@ -496,9 +592,28 @@ impl MatchWorld {
         dt: f32,
     ) {
         let _ = dt; // always FIXED_DT inside step_with_commands
-        let (home_api, away_api) = self.build_apis();
-        let home_out = home.think(&home_api);
-        let away_out = away.think(&away_api);
+        let home_mask = home.api_mask();
+        let away_mask = away.api_mask();
+        let (home_api, away_api) =
+            self.build_apis_masked(home_mask.as_ref(), away_mask.as_ref());
+        let mut home_out = home.think(&home_api);
+        let mut away_out = away.think(&away_api);
+
+        if self.det_enabled {
+            crate::deterministic::evaluate_and_apply(
+                &home_api,
+                &self.params,
+                &mut home_out,
+                &mut self.det_cache_home,
+            );
+            crate::deterministic::evaluate_and_apply(
+                &away_api,
+                &self.params,
+                &mut away_out,
+                &mut self.det_cache_away,
+            );
+        }
+
         self.step_with_commands(&home_out, &away_out, FIXED_DT);
     }
 }

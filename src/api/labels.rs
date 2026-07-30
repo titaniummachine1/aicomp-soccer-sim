@@ -51,6 +51,15 @@ pub const GET_BOOL: &[&str] = &[
     "Team Player 3 Has Ball",
     "Team Player 4 Has Ball",
     "Team Scored Last Point",
+    // Sim-only: pass interception analysis (not in real game API).
+    "Can Pass to Teammate 1",
+    "Can Pass to Teammate 2",
+    "Can Pass to Teammate 3",
+    "Can Pass to Teammate 4",
+    "Opponent Can Intercept Loose Ball 1",
+    "Opponent Can Intercept Loose Ball 2",
+    "Opponent Can Intercept Loose Ball 3",
+    "Opponent Can Intercept Loose Ball 4",
 ];
 
 pub const GET_FLOAT: &[&str] = &[
@@ -96,6 +105,37 @@ pub const GET_FLOAT: &[&str] = &[
     "Teammate 2 Shot Charge",
     "Teammate 3 Shot Charge",
     "Teammate 4 Shot Charge",
+    // Sim-only: per-player distances (not in real game API).
+    "Distance from Team Player 1 to Opponent 1",
+    "Distance from Team Player 1 to Opponent 2",
+    "Distance from Team Player 1 to Opponent 3",
+    "Distance from Team Player 1 to Opponent 4",
+    "Distance from Team Player 2 to Opponent 1",
+    "Distance from Team Player 2 to Opponent 2",
+    "Distance from Team Player 2 to Opponent 3",
+    "Distance from Team Player 2 to Opponent 4",
+    "Distance from Team Player 3 to Opponent 1",
+    "Distance from Team Player 3 to Opponent 2",
+    "Distance from Team Player 3 to Opponent 3",
+    "Distance from Team Player 3 to Opponent 4",
+    "Distance from Team Player 4 to Opponent 1",
+    "Distance from Team Player 4 to Opponent 2",
+    "Distance from Team Player 4 to Opponent 3",
+    "Distance from Team Player 4 to Opponent 4",
+    "Distance from Team Player 1 to Teammate 2",
+    "Distance from Team Player 1 to Teammate 3",
+    "Distance from Team Player 1 to Teammate 4",
+    "Distance from Team Player 2 to Teammate 1",
+    "Distance from Team Player 2 to Teammate 3",
+    "Distance from Team Player 2 to Teammate 4",
+    "Distance from Team Player 3 to Teammate 1",
+    "Distance from Team Player 3 to Teammate 2",
+    "Distance from Team Player 3 to Teammate 4",
+    "Distance from Team Player 4 to Teammate 1",
+    "Distance from Team Player 4 to Teammate 2",
+    "Distance from Team Player 4 to Teammate 3",
+    // Sim-only: loose ball analysis.
+    "Best Intercept Slot",
 ];
 
 /// Field marks (CONFIRMED API labels; not all appear in AIATest dump of 14).
@@ -194,4 +234,15 @@ pub const GET_VECTOR3: &[&str] = &[
     "Upper Corner Opposing Side",
     "Upper Corner Team Side",
     "Upper Midfield",
+    // Sim-only: continuous pass directions (not in real game API).
+    "Perfect Pass Direction to Teammate 1",
+    "Perfect Pass Direction to Teammate 2",
+    "Perfect Pass Direction to Teammate 3",
+    "Perfect Pass Direction to Teammate 4",
+    // Sim-only: loose ball analysis (not in real game API).
+    "Ball Stop Position",
+    "Loose Ball Intercept Position Teammate 1",
+    "Loose Ball Intercept Position Teammate 2",
+    "Loose Ball Intercept Position Teammate 3",
+    "Loose Ball Intercept Position Teammate 4",
 ];

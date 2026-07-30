@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 
-use crate::api::TeamApi;
+use crate::api::{ApiFieldMask, TeamApi};
 use crate::player::PlayerId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -76,6 +76,14 @@ pub trait TeamBrain: Send + Sync {
     fn kickoff_formation(&self) -> [Option<bevy::prelude::Vec2>; 4] {
         [None; 4]
     }
+
+    /// Returns a mask of which API fields this brain actually reads.
+    /// `None` means "compute everything" (backward compatible).
+    /// `Some(mask)` lets `build_apis` skip expensive computations for
+    /// fields the brain never reads.
+    fn api_mask(&self) -> Option<ApiFieldMask> {
+        None
+    }
 }
 
 impl TeamBrain for Box<dyn TeamBrain> {
@@ -85,6 +93,10 @@ impl TeamBrain for Box<dyn TeamBrain> {
 
     fn kickoff_formation(&self) -> [Option<bevy::prelude::Vec2>; 4] {
         (**self).kickoff_formation()
+    }
+
+    fn api_mask(&self) -> Option<ApiFieldMask> {
+        (**self).api_mask()
     }
 }
 
@@ -124,6 +136,21 @@ pub struct ChaseBallBrain {
 }
 
 impl TeamBrain for ChaseBallBrain {
+    fn api_mask(&self) -> Option<ApiFieldMask> {
+        let mut m = ApiFieldMask::none();
+        m.needs_bool_set("Team Has Ball");
+        m.needs_float_set("Player Interact Radius");
+        m.needs_float_set("Ball Carrier Shot Charge");
+        m.needs_transform_set("Ball");
+        m.needs_transform_set("Opponent Goal Center");
+        for n in 1..=4u8 {
+            m.needs_bool_set(&format!("Team Player {n} Has Ball"));
+            m.needs_bool_set(&format!("Is Ball Nearby Team Player {n}"));
+            m.needs_transform_set(&format!("Team Player {n}"));
+        }
+        Some(m)
+    }
+
     fn think(&mut self, api: &TeamApi) -> BrainOutput {
         // One press, then at least one full tick released, so the latch can
         // clear and the next press is a fresh impulse. Advanced once per

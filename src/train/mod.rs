@@ -4,4 +4,7 @@
 //! Bevy cold-build isolation — this module is not deleted or broken.
 
 pub mod brain_harness;
-pub use brain_harness::TrainedBrain;
+pub use brain_harness::{
+    NetWeights, NetGradients, Activations, TrainedBrain,
+    INPUT_DIM, HIDDEN_DIM, OUTPUT_DIM,
+};

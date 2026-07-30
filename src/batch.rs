@@ -340,7 +340,7 @@ fn titanium_fallback(engine: GraphEngine, cache: Option<&ProgramCache>) -> Resul
     build_brain(&random_builtin(), engine, cache)
 }
 
-fn build_brain(
+pub fn build_brain(
     input: &BrainInput,
     engine: GraphEngine,
     cache: Option<&ProgramCache>,

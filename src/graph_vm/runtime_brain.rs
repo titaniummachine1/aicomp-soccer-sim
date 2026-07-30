@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use bevy::prelude::Vec2;
 
-use crate::api::TeamApi;
+use crate::api::{ApiFieldMask, MaskKind, TeamApi};
 use crate::brain::{BrainOutput, TeamBrain};
 use crate::graph::TeamGraph;
 use crate::graph_vm::builder::ProgramBuilder;
@@ -106,6 +106,25 @@ impl RuntimeBrain {
 impl TeamBrain for RuntimeBrain {
     fn kickoff_formation(&self) -> [Option<Vec2>; 4] {
         self.kickoff_positions
+    }
+
+    fn api_mask(&self) -> Option<ApiFieldMask> {
+        let ids: Vec<(MaskKind, u16)> = self
+            .apis
+            .kinds
+            .iter()
+            .zip(self.apis.dense_ids.iter())
+            .map(|(k, d)| {
+                let mk = match k {
+                    crate::graph_vm::lower::ApiKind::Bool => MaskKind::Bool,
+                    crate::graph_vm::lower::ApiKind::Float => MaskKind::Float,
+                    crate::graph_vm::lower::ApiKind::Transform => MaskKind::Transform,
+                    crate::graph_vm::lower::ApiKind::Vector3 => MaskKind::Vector3,
+                };
+                (mk, *d)
+            })
+            .collect();
+        Some(ApiFieldMask::from_dense_ids(&ids))
     }
 
     fn think(&mut self, api: &TeamApi) -> BrainOutput {

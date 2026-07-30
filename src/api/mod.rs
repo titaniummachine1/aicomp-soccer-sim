@@ -24,10 +24,11 @@ pub use clear::{
     SPHERECAST_RADIUS,
 };
 pub use dense::{
-    bool_index, float_index, transform_index, vector_index, DenseTeamApi, UNKNOWN_ID,
+    bool_index, float_index, transform_index, vector_index,
+    ApiFieldMask, DenseTeamApi, MaskKind, UNKNOWN_ID,
 };
 pub use labels::*;
-pub use snapshot::{build_team_api, WorldSensors};
+pub use snapshot::{build_team_api, build_team_api_masked, WorldSensors};
 
 use bevy::prelude::*;
 

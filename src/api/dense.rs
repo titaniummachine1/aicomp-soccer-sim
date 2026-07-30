@@ -11,7 +11,6 @@ use super::labels::{
 };
 
 fn float_catalog() -> &'static [&'static str] {
-    // Merge once: main floats + field marks.
     static MERGED: OnceLock<Vec<&'static str>> = OnceLock::new();
     MERGED.get_or_init(|| {
         let mut v = Vec::with_capacity(GET_FLOAT.len() + GET_FLOAT_FIELD_MARKS.len());
@@ -82,6 +81,162 @@ pub fn vector_index(label: &str) -> Option<u16> {
 /// Sentinel: slot not in SoccerGet catalog (unknown / mistyped label).
 pub const UNKNOWN_ID: u16 = u16::MAX;
 
+/// Tracks which API fields a brain's graph actually reads.
+/// Built once from the compiled ApiSlotTable, reused every tick.
+#[derive(Debug, Clone)]
+pub struct ApiFieldMask {
+    bools: Box<[bool]>,
+    floats: Box<[bool]>,
+    transforms: Box<[bool]>,
+    vectors: Box<[bool]>,
+}
+
+/// Kind tag for `ApiFieldMask::from_dense_ids` — mirrors `graph_vm::lower::ApiKind`
+/// without the cross-module dependency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaskKind {
+    Bool,
+    Float,
+    Transform,
+    Vector3,
+}
+
+impl ApiFieldMask {
+    pub fn all() -> Self {
+        Self {
+            bools: vec![true; bool_count()].into_boxed_slice(),
+            floats: vec![true; float_count()].into_boxed_slice(),
+            transforms: vec![true; transform_count()].into_boxed_slice(),
+            vectors: vec![true; vector_count()].into_boxed_slice(),
+        }
+    }
+
+    pub fn all_static() -> &'static Self {
+        static M: OnceLock<ApiFieldMask> = OnceLock::new();
+        M.get_or_init(Self::all)
+    }
+
+    pub fn none() -> Self {
+        Self {
+            bools: vec![false; bool_count()].into_boxed_slice(),
+            floats: vec![false; float_count()].into_boxed_slice(),
+            transforms: vec![false; transform_count()].into_boxed_slice(),
+            vectors: vec![false; vector_count()].into_boxed_slice(),
+        }
+    }
+
+    pub fn from_dense_ids(ids: &[(MaskKind, u16)]) -> Self {
+        let mut m = Self::none();
+        for &(kind, id) in ids {
+            if id == UNKNOWN_ID {
+                continue;
+            }
+            match kind {
+                MaskKind::Bool => {
+                    if let Some(slot) = m.bools.get_mut(id as usize) {
+                        *slot = true;
+                    }
+                }
+                MaskKind::Float => {
+                    if let Some(slot) = m.floats.get_mut(id as usize) {
+                        *slot = true;
+                    }
+                }
+                MaskKind::Transform => {
+                    if let Some(slot) = m.transforms.get_mut(id as usize) {
+                        *slot = true;
+                    }
+                }
+                MaskKind::Vector3 => {
+                    if let Some(slot) = m.vectors.get_mut(id as usize) {
+                        *slot = true;
+                    }
+                }
+            }
+        }
+        m
+    }
+
+    pub fn needs_bool(&self, label: &str) -> bool {
+        bool_index(label)
+            .map(|i| self.bools[i as usize])
+            .unwrap_or(false)
+    }
+    pub fn needs_bool_id(&self, id: u16) -> bool {
+        if id == UNKNOWN_ID { return false; }
+        self.bools.get(id as usize).copied().unwrap_or(false)
+    }
+    pub fn needs_float(&self, label: &str) -> bool {
+        float_index(label)
+            .map(|i| self.floats[i as usize])
+            .unwrap_or(false)
+    }
+    pub fn needs_float_id(&self, id: u16) -> bool {
+        if id == UNKNOWN_ID { return false; }
+        self.floats.get(id as usize).copied().unwrap_or(false)
+    }
+    pub fn needs_transform(&self, label: &str) -> bool {
+        transform_index(label)
+            .map(|i| self.transforms[i as usize])
+            .unwrap_or(false)
+    }
+    pub fn needs_transform_id(&self, id: u16) -> bool {
+        if id == UNKNOWN_ID { return false; }
+        self.transforms.get(id as usize).copied().unwrap_or(false)
+    }
+    pub fn needs_vector(&self, label: &str) -> bool {
+        vector_index(label)
+            .map(|i| self.vectors[i as usize])
+            .unwrap_or(false)
+    }
+    pub fn needs_vector_id(&self, id: u16) -> bool {
+        if id == UNKNOWN_ID { return false; }
+        self.vectors.get(id as usize).copied().unwrap_or(false)
+    }
+
+    pub fn needs_bool_set(&mut self, label: &str) {
+        if let Some(i) = bool_index(label) {
+            if let Some(slot) = self.bools.get_mut(i as usize) {
+                *slot = true;
+            }
+        }
+    }
+    pub fn needs_float_set(&mut self, label: &str) {
+        if let Some(i) = float_index(label) {
+            if let Some(slot) = self.floats.get_mut(i as usize) {
+                *slot = true;
+            }
+        }
+    }
+    pub fn needs_transform_set(&mut self, label: &str) {
+        if let Some(i) = transform_index(label) {
+            if let Some(slot) = self.transforms.get_mut(i as usize) {
+                *slot = true;
+            }
+        }
+    }
+    pub fn needs_vector_set(&mut self, label: &str) {
+        if let Some(i) = vector_index(label) {
+            if let Some(slot) = self.vectors.get_mut(i as usize) {
+                *slot = true;
+            }
+        }
+    }
+
+    pub fn needs_any_vector(&self) -> bool {
+        self.vectors.iter().any(|&v| v)
+    }
+    pub fn needs_any_transform(&self) -> bool {
+        self.transforms.iter().any(|&v| v)
+    }
+    pub fn needs_any_bool(&self) -> bool {
+        self.bools.iter().any(|&v| v)
+    }
+    pub fn needs_any_float(&self) -> bool {
+        self.floats.iter().any(|&v| v)
+    }
+}
+
 /// Dense team API snapshot — indexed by catalog `u16`, not strings.
 #[derive(Debug, Clone)]
 pub struct DenseTeamApi {
@@ -110,9 +265,21 @@ impl DenseTeamApi {
         }
     }
 
+    pub fn set_bool_id(&mut self, id: u16, v: bool) {
+        if let Some(slot) = self.bools.get_mut(id as usize) {
+            *slot = v;
+        }
+    }
+
     pub fn set_float(&mut self, label: &'static str, v: f32) {
         if let Some(i) = float_index(label) {
             self.floats[i as usize] = v;
+        }
+    }
+
+    pub fn set_float_id(&mut self, id: u16, v: f32) {
+        if let Some(slot) = self.floats.get_mut(id as usize) {
+            *slot = v;
         }
     }
 
@@ -122,9 +289,21 @@ impl DenseTeamApi {
         }
     }
 
+    pub fn set_transform_id(&mut self, id: u16, v: Vec2) {
+        if let Some(slot) = self.transforms.get_mut(id as usize) {
+            *slot = v;
+        }
+    }
+
     pub fn set_vector(&mut self, label: &'static str, v: Option<Vec2>) {
         if let Some(i) = vector_index(label) {
             self.vectors[i as usize] = v;
+        }
+    }
+
+    pub fn set_vector_id(&mut self, id: u16, v: Option<Vec2>) {
+        if let Some(slot) = self.vectors.get_mut(id as usize) {
+            *slot = v;
         }
     }
 
@@ -152,30 +331,6 @@ impl DenseTeamApi {
     }
     pub fn get_vector3(&self, label: &str) -> Option<Option<Vec2>> {
         vector_index(label).and_then(|i| self.get_vector_id(i))
-    }
-
-    /// Fill from legacy HashMaps (snapshot build / tests).
-    pub fn from_maps(
-        team: crate::brain::TeamId,
-        bools: &HashMap<&'static str, bool>,
-        floats: &HashMap<&'static str, f32>,
-        transforms: &HashMap<&'static str, Vec2>,
-        vectors: &HashMap<&'static str, Option<Vec2>>,
-    ) -> Self {
-        let mut api = Self::empty(team);
-        for (k, v) in bools {
-            api.set_bool(k, *v);
-        }
-        for (k, v) in floats {
-            api.set_float(k, *v);
-        }
-        for (k, v) in transforms {
-            api.set_transform(k, *v);
-        }
-        for (k, v) in vectors {
-            api.set_vector(k, *v);
-        }
-        api
     }
 }
 

@@ -1,6 +1,6 @@
 //! Intentionally dumb O0 interpreter — correctness / TRACE identity first.
 
-use bevy::prelude::{Vec2, Vec3};
+use bevy::prelude::Vec3;
 
 use crate::graph::pitch_vec::pitch_plane;
 
