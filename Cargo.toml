@@ -106,3 +106,8 @@ required-features = ["nn_train"]
 name = "ppo_train"
 path = "src/bin/ppo_train.rs"
 required-features = ["nn_train"]
+
+[[bin]]
+name = "az_train"
+path = "src/bin/az_train.rs"
+required-features = ["nn_train"]

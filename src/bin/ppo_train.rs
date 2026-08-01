@@ -12,16 +12,20 @@ use aicomp_soccer_sim::params::SimParams;
 use aicomp_soccer_sim::train::{
     Activations, NetGradients, NetWeights, TrainedBrain,
     INPUT_DIM, HIDDEN_DIM, OUTPUT_DIM,
+    VALUES_PER_PLAYER, COMPASS_DIRS, SOFTMAX_GROUPS,
+    SPRINT_OFFSET, TACKLE_OFFSET, TEAM_OUTPUT_START,
+    extract_features,
 };
 use aicomp_soccer_sim::world::{MatchWorld, FIXED_DT};
 use aicomp_soccer_sim::match_state::MatchPhase;
 use aicomp_soccer_sim::possession::reset_possession_for_kickoff;
 use aicomp_soccer_sim::deterministic::{
-    evaluate_and_apply, evaluate_and_apply_with_action, DeterministicCache, AssistAction,
+    evaluate_and_apply, evaluate_and_apply_with_action, DeterministicCache, NNActions, ShootTarget,
 };
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use rand::seq::SliceRandom;
 use rayon::prelude::*;
 
 const NORM: f32 = 20.0;
@@ -32,95 +36,33 @@ const INGAME_MATCH_MIN: f32 = 90.0;
 /// 90 in-game minutes at 20x = 270 sim seconds
 const MATCH_SECS: f32 = INGAME_MATCH_MIN * 60.0 / TIME_SCALE;
 
+// PPO hyperparameters
+const PPO_CLIP_EPS: f32 = 0.2;
+const PPO_EPOCHS: usize = 1;
+const GAE_LAMBDA: f32 = 0.95;
+const MAX_GRAD_NORM: f32 = 0.5;
+const REWARD_SCALE: f32 = 0.01;
+const LR_DECAY: f32 = 0.995;
+const BASELINE_DECAY: f32 = 0.95;
+const SIGMA_MIN: f32 = 0.08;
+const SIGMA_DECAY: f32 = 0.99;
+const RESTORE_THRESHOLD: f32 = 30.0;
+const MAX_TRAIN_STEPS: usize = 800;
+
+
+#[derive(Clone)]
 struct Step {
     activations: Activations,
     action_noise: [f32; OUTPUT_DIM],
     reward: f32,
+    old_log_prob: f32,
 }
 
-fn extract_features_raw(api: &aicomp_soccer_sim::api::TeamApi) -> [f32; INPUT_DIM] {
-    let ball = api.get_transform("Ball").unwrap_or(bevy::prelude::Vec2::ZERO);
-    let ball_vel = api.get_vector3("Ball Velocity").flatten().unwrap_or(bevy::prelude::Vec2::ZERO);
-    let opp_goal = api.get_transform("Opponent Goal Center").unwrap_or(bevy::prelude::Vec2::ZERO);
-    let team_goal = api.get_transform("Team Goal Center").unwrap_or(bevy::prelude::Vec2::ZERO);
-    let team_has = api.get_bool("Team Has Ball").unwrap_or(false) as u32 as f32;
-    let opp_has = api.get_bool("Opponent Has Ball").unwrap_or(false) as u32 as f32;
-    let is_loose = api.get_bool("Is Ball Loose").unwrap_or(false) as u32 as f32;
-    let charge = api.get_float("Ball Carrier Shot Charge").unwrap_or(0.0) / 1.0;
-    let stam = api.get_float("Ball Carrier Stamina").unwrap_or(0.0) / 100.0;
-
-    use aicomp_soccer_sim::player::PlayerId;
-    let mut team_pos = [bevy::prelude::Vec2::ZERO; 4];
-    let mut opp_pos = [bevy::prelude::Vec2::ZERO; 4];
-    for (i, id) in PlayerId::ALL.iter().enumerate() {
-        team_pos[i] = api.get_transform(&format!("Team Player {}", id.0)).unwrap_or(bevy::prelude::Vec2::ZERO);
-        opp_pos[i] = api.get_transform(&format!("Opponent Player {}", id.0)).unwrap_or(bevy::prelude::Vec2::ZERO);
-    }
-
-    let mut dist_opp = [0.0f32; 16];
-    for pi in 0..4 {
-        for oi in 0..4 {
-            dist_opp[pi * 4 + oi] = api
-                .get_float(&format!("Distance from Team Player {} to Opponent {}", pi + 1, oi + 1))
-                .unwrap_or(0.0) / NORM;
-        }
-    }
-
-    let mut dist_mate = [0.0f32; 12];
-    let mate_pairs = [(0,1),(0,2),(0,3),(1,0),(1,2),(1,3),(2,0),(2,1),(2,3),(3,0),(3,1),(3,2)];
-    for (k, (pi, mi)) in mate_pairs.iter().enumerate() {
-        dist_mate[k] = api
-            .get_float(&format!("Distance from Team Player {} to Teammate {}", pi + 1, mi + 1))
-            .unwrap_or(0.0) / NORM;
-    }
-
-    let mut pass_dir = [0.0f32; 8];
-    let mut can_pass = [0.0f32; 4];
-    for i in 0..4 {
-        let pd = api.get_vector3(&format!("Perfect Pass Direction to Teammate {}", i + 1)).flatten();
-        if let Some(d) = pd {
-            pass_dir[i * 2] = d.x;
-            pass_dir[i * 2 + 1] = d.y;
-        }
-        can_pass[i] = api.get_bool(&format!("Can Pass to Teammate {}", i + 1)).unwrap_or(false) as u32 as f32;
-    }
-
-    // Per-player ball possession (who is the carrier?).
-    let mut team_has_ball = [0.0f32; 4];
-    let mut opp_has_ball = [0.0f32; 4];
-    for i in 0..4 {
-        team_has_ball[i] = api.get_bool(&format!("Team Player {} Has Ball", i + 1)).unwrap_or(false) as u32 as f32;
-        opp_has_ball[i] = api.get_bool(&format!("Opponent Player {} Has Ball", i + 1)).unwrap_or(false) as u32 as f32;
-    }
-
-    // Per-player stamina and shot charge.
-    let mut team_stam = [0.0f32; 4];
-    let mut team_charge = [0.0f32; 4];
-    for i in 0..4 {
-        team_stam[i] = api.get_float(&format!("Team Player {} Stamina", i + 1)).unwrap_or(0.0) / 100.0;
-        team_charge[i] = api.get_float(&format!("Teammate {} Shot Charge", i + 1)).unwrap_or(0.0) / 1.0;
-    }
-
-    let mut input = [0.0f32; INPUT_DIM];
-    let mut o = 0usize;
-    input[o..o+2].copy_from_slice(&[ball.x / NORM, ball.y / NORM]); o += 2;
-    input[o..o+2].copy_from_slice(&[ball_vel.x / NORM, ball_vel.y / NORM]); o += 2;
-    for i in 0..4 { input[o..o+2].copy_from_slice(&[team_pos[i].x / NORM, team_pos[i].y / NORM]); o += 2; }
-    for i in 0..4 { input[o..o+2].copy_from_slice(&[opp_pos[i].x / NORM, opp_pos[i].y / NORM]); o += 2; }
-    input[o..o+16].copy_from_slice(&dist_opp); o += 16;
-    input[o..o+12].copy_from_slice(&dist_mate); o += 12;
-    input[o..o+8].copy_from_slice(&pass_dir); o += 8;
-    input[o..o+4].copy_from_slice(&can_pass); o += 4;
-    input[o..o+3].copy_from_slice(&[team_has, opp_has, is_loose]); o += 3;
-    input[o..o+2].copy_from_slice(&[opp_goal.x / NORM, opp_goal.y / NORM]); o += 2;
-    input[o..o+2].copy_from_slice(&[team_goal.x / NORM, team_goal.y / NORM]); o += 2;
-    input[o] = charge; o += 1;
-    input[o] = stam; o += 1;
-    input[o..o+4].copy_from_slice(&team_has_ball); o += 4;
-    input[o..o+4].copy_from_slice(&opp_has_ball); o += 4;
-    input[o..o+4].copy_from_slice(&team_stam); o += 4;
-    input[o..o+4].copy_from_slice(&team_charge); o += 4;
-
+fn extract_features_raw(
+    api: &aicomp_soccer_sim::api::TeamApi,
+    opp_vel: &[bevy::prelude::Vec2; 4],
+) -> [f32; INPUT_DIM] {
+    let (input, _) = extract_features(api, opp_vel);
     input
 }
 
@@ -130,96 +72,455 @@ fn compute_reward(
     prev_score_them: u32,
     cur_score_us: u32,
     cur_score_them: u32,
+    tackled: bool,
+    pass_completed: bool,
+    ball_intercepted: bool,
+    whistle: bool,
+    ball_lost: bool,
+    aimbot_active: bool,
+    shot_taken: bool,
+    ball_recovered: bool,
 ) -> f32 {
     let mut r = 0.0;
 
+    // Goal scored/conceded — strongest signals.
     if cur_score_us > prev_score_us {
-        r += 5.0;
+        r += 15.0;
     }
     if cur_score_them > prev_score_them {
+        r -= 8.0;
+    }
+
+    // Tackle success.
+    if tackled {
+        r += 1.0;
+    }
+
+    // Pass completion.
+    if pass_completed {
+        r += 0.5;
+    }
+
+    // Ball intercepted by opponent.
+    if ball_intercepted {
         r -= 0.5;
     }
 
+    // Ball lost.
+    if ball_lost {
+        r -= 2.0;
+    }
+
+    // Ball recovered from loose (not tackle, just picking up loose ball).
+    if ball_recovered {
+        r += 0.3;
+    }
+
+    // Shot taken — small positive reward to encourage shooting.
+    if shot_taken {
+        r += 0.1;
+    }
+
+    // Aimbot active means guaranteed scoring opportunity — reward taking it.
+    if aimbot_active {
+        r += 1.0;
+    }
+
+    // Stale-ball whistle penalty.
+    if whistle {
+        r -= 0.2;
+    }
+
+    // Tiny time pressure to encourage action.
+    r -= 0.00001;
+
     let ball = api.get_transform("Ball").unwrap_or(bevy::prelude::Vec2::ZERO);
-    let opp_goal = api.get_transform("Opponent Goal Center").unwrap_or(bevy::prelude::Vec2::ZERO);
-    let team_goal = api.get_transform("Team Goal Center").unwrap_or(bevy::prelude::Vec2::ZERO);
-    let goal_dist = (opp_goal - ball).length();
-    let own_goal_dist = (team_goal - ball).length();
-    r += 0.2 * (own_goal_dist - goal_dist) / (own_goal_dist + goal_dist + 0.001);
+    let is_home = api.get_bool("Is Home Team").unwrap_or(true);
+    let field_x = 40.0;
+
+    // Tug-of-war: ball field position mapped to [-1, +1].
+    let ball_advancement = if is_home {
+        (ball.x / field_x).clamp(-1.0, 1.0)
+    } else {
+        (-ball.x / field_x).clamp(-1.0, 1.0)
+    };
+    r += ball_advancement * 0.001;
+
+    let team_has_ball = api.get_bool("Team Has Ball").unwrap_or(false);
+    let opp_has_ball = api.get_bool("Opponent Has Ball").unwrap_or(false);
+
+    // Ball near own goal under pressure — big penalty.
+    let ball_near_own_goal = if is_home {
+        ball.x < -25.0
+    } else {
+        ball.x > 25.0
+    };
+    if ball_near_own_goal && !team_has_ball {
+        r -= 0.005;
+    }
+
+    // Reward for ball in opponent's third with possession.
+    let ball_in_opp_third = if is_home {
+        ball.x > 20.0
+    } else {
+        ball.x < -20.0
+    };
+    if ball_in_opp_third && team_has_ball {
+        r += 0.002;
+    }
+
+    // Penalty for wasteful sprinting when not near ball.
+    let ball_vel = api.get_vector3("Ball Velocity").flatten().unwrap_or(bevy::prelude::Vec2::ZERO);
+    let _ = ball_vel;
 
     r
 }
 
-/// Decode NN output + noise into BrainOutput and per-player actions.
-/// Per player (11 values): move_x, move_y, sprint, 8 action logits.
-/// Actions: [none, shoot_left, shoot_center, shoot_right, pass_1, pass_2, pass_3, pass_4]
-/// Returns (BrainOutput, [AssistAction; 4]).
+/// Decode NN output + noise into BrainOutput and NNActions.
+/// Output layout (157 dims):
+/// Per player (4 × 37 = 148): 8 softmax direction groups (35 logits) + sprint(1) + tackle(1)
+/// Team-level (9): shoot_signal(1) + shoot_target(3) + pass_signal(1) + pass_target(4)
 fn output_to_commands(
     output: &[f32],
     noise: &[f32; OUTPUT_DIM],
     api: &aicomp_soccer_sim::api::TeamApi,
     rng: &mut StdRng,
-) -> (BrainOutput, [AssistAction; 4]) {
+) -> (BrainOutput, NNActions) {
     use aicomp_soccer_sim::player::PlayerId;
     let mut out = BrainOutput::default();
-    let mut actions = [AssistAction::None; 4];
     let mut players = [bevy::prelude::Vec2::ZERO; 4];
     for (i, id) in PlayerId::ALL.iter().enumerate() {
         players[i] = api.get_transform(&format!("Team Player {}", id.0)).unwrap_or(bevy::prelude::Vec2::ZERO);
     }
 
+    let mut has_ball = [false; 4];
     for i in 0..4 {
-        let base = i * 11;
-        let dx = (output[base] + noise[base]).clamp(-1.0, 1.0);
-        let dy = (output[base + 1] + noise[base + 1]).clamp(-1.0, 1.0);
-        let sprint_sig = output[base + 2] + noise[base + 2];
+        has_ball[i] = api.get_bool(&format!("Team Player {} Has Ball", i + 1)).unwrap_or(false);
+    }
 
-        let dir = bevy::prelude::Vec2::new(dx, dy);
-        let move_to = players[i] + dir * NORM;
+    let opp_goal = api.get_transform("Opponent Goal Center").unwrap_or(bevy::prelude::Vec2::ZERO);
+    let opp_goal_left = api.get_transform("Opponent Goal Left Post").unwrap_or(bevy::prelude::Vec2::ZERO);
+    let opp_goal_right = api.get_transform("Opponent Goal Right Post").unwrap_or(bevy::prelude::Vec2::ZERO);
 
-        // Sample action from softmax of logits (with noise) for exploration.
-        let mut logits = [0.0f32; 8];
-        for a in 0..8 {
-            logits[a] = output[base + 3 + a] + noise[base + 3 + a];
-        }
-        let max_logit = logits.iter().cloned().fold(f32::MIN, f32::max);
-        let mut exp_vals = [0.0f32; 8];
-        let mut sum_exp = 0.0;
-        for a in 0..8 {
-            exp_vals[a] = (logits[a] - max_logit).exp();
-            sum_exp += exp_vals[a];
-        }
-        let sample = rng.gen_range(0.0..sum_exp);
-        let mut cum = 0.0;
-        let mut best_action = 0usize;
-        for a in 0..8 {
-            cum += exp_vals[a];
-            if sample <= cum {
-                best_action = a;
-                break;
+    // Per-player: decode softmax direction groups + sprint + tackle.
+    for i in 0..4 {
+        let base = i * VALUES_PER_PLAYER;
+
+        // For each softmax group, add noise to logits and sample.
+        // Pick the group with the highest sampled logit across all groups.
+        let mut best_dir = bevy::prelude::Vec2::ZERO;
+        let mut best_logit = f32::MIN;
+
+        for (grp_offset, grp_size) in SOFTMAX_GROUPS {
+            // Sample from this group's softmax.
+            let mut logits: Vec<f32> = Vec::with_capacity(*grp_size);
+            for j in 0..*grp_size {
+                logits.push(output[base + grp_offset + j] + noise[base + grp_offset + j]);
+            }
+            let max_logit = logits.iter().cloned().fold(f32::MIN, f32::max);
+            let mut exp_vals: Vec<f32> = Vec::with_capacity(*grp_size);
+            let mut sum_exp = 0.0;
+            for l in &logits {
+                let e = (l - max_logit).exp();
+                exp_vals.push(e);
+                sum_exp += e;
+            }
+            let sample = rng.gen_range(0.0..sum_exp.max(1e-10));
+            let mut cum = 0.0;
+            let mut chosen = 0usize;
+            for j in 0..*grp_size {
+                cum += exp_vals[j];
+                if sample <= cum {
+                    chosen = j;
+                    break;
+                }
+            }
+            let chosen_logit = logits[chosen];
+
+            if chosen_logit > best_logit {
+                best_logit = chosen_logit;
+                best_dir = match *grp_offset {
+                    0 => COMPASS_DIRS[chosen],
+                    8 => {
+                        let mate = api.get_transform(&format!("Team Player {}", chosen + 1)).unwrap_or(bevy::prelude::Vec2::ZERO);
+                        let d = mate - players[i];
+                        if d.length() > 1e-6 { d.normalize() } else { bevy::prelude::Vec2::ZERO }
+                    }
+                    12 => {
+                        let mate = api.get_transform(&format!("Team Player {}", chosen + 1)).unwrap_or(bevy::prelude::Vec2::ZERO);
+                        let d = players[i] - mate;
+                        if d.length() > 1e-6 { d.normalize() } else { bevy::prelude::Vec2::ZERO }
+                    }
+                    16 => {
+                        let pd = api.get_vector3(&format!("Perfect Pass Direction to Teammate {}", chosen + 1)).flatten();
+                        if let Some(d) = pd { d } else { bevy::prelude::Vec2::ZERO }
+                    }
+                    20 => {
+                        let pd = api.get_vector3(&format!("Perfect Pass Direction to Teammate {}", chosen + 1)).flatten();
+                        if let Some(d) = pd { d } else { bevy::prelude::Vec2::ZERO }
+                    }
+                    24 => {
+                        let opp = api.get_transform(&format!("Opponent Player {}", chosen + 1)).unwrap_or(bevy::prelude::Vec2::ZERO);
+                        let d = opp - players[i];
+                        if d.length() > 1e-6 { d.normalize() } else { bevy::prelude::Vec2::ZERO }
+                    }
+                    28 => {
+                        let opp = api.get_transform(&format!("Opponent Player {}", chosen + 1)).unwrap_or(bevy::prelude::Vec2::ZERO);
+                        let d = players[i] - opp;
+                        if d.length() > 1e-6 { d.normalize() } else { bevy::prelude::Vec2::ZERO }
+                    }
+                    32 => {
+                        match chosen {
+                            0 => { let d = opp_goal_left - players[i]; if d.length() > 1e-6 { d.normalize() } else { bevy::prelude::Vec2::ZERO } }
+                            1 => { let d = opp_goal - players[i]; if d.length() > 1e-6 { d.normalize() } else { bevy::prelude::Vec2::ZERO } }
+                            _ => { let d = opp_goal_right - players[i]; if d.length() > 1e-6 { d.normalize() } else { bevy::prelude::Vec2::ZERO } }
+                        }
+                    }
+                    _ => bevy::prelude::Vec2::ZERO,
+                };
             }
         }
-        actions[i] = AssistAction::from_index(best_action);
 
-        // Action 0 = none (no interact). Actions 1-7 = interact (shoot/pass).
-        // The aimbot will handle aiming if it's a shoot/pass action.
-        let interact = best_action > 0;
+        let move_to = players[i] + best_dir * NORM;
+        let sprint_sig = output[base + SPRINT_OFFSET] + noise[base + SPRINT_OFFSET];
+        let tackle_sig = output[base + TACKLE_OFFSET] + noise[base + TACKLE_OFFSET];
+
+        let interact = if has_ball[i] {
+            true
+        } else {
+            tackle_sig > 0.0
+        };
 
         out.commands[i] = BrainCommand {
             move_to,
             sprint: sprint_sig > 0.0,
             interact,
+            shoot: false,
         };
     }
+
+    // Team-level: shoot_signal(1) + shoot_target(3) + pass_signal(1) + pass_target(4)
+    let shoot_signal = output[TEAM_OUTPUT_START] + noise[TEAM_OUTPUT_START];
+    let pass_signal = output[TEAM_OUTPUT_START + 4] + noise[TEAM_OUTPUT_START + 4];
+
+    let mut shoot_target = ShootTarget::Center;
+    let mut shoot = false;
+    if shoot_signal > 0.0 {
+        shoot = true;
+        let mut logits = [0.0f32; 3];
+        for a in 0..3 {
+            logits[a] = output[TEAM_OUTPUT_START + 1 + a] + noise[TEAM_OUTPUT_START + 1 + a];
+        }
+        let max_logit = logits.iter().cloned().fold(f32::MIN, f32::max);
+        let mut exp_vals = [0.0f32; 3];
+        let mut sum_exp = 0.0;
+        for a in 0..3 {
+            exp_vals[a] = (logits[a] - max_logit).exp();
+            sum_exp += exp_vals[a];
+        }
+        let sample = rng.gen_range(0.0..sum_exp.max(1e-10));
+        let mut cum = 0.0;
+        let mut best = 0usize;
+        for a in 0..3 {
+            cum += exp_vals[a];
+            if sample <= cum {
+                best = a;
+                break;
+            }
+        }
+        shoot_target = match best {
+            0 => ShootTarget::Left,
+            1 => ShootTarget::Center,
+            _ => ShootTarget::Right,
+        };
+    }
+
+    let mut pass_target = 0usize;
+    let mut pass = false;
+    if pass_signal > 0.0 && !shoot {
+        pass = true;
+        let mut logits = [0.0f32; 4];
+        for a in 0..4 {
+            logits[a] = output[TEAM_OUTPUT_START + 5 + a] + noise[TEAM_OUTPUT_START + 5 + a];
+        }
+        let max_logit = logits.iter().cloned().fold(f32::MIN, f32::max);
+        let mut exp_vals = [0.0f32; 4];
+        let mut sum_exp = 0.0;
+        for a in 0..4 {
+            exp_vals[a] = (logits[a] - max_logit).exp();
+            sum_exp += exp_vals[a];
+        }
+        let sample = rng.gen_range(0.0..sum_exp.max(1e-10));
+        let mut cum = 0.0;
+        let mut best = 0usize;
+        for a in 0..4 {
+            cum += exp_vals[a];
+            if sample <= cum {
+                best = a;
+                break;
+            }
+        }
+        pass_target = best;
+    }
+
+    if shoot {
+        for i in 0..4 {
+            if has_ball[i] {
+                out.commands[i].shoot = true;
+            }
+        }
+    }
+    let actions = NNActions {
+        shoot,
+        shoot_target,
+        pass,
+        pass_target,
+    };
+
     (out, actions)
 }
 
-fn log_prob_grad(mean: &[f32], noise: &[f32; OUTPUT_DIM]) -> [f32; OUTPUT_DIM] {
+fn log_prob_grad(_mean: &[f32], noise: &[f32; OUTPUT_DIM]) -> [f32; OUTPUT_DIM] {
     let mut grad = [0.0f32; OUTPUT_DIM];
     for i in 0..OUTPUT_DIM {
         grad[i] = noise[i] / (ACTION_SIGMA * ACTION_SIGMA);
     }
     grad
+}
+
+/// Auto-tackle macro: when opponent has the ball and an NN player is within
+/// tackle range, force that player to interact (tackle). If multiple players
+/// are in range, pick the one with lowest stamina that can still win the
+/// tackle (stamina >= carrier stamina). Only one player tackles at a time.
+fn auto_tackle(
+    nn_api: &aicomp_soccer_sim::api::TeamApi,
+    nn_out: &mut BrainOutput,
+    params: &SimParams,
+) {
+    let opp_has_ball = nn_api.get_bool("Opponent Has Ball").unwrap_or(false);
+    if !opp_has_ball {
+        return;
+    }
+
+    let interact_r = params.interact_radius;
+    let carrier_stam = nn_api.get_float("Ball Carrier Stamina").unwrap_or(0.0) / 100.0;
+
+    // Find the opponent carrier position.
+    let mut carrier_pos = bevy::prelude::Vec2::ZERO;
+    for i in 0..4u8 {
+        if nn_api.get_bool(&format!("Opponent Player {} Has Ball", i + 1)).unwrap_or(false) {
+            carrier_pos = nn_api.get_transform(&format!("Opponent Player {}", i + 1))
+                .unwrap_or(bevy::prelude::Vec2::ZERO);
+            break;
+        }
+    }
+
+    // Find all NN players within tackle range (regardless of NN's interact choice).
+    let mut candidates: Vec<(usize, f32)> = Vec::new();
+    for i in 0..4 {
+        let p = nn_api.get_transform(&format!("Team Player {}", i + 1))
+            .unwrap_or(bevy::prelude::Vec2::ZERO);
+        let dist = (p - carrier_pos).length();
+        if dist <= interact_r {
+            let stam = nn_api.get_float(&format!("Team Player {} Stamina", i + 1))
+                .unwrap_or(0.0) / 100.0;
+            candidates.push((i, stam));
+        }
+    }
+
+    if candidates.is_empty() {
+        return;
+    }
+
+    // Among candidates who can win (stamina >= carrier), pick lowest stamina.
+    // If nobody can win, pick the closest one (highest stamina) to at least try.
+    let chosen = candidates
+        .iter()
+        .filter(|(_, s)| *s >= carrier_stam - 1e-4)
+        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .or_else(|| {
+            candidates.iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        })
+        .map(|(i, _)| *i)
+        .unwrap_or(0);
+
+    // Force chosen to interact, clear all others.
+    for (i, _) in &candidates {
+        nn_out.commands[*i].interact = *i == chosen;
+    }
+}
+
+/// Tackle coordinator macro: when multiple NN players try to tackle the same
+/// carrier on the same tick, pick the one with the lowest stamina that can
+/// still successfully win the tackle (stamina >= carrier stamina), and force
+/// all others to not interact this tick. This avoids wasting stamina on
+/// simultaneous tackle attempts — borrowed from Titanium's strategy.
+fn coordinate_tackles(
+    nn_api: &aicomp_soccer_sim::api::TeamApi,
+    nn_out: &mut BrainOutput,
+    params: &SimParams,
+) {
+    let opp_has_ball = nn_api.get_bool("Opponent Has Ball").unwrap_or(false);
+    if !opp_has_ball {
+        return;
+    }
+
+    let interact_r = params.interact_radius;
+    let carrier_stam = nn_api.get_float("Ball Carrier Stamina").unwrap_or(0.0) / 100.0;
+
+    // Find the opponent carrier position.
+    let mut carrier_pos = bevy::prelude::Vec2::ZERO;
+    for i in 0..4u8 {
+        if nn_api.get_bool(&format!("Opponent Player {} Has Ball", i + 1)).unwrap_or(false) {
+            carrier_pos = nn_api.get_transform(&format!("Opponent Player {}", i + 1))
+                .unwrap_or(bevy::prelude::Vec2::ZERO);
+            break;
+        }
+    }
+
+    // Find all NN players who are trying to interact AND are within tackle range.
+    let mut tacklers: Vec<(usize, f32)> = Vec::new();
+    for i in 0..4 {
+        if !nn_out.commands[i].interact {
+            continue;
+        }
+        let p = nn_api.get_transform(&format!("Team Player {}", i + 1))
+            .unwrap_or(bevy::prelude::Vec2::ZERO);
+        let dist = (p - carrier_pos).length();
+        if dist <= interact_r {
+            let stam = nn_api.get_float(&format!("Team Player {} Stamina", i + 1))
+                .unwrap_or(0.0) / 100.0;
+            tacklers.push((i, stam));
+        }
+    }
+
+    if tacklers.len() <= 1 {
+        return;
+    }
+
+    // Only activate tiebreaker if at least one tackler can win.
+    // If nobody can win, leave everything as-is — the NN does what it wants.
+    let can_win: Vec<&(usize, f32)> = tacklers
+        .iter()
+        .filter(|(_, s)| *s >= carrier_stam - 1e-4)
+        .collect();
+    if can_win.is_empty() {
+        return;
+    }
+
+    // Among tacklers who can win, pick the one with the LOWEST stamina
+    // to minimize waste. Force all others to not interact this tick.
+    let chosen = can_win
+        .iter()
+        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(i, _)| *i)
+        .unwrap_or(0);
+
+    for (i, _) in &tacklers {
+        if *i != chosen {
+            nn_out.commands[*i].interact = false;
+        }
+    }
 }
 
 fn run_trajectory(
@@ -249,14 +550,21 @@ fn run_trajectory(
     let max_ticks = ((MATCH_SECS / FIXED_DT).ceil() as u64).max(1);
     let mut prev_us = 0u32;
     let mut prev_them = 0u32;
-    let mut auto_pickup_active = false;
-    let mut auto_pickup_slot: Option<usize> = None;
+    let mut macro_tick: u32 = 0;
+    let mut was_loose = false;
+    let mut grab_hold_release_tick = false;
+    let mut opp_had_ball = false;
+    let mut prev_nn_had_ball = false;
+    let mut prev_carrier_slot: Option<u8> = None;
+    let mut prev_phase = MatchPhase::Kickoff;
 
     let home_mask = nn_brain.api_mask();
     let away_mask = opp_brain.api_mask();
 
     let mut det_cache_nn = DeterministicCache::default();
     let mut det_cache_opp = DeterministicCache::default();
+    let mut prev_opp_pos = [bevy::prelude::Vec2::ZERO; 4];
+    let mut prev_opp_pos_valid = false;
 
     for _ in 0..max_ticks {
         let (home_api, away_api) = world.build_apis_masked(home_mask.as_ref(), away_mask.as_ref());
@@ -266,7 +574,21 @@ fn run_trajectory(
             (&away_api, &home_api)
         };
 
-        let input = extract_features_raw(nn_api);
+        // Compute opponent velocities from position deltas.
+        let mut cur_opp_pos = [bevy::prelude::Vec2::ZERO; 4];
+        for (i, id) in aicomp_soccer_sim::player::PlayerId::ALL.iter().enumerate() {
+            cur_opp_pos[i] = nn_api.get_transform(&format!("Opponent Player {}", id.0)).unwrap_or(bevy::prelude::Vec2::ZERO);
+        }
+        let mut opp_vel = [bevy::prelude::Vec2::ZERO; 4];
+        if prev_opp_pos_valid {
+            for i in 0..4 {
+                opp_vel[i] = (cur_opp_pos[i] - prev_opp_pos[i]) / FIXED_DT;
+            }
+        }
+        prev_opp_pos = cur_opp_pos;
+        prev_opp_pos_valid = true;
+
+        let input = extract_features_raw(nn_api, &opp_vel);
         let act = weights.forward_with_activations(&input);
 
         let mut noise = [0.0f32; OUTPUT_DIM];
@@ -278,65 +600,73 @@ fn run_trajectory(
         let mut opp_out = opp_brain.think(opp_api);
 
         // NN side: guaranteed score detection (always on) + NN-invoked aimbot.
-        evaluate_and_apply_with_action(nn_api, params, &mut nn_out, &mut det_cache_nn, nn_actions);
+        let det_out = evaluate_and_apply_with_action(nn_api, params, &mut nn_out, &mut det_cache_nn, &nn_actions);
+        let aimbot_active = det_out.can_score || det_out.can_walk_in || det_out.ball_going_in;
         // Opponent side: just guaranteed score detection.
         evaluate_and_apply(opp_api, params, &mut opp_out, &mut det_cache_opp);
 
         // Auto-pickup macro: if ball is loose, force interact on the closest
-        // NN player within pickup range — unless the NN already chose to
-        // interact with a different player (NN's choice takes priority).
-        // Pulses every other tick: if macro fired last tick, force release
-        // this tick so the interact latch resets and can fire again.
+        // NN player within pickup range. Pulses every other tick to ensure a
+        // rising edge in the interact_bits history — the possession system
+        // requires a rising edge (false→true) to trigger pickup.
+        // Odd ticks: force interact=true on closest player to ball.
+        // Even ticks: force interact=false on that same player to reset the
+        // latch, so the next odd tick creates a fresh rising edge.
         let is_loose = nn_api.get_bool("Is Ball Loose").unwrap_or(false);
-        if auto_pickup_active {
-            // Last tick the macro fired interact. If the ball is still loose,
-            // the pickup failed — release this tick so the latch resets for
-            // a fresh attempt next tick. If the ball is no longer loose,
-            // the pickup succeeded — don't interfere, let NN/det layer control.
-            if is_loose {
-                if let Some(idx) = auto_pickup_slot {
-                    nn_out.commands[idx].interact = false;
-                }
-            }
-            auto_pickup_active = false;
-            auto_pickup_slot = None;
-        } else if is_loose {
+        macro_tick += 1;
+        if is_loose {
             let interact_r = nn_api.get_float("Player Interact Radius").unwrap_or(1.5);
             let ball = nn_api.get_transform("Ball").unwrap_or(bevy::prelude::Vec2::ZERO);
 
-            // Check if NN already set interact=true on any player.
-            let nn_interacting: Vec<usize> = (0..4)
-                .filter(|&i| nn_out.commands[i].interact)
-                .collect();
-
-            if nn_interacting.is_empty() {
-                // NN didn't choose anyone to interact — find closest player to ball.
-                let mut best_idx = None;
-                let mut best_dist = f32::MAX;
-                for i in 0..4 {
-                    // Skip players who already have the ball.
-                    let has = nn_api.get_bool(&format!("Team Player {} Has Ball", i + 1)).unwrap_or(false);
-                    if has { continue; }
-                    let p = nn_api.get_transform(&format!("Team Player {}", i + 1)).unwrap_or(bevy::prelude::Vec2::ZERO);
-                    let d = (p - ball).length();
-                    if d < best_dist {
-                        best_dist = d;
-                        best_idx = Some(i);
-                    }
+            // Find closest NN player to the ball who doesn't already have it.
+            let mut best_idx = None;
+            let mut best_dist = f32::MAX;
+            for i in 0..4 {
+                let has = nn_api.get_bool(&format!("Team Player {} Has Ball", i + 1)).unwrap_or(false);
+                if has { continue; }
+                let p = nn_api.get_transform(&format!("Team Player {}", i + 1)).unwrap_or(bevy::prelude::Vec2::ZERO);
+                let d = (p - ball).length();
+                if d < best_dist {
+                    best_dist = d;
+                    best_idx = Some(i);
                 }
-                // Only auto-pickup if within interact range.
-                if let Some(idx) = best_idx {
-                    if best_dist <= interact_r {
-                        nn_out.commands[idx].interact = true;
-                        auto_pickup_active = true;
-                        auto_pickup_slot = Some(idx);
-                    }
+            }
+            if let Some(idx) = best_idx {
+                if best_dist <= interact_r {
+                    // Pulse: odd ticks press, even ticks release.
+                    nn_out.commands[idx].interact = macro_tick % 2 == 1;
                 }
             }
         }
 
-        let sh_before = world.match_state.score_home;
-        let sa_before = world.match_state.score_away;
+        // Grab-hold release: when the ball transitions from loose to held
+        // (pickup just happened), the carrier has grab_hold_active=true which
+        // blocks charging until interact is released. The det layer always
+        // sets interact=true (charge), so grab_hold never clears. Force
+        // interact=false on the carrier for one tick to clear it.
+        if grab_hold_release_tick {
+            grab_hold_release_tick = false;
+            // Find the carrier and force interact=false for this tick.
+            for i in 0..4 {
+                let has = nn_api.get_bool(&format!("Team Player {} Has Ball", i + 1)).unwrap_or(false);
+                if has {
+                    nn_out.commands[i].interact = false;
+                    break;
+                }
+            }
+        }
+        // Detect loose→held transition for next tick.
+        if was_loose && !is_loose {
+            grab_hold_release_tick = true;
+        }
+        was_loose = is_loose;
+
+        // Auto-tackle: force closest player to tackle when in range.
+        auto_tackle(nn_api, &mut nn_out, params);
+        // Tackle coordinator: when multiple NN players try to tackle the same
+        // carrier, pick the best one and suppress the rest.
+        coordinate_tackles(nn_api, &mut nn_out, params);
+
         let (home_out, away_out) = if is_home_nn {
             (&nn_out, &opp_out)
         } else {
@@ -355,14 +685,55 @@ fn run_trajectory(
             (sa_after, sh_after)
         };
 
-        let reward = compute_reward(nn_api, prev_us, prev_them, cur_us, cur_them);
+        // Detect tackle: opponent had ball last tick, now NN team has it.
+        let nn_has_ball = nn_api.get_bool("Team Has Ball").unwrap_or(false);
+        let opp_has_ball = nn_api.get_bool("Opponent Has Ball").unwrap_or(false);
+        let tackled = opp_had_ball && nn_has_ball;
+        let ball_lost = prev_nn_had_ball && opp_has_ball && !nn_has_ball;
+        opp_had_ball = opp_has_ball;
+        prev_nn_had_ball = nn_has_ball;
+
+        // Detect pass completion: NN carrier changed from one teammate to another.
+        let cur_carrier_slot: Option<u8> = (0..4u8).find(|&i| {
+            nn_api.get_bool(&format!("Team Player {} Has Ball", i + 1)).unwrap_or(false)
+        });
+        let pass_completed = match (prev_carrier_slot, cur_carrier_slot) {
+            (Some(prev), Some(cur)) if prev != cur && nn_has_ball => true,
+            _ => false,
+        };
+
+        // Detect ball intercepted: NN had ball, released it (loose), then opponent got it.
+        let ball_intercepted = was_loose && opp_has_ball && !nn_has_ball;
+
+        // Detect ball recovered from loose: was loose, now NN has it (not tackle).
+        let ball_recovered = was_loose && nn_has_ball && !opp_has_ball;
+
+        // Detect shot taken: any NN player with shoot flag set.
+        let shot_taken = nn_out.commands.iter().any(|c| c.shoot);
+
+        // Detect whistle: phase transition to GoalPause without a score change.
+        let cur_phase = world.match_state.phase;
+        let whistle = cur_phase == MatchPhase::GoalPause
+            && prev_phase != MatchPhase::GoalPause
+            && cur_us == prev_us
+            && cur_them == prev_them;
+        prev_phase = cur_phase;
+
+        let reward = compute_reward(
+            nn_api, prev_us, prev_them, cur_us, cur_them,
+            tackled, pass_completed, ball_intercepted, whistle,
+            ball_lost, aimbot_active, shot_taken, ball_recovered,
+        );
         prev_us = cur_us;
         prev_them = cur_them;
+        prev_carrier_slot = cur_carrier_slot;
 
+        let old_log_prob = weights.log_prob(&act.output, &noise, ACTION_SIGMA);
         steps.push(Step {
             activations: act,
             action_noise: noise,
             reward,
+            old_log_prob,
         });
 
         if sh_after.abs_diff(sa_after) >= 7 && (sh_after == 0 || sa_after == 0) {
@@ -410,9 +781,11 @@ fn run_tiebreaker(
     let max_ticks = ((MATCH_SECS / FIXED_DT).ceil() as u64).max(1);
     let mut det_cache_nn = DeterministicCache::default();
     let mut det_cache_opp = DeterministicCache::default();
+    let mut prev_opp_pos = [bevy::prelude::Vec2::ZERO; 4];
+    let mut prev_opp_pos_valid = false;
 
     // Helper: play one extra period.
-    let play_period = |world: &mut MatchWorld,
+    let mut play_period = |world: &mut MatchWorld,
                        weights: &NetWeights,
                        opp_brain: &mut dyn TeamBrain,
                        is_home_nn: bool,
@@ -446,7 +819,20 @@ fn run_tiebreaker(
                 (&away_api, &home_api)
             };
 
-            let input = extract_features_raw(nn_api);
+            let mut cur_opp_pos = [bevy::prelude::Vec2::ZERO; 4];
+            for (i, id) in aicomp_soccer_sim::player::PlayerId::ALL.iter().enumerate() {
+                cur_opp_pos[i] = nn_api.get_transform(&format!("Opponent Player {}", id.0)).unwrap_or(bevy::prelude::Vec2::ZERO);
+            }
+            let mut opp_vel = [bevy::prelude::Vec2::ZERO; 4];
+            if prev_opp_pos_valid {
+                for i in 0..4 {
+                    opp_vel[i] = (cur_opp_pos[i] - prev_opp_pos[i]) / FIXED_DT;
+                }
+            }
+            prev_opp_pos = cur_opp_pos;
+            prev_opp_pos_valid = true;
+
+            let input = extract_features_raw(nn_api, &opp_vel);
             let act = weights.forward_with_activations(&input);
 
             let mut noise = [0.0f32; OUTPUT_DIM];
@@ -457,7 +843,7 @@ fn run_tiebreaker(
             let (mut nn_out, nn_actions) = output_to_commands(&act.output, &noise, nn_api, rng);
             let mut opp_out = opp_brain.think(opp_api);
 
-            evaluate_and_apply_with_action(nn_api, params, &mut nn_out, det_cache_nn, nn_actions);
+            evaluate_and_apply_with_action(nn_api, params, &mut nn_out, det_cache_nn, &nn_actions);
             evaluate_and_apply(opp_api, params, &mut opp_out, det_cache_opp);
 
             let (home_out, away_out) = if is_home_nn {
@@ -475,14 +861,17 @@ fn run_tiebreaker(
                 (sa_after, sh_after)
             };
 
-            let reward = compute_reward(nn_api, *prev_us, *prev_them, cur_us, cur_them);
+            let shot_taken = nn_out.commands.iter().any(|c| c.shoot);
+            let reward = compute_reward(nn_api, *prev_us, *prev_them, cur_us, cur_them, false, false, false, false, false, false, shot_taken, false);
             *prev_us = cur_us;
             *prev_them = cur_them;
 
+            let old_log_prob = weights.log_prob(&act.output, &noise, ACTION_SIGMA);
             steps.push(Step {
                 activations: act,
                 action_noise: noise,
                 reward,
+                old_log_prob,
             });
 
             if sh_after.abs_diff(sa_after) >= 7 && (sh_after == 0 || sa_after == 0) {
@@ -590,6 +979,10 @@ fn run_self_play(
 
     let mut det_cache_cur = DeterministicCache::default();
     let mut det_cache_opp = DeterministicCache::default();
+    let mut prev_opp_pos_cur = [bevy::prelude::Vec2::ZERO; 4];
+    let mut prev_opp_pos_cur_valid = false;
+    let mut prev_opp_pos_opp = [bevy::prelude::Vec2::ZERO; 4];
+    let mut prev_opp_pos_opp_valid = false;
 
     for _ in 0..max_ticks {
         let (home_api, away_api) = world.build_apis_masked(home_mask.as_ref(), away_mask.as_ref());
@@ -599,8 +992,36 @@ fn run_self_play(
             (&away_api, &home_api)
         };
 
+        // Compute opp velocities for cur side.
+        let mut cur_opp_pos = [bevy::prelude::Vec2::ZERO; 4];
+        for (i, id) in aicomp_soccer_sim::player::PlayerId::ALL.iter().enumerate() {
+            cur_opp_pos[i] = cur_api.get_transform(&format!("Opponent Player {}", id.0)).unwrap_or(bevy::prelude::Vec2::ZERO);
+        }
+        let mut opp_vel_cur = [bevy::prelude::Vec2::ZERO; 4];
+        if prev_opp_pos_cur_valid {
+            for i in 0..4 {
+                opp_vel_cur[i] = (cur_opp_pos[i] - prev_opp_pos_cur[i]) / FIXED_DT;
+            }
+        }
+        prev_opp_pos_cur = cur_opp_pos;
+        prev_opp_pos_cur_valid = true;
+
+        // Compute opp velocities for opp side (from opp's perspective).
+        let mut cur_opp_pos_opp = [bevy::prelude::Vec2::ZERO; 4];
+        for (i, id) in aicomp_soccer_sim::player::PlayerId::ALL.iter().enumerate() {
+            cur_opp_pos_opp[i] = opp_api.get_transform(&format!("Opponent Player {}", id.0)).unwrap_or(bevy::prelude::Vec2::ZERO);
+        }
+        let mut opp_vel_opp = [bevy::prelude::Vec2::ZERO; 4];
+        if prev_opp_pos_opp_valid {
+            for i in 0..4 {
+                opp_vel_opp[i] = (cur_opp_pos_opp[i] - prev_opp_pos_opp[i]) / FIXED_DT;
+            }
+        }
+        prev_opp_pos_opp = cur_opp_pos_opp;
+        prev_opp_pos_opp_valid = true;
+
         // Current weights side (collect trajectory for training).
-        let input_cur = extract_features_raw(cur_api);
+        let input_cur = extract_features_raw(cur_api, &opp_vel_cur);
         let act_cur = weights.forward_with_activations(&input_cur);
         let mut noise_cur = [0.0f32; OUTPUT_DIM];
         for i in 0..OUTPUT_DIM {
@@ -609,13 +1030,19 @@ fn run_self_play(
         let (mut cur_out, cur_actions) = output_to_commands(&act_cur.output, &noise_cur, cur_api, rng);
 
         // Opponent NN side (no gradient collection).
-        let input_opp = extract_features_raw(opp_api);
+        let input_opp = extract_features_raw(opp_api, &opp_vel_opp);
         let act_opp = opp_weights.forward_with_activations(&input_opp);
         let (mut opp_out, opp_actions) = output_to_commands(&act_opp.output, &[0.0f32; OUTPUT_DIM], opp_api, rng);
 
         // Both sides get full aimbot + deterministic treatment.
-        evaluate_and_apply_with_action(cur_api, params, &mut cur_out, &mut det_cache_cur, cur_actions);
-        evaluate_and_apply_with_action(opp_api, params, &mut opp_out, &mut det_cache_opp, opp_actions);
+        evaluate_and_apply_with_action(cur_api, params, &mut cur_out, &mut det_cache_cur, &cur_actions);
+        evaluate_and_apply_with_action(opp_api, params, &mut opp_out, &mut det_cache_opp, &opp_actions);
+
+        // Auto-tackle and tackle coordinator for both NN sides.
+        auto_tackle(cur_api, &mut cur_out, params);
+        auto_tackle(opp_api, &mut opp_out, params);
+        coordinate_tackles(cur_api, &mut cur_out, params);
+        coordinate_tackles(opp_api, &mut opp_out, params);
 
         let (home_out, away_out) = if is_home_cur {
             (&cur_out, &opp_out)
@@ -632,14 +1059,17 @@ fn run_self_play(
             (sa_after, sh_after)
         };
 
-        let reward = compute_reward(cur_api, prev_us, prev_them, cur_us, cur_them);
+        let shot_taken = cur_out.commands.iter().any(|c| c.shoot);
+        let reward = compute_reward(cur_api, prev_us, prev_them, cur_us, cur_them, false, false, false, false, false, false, shot_taken, false);
         prev_us = cur_us;
         prev_them = cur_them;
 
+        let old_log_prob = weights.log_prob(&act_cur.output, &noise_cur, ACTION_SIGMA);
         steps.push(Step {
             activations: act_cur,
             action_noise: noise_cur,
             reward,
+            old_log_prob,
         });
 
         if sh_after.abs_diff(sa_after) >= 7 && (sh_after == 0 || sa_after == 0) {
@@ -656,45 +1086,139 @@ fn run_self_play(
     (steps, final_us, final_them)
 }
 
-fn compute_returns(steps: &[Step]) -> Vec<f32> {
+/// Compute advantages using Generalized Advantage Estimation (GAE).
+/// Uses a moving average baseline to reduce variance.
+/// GAE: A_t = sum_{l>=0} (gamma*lambda)^l * delta_{t+l}
+/// where delta_t = r_t + gamma * V(t+1) - V(t)
+/// Without a value network, V(t) is approximated by the moving average baseline.
+static mut BASELINE_AVG: f32 = 0.0;
+
+fn compute_gae(steps: &[Step], gamma: f32, lambda: f32) -> Vec<f32> {
     let n = steps.len();
+    if n == 0 { return Vec::new(); }
+
+    // Get the current baseline (moving average of returns).
+    let baseline = unsafe { BASELINE_AVG };
+
+    // Compute discounted returns for baseline update.
     let mut returns = vec![0.0f32; n];
     let mut running = 0.0;
     for i in (0..n).rev() {
-        running = steps[i].reward + GAMMA * running;
+        running = steps[i].reward + gamma * running;
         returns[i] = running;
     }
-    returns
+
+    // Update baseline with exponential moving average.
+    let match_avg_return = returns.iter().sum::<f32>() / n as f32;
+    let new_baseline = if baseline == 0.0 {
+        match_avg_return
+    } else {
+        BASELINE_DECAY * baseline + (1.0 - BASELINE_DECAY) * match_avg_return
+    };
+    unsafe { BASELINE_AVG = new_baseline; }
+
+    // Compute GAE advantages using the baseline as V(t).
+    // delta_t = r_t + gamma * V(t+1) - V(t)
+    // V(t) = baseline for all t (no value network).
+    // A_t = sum_{l>=0} (gamma*lambda)^l * delta_{t+l}
+    let mut advantages = vec![0.0f32; n];
+    let mut gae = 0.0;
+    for i in (0..n).rev() {
+        let v_next = if i + 1 < n { baseline } else { 0.0 };
+        let delta = steps[i].reward + gamma * v_next - baseline;
+        gae = delta + gamma * lambda * gae;
+        advantages[i] = gae;
+    }
+
+    // Normalize advantages.
+    let mean_adv = advantages.iter().sum::<f32>() / n as f32;
+    let std_adv = {
+        let var = advantages.iter().map(|a| (a - mean_adv).powi(2)).sum::<f32>() / n as f32;
+        var.sqrt().max(1e-6)
+    };
+    for a in &mut advantages {
+        *a = (*a - mean_adv) / std_adv;
+    }
+
+    advantages
 }
 
-fn reinforce_update(
+/// PPO clipped surrogate update.
+/// For each of PPO_EPOCHS passes over the batch:
+///   1. Recompute log_prob with current weights
+///   2. Compute ratio = exp(new_log_prob - old_log_prob)
+///   3. Clipped surrogate: min(ratio * adv, clip(ratio, 1-eps, 1+eps) * adv)
+///   4. Backprop and apply gradient
+fn ppo_update(
     weights: &mut NetWeights,
     steps: &[Step],
-    returns: &[f32],
+    advantages: &[f32],
     lr: f32,
 ) {
     let n = steps.len();
     if n == 0 { return; }
 
-    let mean_return: f32 = returns.iter().sum::<f32>() / n as f32;
-    let std_return: f32 = {
-        let var: f32 = returns.iter().map(|r| (r - mean_return).powi(2)).sum::<f32>() / n as f32;
-        var.sqrt().max(1e-6)
-    };
+    for _epoch in 0..PPO_EPOCHS {
+        let mut total_grad = NetGradients::zeros(weights);
 
-    let mut total_grad = NetGradients::zeros(weights);
-    for (i, step) in steps.iter().enumerate() {
-        let advantage = (returns[i] - mean_return) / std_return;
-        let lp_grad = log_prob_grad(&step.activations.output, &step.action_noise);
-        let mut grad_out = [0.0f32; OUTPUT_DIM];
-        for j in 0..OUTPUT_DIM {
-            grad_out[j] = -lp_grad[j] * advantage;
+        for (i, step) in steps.iter().enumerate() {
+            // Recompute forward pass with current weights.
+            let new_act = weights.forward_with_activations(&step.activations.input);
+            let new_log_prob = weights.log_prob(&new_act.output, &step.action_noise, ACTION_SIGMA);
+
+            // Importance ratio.
+            let ratio = (new_log_prob - step.old_log_prob).exp();
+
+            // Clipped surrogate objective.
+            let adv = advantages[i];
+            let surr1 = ratio * adv;
+            let surr2 = ratio.clamp(1.0 - PPO_CLIP_EPS, 1.0 + PPO_CLIP_EPS) * adv;
+
+            // PPO gradient:
+            // L = -min(ratio * adv, clip(ratio) * adv)
+            // dL/d(theta) = -adv * ratio * d(log_prob)/d(mean)  when surr1 < surr2
+            // dL/d(theta) = 0                                   when surr1 >= surr2 (clipped)
+            let lp_grad = log_prob_grad(&new_act.output, &step.action_noise);
+            let mut grad_out = [0.0f32; OUTPUT_DIM];
+
+            if surr1 < surr2 {
+                // Unclipped: full gradient with ratio.
+                for j in 0..OUTPUT_DIM {
+                    grad_out[j] = -lp_grad[j] * adv * ratio;
+                }
+            }
+            // Clipped: policy gradient is zero.
+            // Note: entropy gradient is zero for fixed-sigma Gaussian (H doesn't depend on mean).
+
+            let step_grad = weights.backward(&grad_out, 0.0, &new_act);
+            total_grad.add(&step_grad, 1.0 / n as f32);
         }
-        let step_grad = weights.backward(&grad_out, &step.activations);
-        total_grad.add(&step_grad, 1.0 / n as f32);
-    }
 
-    weights.apply_gradient(&total_grad, lr);
+        // Gradient clipping.
+        let mut grad_norm = 0.0f32;
+        for r in &total_grad.layer0.w { for v in r { grad_norm += v * v; } }
+        for v in &total_grad.layer0.b { grad_norm += v * v; }
+        for r in &total_grad.layer1.w { for v in r { grad_norm += v * v; } }
+        for v in &total_grad.layer1.b { grad_norm += v * v; }
+        for r in &total_grad.layer2.w { for v in r { grad_norm += v * v; } }
+        for v in &total_grad.layer2.b { grad_norm += v * v; }
+        for r in &total_grad.value_head.w { for v in r { grad_norm += v * v; } }
+        for v in &total_grad.value_head.b { grad_norm += v * v; }
+        grad_norm = grad_norm.sqrt().max(1e-6);
+        if grad_norm > MAX_GRAD_NORM {
+            let scale = MAX_GRAD_NORM / grad_norm;
+            for r in &mut total_grad.layer0.w { for v in r.iter_mut() { *v *= scale; } }
+            for v in &mut total_grad.layer0.b { *v *= scale; }
+            for r in &mut total_grad.layer1.w { for v in r.iter_mut() { *v *= scale; } }
+            for v in &mut total_grad.layer1.b { *v *= scale; }
+            for r in &mut total_grad.layer2.w { for v in r.iter_mut() { *v *= scale; } }
+            for v in &mut total_grad.layer2.b { *v *= scale; }
+            for r in &mut total_grad.value_head.w { for v in r.iter_mut() { *v *= scale; } }
+            for v in &mut total_grad.value_head.b { *v *= scale; }
+        }
+
+        weights.apply_gradient(&total_grad, lr);
+    }
 }
 
 fn discover_opponents() -> Vec<BrainInput> {
@@ -922,15 +1446,19 @@ fn start_dashboard_server(state: Arc<Mutex<TrainingState>>) {
 }
 
 fn main() {
+    // Debug: verify main() is reached.
+    println!("ppo_train starting...");
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
     let args: Vec<String> = std::env::args().collect();
     let epochs: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(200);
-    let matches_per_epoch: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(8);
-    let lr: f32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0.001);
+    let matches_per_epoch: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(128);
+    let mut lr: f32 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0.001);
     let seed: u64 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(42);
 
-    eprintln!("=== REINFORCE Training ===");
+    eprintln!("=== PPO Training ===");
     eprintln!("epochs: {epochs}, matches/epoch: {matches_per_epoch}, lr: {lr}, seed: {seed}");
-    eprintln!("match_secs: {MATCH_SECS}, gamma: {GAMMA}, sigma: {ACTION_SIGMA}");
+    eprintln!("match_secs: {MATCH_SECS}, gamma: {GAMMA}, sigma: {ACTION_SIGMA}, clip: {PPO_CLIP_EPS}, ppo_epochs: {PPO_EPOCHS}, gae_lambda: {GAE_LAMBDA}");
 
     let params = SimParams::default();
     let cache = Arc::new(ProgramCache::default());
@@ -966,95 +1494,44 @@ fn main() {
     for epoch in 0..epochs {
         let t0 = Instant::now();
 
-        // Curriculum: idle is the only truly easy opponent (stands still).
-        // Chase is actually very strong (244 goals vs random NN). Graph opponents
-        // vary in strength. Start with idle + self-play, then add graph opponents,
-        // then add chase last.
-        let curriculum_phase = if epoch < 20 {
-            "idle_only"
-        } else if epoch < 50 {
-            "idle_plus_graph"
-        } else if epoch < 80 {
-            "graph_plus_chase"
-        } else {
-            "full"
-        };
+        // Graceful shutdown: if stop_training file exists, save and exit.
+        if std::path::Path::new("stop_training").exists() {
+            let _ = std::fs::remove_file("stop_training");
+            weights.save_to_path(best_path).ok();
+            weights.save_to_path(weights_path).ok();
+            eprintln!("=== Graceful shutdown requested. Saved weights. ===");
+            break;
+        }
 
-        // Match types: graph opponents, self-play vs best, pure self-play vs current.
-        // Each type: 4 variants (NN home/away × kickoff home/away).
+        // Round-robin shuffled matchmaking: build a pool of ALL opponents,
+        // shuffle it, then deal matches by cycling through the pool. Every
+        // opponent is faced before any repeats — like a tournament bracket
+        // with randomized sides each round.
         #[derive(Clone, Copy)]
         enum MatchKind { Graph(usize), SelfBest, SelfPure, Chase, Idle }
 
-        let mut match_configs: Vec<(MatchKind, TeamId, TeamId, u64)> = Vec::new();
+        // Build the full opponent pool: 1 entry per graph opponent,
+        // plus chase, idle, self-best, self-pure.
+        let mut pool: Vec<MatchKind> = Vec::new();
+        for i in 0..opponents.len() {
+            pool.push(MatchKind::Graph(i));
+        }
+        pool.push(MatchKind::Chase);
+        pool.push(MatchKind::Idle);
+        pool.push(MatchKind::SelfBest);
+        pool.push(MatchKind::SelfPure);
 
-        match curriculum_phase {
-            "idle_only" => {
-                // Idle stands still — NN can learn to score and get positive reward.
-                for nn_side in [TeamId::Home, TeamId::Away] {
-                    for kickoff in [TeamId::Home, TeamId::Away] {
-                        for _ in 0..matches_per_epoch {
-                            match_configs.push((MatchKind::Idle, nn_side, kickoff, rng.gen::<u64>()));
-                        }
-                    }
-                }
-            }
-            "idle_plus_graph" => {
-                // Idle + all graph opponents (but not chase yet).
-                for nn_side in [TeamId::Home, TeamId::Away] {
-                    for kickoff in [TeamId::Home, TeamId::Away] {
-                        match_configs.push((MatchKind::Idle, nn_side, kickoff, rng.gen::<u64>()));
-                    }
-                }
-                for opp_idx in 0..opponents.len() {
-                    for nn_side in [TeamId::Home, TeamId::Away] {
-                        for kickoff in [TeamId::Home, TeamId::Away] {
-                            match_configs.push((MatchKind::Graph(opp_idx), nn_side, kickoff, rng.gen::<u64>()));
-                        }
-                    }
-                }
-            }
-            "graph_plus_chase" => {
-                // All graph opponents + chase.
-                for opp_idx in 0..opponents.len() {
-                    for nn_side in [TeamId::Home, TeamId::Away] {
-                        for kickoff in [TeamId::Home, TeamId::Away] {
-                            match_configs.push((MatchKind::Graph(opp_idx), nn_side, kickoff, rng.gen::<u64>()));
-                        }
-                    }
-                }
-                for nn_side in [TeamId::Home, TeamId::Away] {
-                    for kickoff in [TeamId::Home, TeamId::Away] {
-                        match_configs.push((MatchKind::Chase, nn_side, kickoff, rng.gen::<u64>()));
-                    }
-                }
-            }
-            _ => {
-                // Full opponent pool + chase.
-                for opp_idx in 0..opponents.len() {
-                    for nn_side in [TeamId::Home, TeamId::Away] {
-                        for kickoff in [TeamId::Home, TeamId::Away] {
-                            match_configs.push((MatchKind::Graph(opp_idx), nn_side, kickoff, rng.gen::<u64>()));
-                        }
-                    }
-                }
-                for nn_side in [TeamId::Home, TeamId::Away] {
-                    for kickoff in [TeamId::Home, TeamId::Away] {
-                        match_configs.push((MatchKind::Chase, nn_side, kickoff, rng.gen::<u64>()));
-                    }
-                }
-            }
-        }
-        // Self-play vs best weights.
-        for nn_side in [TeamId::Home, TeamId::Away] {
-            for kickoff in [TeamId::Home, TeamId::Away] {
-                match_configs.push((MatchKind::SelfBest, nn_side, kickoff, rng.gen::<u64>()));
-            }
-        }
-        // Pure self-play: current vs current.
-        for nn_side in [TeamId::Home, TeamId::Away] {
-            for kickoff in [TeamId::Home, TeamId::Away] {
-                match_configs.push((MatchKind::SelfPure, nn_side, kickoff, rng.gen::<u64>()));
-            }
+        // Shuffle the pool for this epoch.
+        pool.shuffle(&mut rng);
+
+        let mut match_configs: Vec<(MatchKind, TeamId, TeamId, u64)> = Vec::new();
+        for m in 0..matches_per_epoch {
+            // Cycle through the shuffled pool — wraps around so every opponent
+            // is played before any repeats.
+            let kind = pool[m % pool.len()];
+            let nn_side = if rng.gen_bool(0.5) { TeamId::Home } else { TeamId::Away };
+            let kickoff = if rng.gen_bool(0.5) { TeamId::Home } else { TeamId::Away };
+            match_configs.push((kind, nn_side, kickoff, rng.gen::<u64>()));
         }
 
         let num_matches = match_configs.len();
@@ -1142,6 +1619,10 @@ fn main() {
         let mut self_best_score = (0u32, 0u32);
         let mut self_pure_score = (0u32, 0u32);
 
+        // Collect ALL steps from ALL matches into one batch for a single PPO update.
+        // Compute advantages per-match to avoid cross-match credit contamination.
+        let mut all_steps: Vec<Step> = Vec::new();
+        let mut all_advantages: Vec<f32> = Vec::new();
         for (kind, _nn_side, _kickoff, steps, gf, ga) in &match_results {
             total_gf += *gf;
             total_ga += *ga;
@@ -1176,9 +1657,23 @@ fn main() {
                 }
             }
 
-            let returns = compute_returns(steps);
-            reinforce_update(&mut weights, steps, &returns, lr);
+            // Subsample if needed, then compute per-match advantages.
+            let train_steps: Vec<Step> = if steps.len() > MAX_TRAIN_STEPS {
+                let stride = steps.len() / MAX_TRAIN_STEPS;
+                steps.iter().step_by(stride).take(MAX_TRAIN_STEPS).cloned().collect()
+            } else {
+                steps.clone()
+            };
+            let match_advantages = compute_gae(&train_steps, GAMMA, GAE_LAMBDA);
+            all_steps.extend(train_steps);
+            all_advantages.extend(match_advantages);
         }
+
+        // Single PPO update on the full batch with per-match normalized advantages.
+        ppo_update(&mut weights, &all_steps, &all_advantages, lr);
+
+        // Learning rate decay.
+        lr = lr * LR_DECAY;
 
         let diff = total_gf as f32 - total_ga as f32;
         let elapsed = t0.elapsed().as_millis();
@@ -1219,6 +1714,13 @@ fn main() {
             weights.save_to_path(best_path).ok();
             best_weights = weights.clone();
             eprintln!("  >>> NEW BEST! saved to {best_path}");
+        }
+
+        // Anti-collapse: if policy degrades too far from best, restore best weights.
+        if diff < best_score_diff - RESTORE_THRESHOLD && best_score_diff > f32::MIN + 1.0 {
+            eprintln!("  !!! Policy collapsed (diff={diff:.0}, best={best_score_diff:.0}). Restoring best weights.");
+            weights = best_weights.clone();
+            lr = (lr / LR_DECAY).max(0.0001); // Reset LR to avoid further collapse
         }
 
         weights.save_to_path(weights_path).ok();

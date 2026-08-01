@@ -1635,7 +1635,22 @@ pub fn evaluate(state: &DeterministicState, params: &SimParams) -> Deterministic
         } else if out.can_walk_in {
             out.commands[idx] = DeterministicCommand::charge();
         } else {
-            out.commands[idx] = DeterministicCommand::charge();
+            // No guaranteed score: charge the ball AND walk toward opponent goal.
+            // This gives the NN a baseline that advances the ball forward.
+            let goal_dir = state.opp_goal_center - carrier_pos;
+            let target = if goal_dir.length() > EPS {
+                carrier_pos + goal_dir.normalize() * 100.0
+            } else {
+                state.opp_goal_center
+            };
+            out.commands[idx] = DeterministicCommand {
+                override_move: true,
+                move_to: target,
+                override_interact: true,
+                interact: true,
+                override_sprint: true,
+                sprint: true,
+            };
         }
 
         // --- Check passes to teammates (skip if we can already score) ---
@@ -1772,12 +1787,44 @@ pub fn evaluate_and_apply(
 ///
 /// Movement (move_to, sprint) is NEVER touched by the aimbot — only interact
 /// and facing direction when releasing a shot/pass.
+/// AI's chosen action for the ball carrier, parsed from NN output.
+/// The aimbot executes this choice — it does NOT decide on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShootTarget {
+    Left,
+    Center,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NNActions {
+    /// True if the NN wants to shoot (release the ball toward goal).
+    pub shoot: bool,
+    /// Which part of the goal to aim at.
+    pub shoot_target: ShootTarget,
+    /// True if the NN wants to pass to a teammate.
+    pub pass: bool,
+    /// Which teammate to pass to (0-3).
+    pub pass_target: usize,
+}
+
+impl Default for NNActions {
+    fn default() -> Self {
+        Self {
+            shoot: false,
+            shoot_target: ShootTarget::Center,
+            pass: false,
+            pass_target: 0,
+        }
+    }
+}
+
 pub fn evaluate_and_apply_with_action(
     api: &TeamApi,
     params: &SimParams,
     out: &mut BrainOutput,
     cache: &mut DeterministicCache,
-    actions: [AssistAction; 4],
+    actions: &NNActions,
 ) -> DeterministicOutput {
     let mut state = DeterministicState::from_api(api, params);
     state.carrier_move_dir = cache.carrier_move_dir(state.carrier_slot, &state.team_players);
@@ -1793,28 +1840,62 @@ pub fn evaluate_and_apply_with_action(
         return det;
     }
 
-    // No guaranteed score. Apply NN-chosen aimbot assist for the carrier.
+    // No guaranteed score. Apply carrier's det commands (auto-advance + charge).
     if let Some(slot) = state.carrier_slot {
         let idx = (slot as usize).saturating_sub(1).min(3);
-        let action = actions[idx];
-        if action != AssistAction::None {
-            let carrier_pos = state.team_players[idx];
-            if let Some((aim_target, release)) = assist_action(
-                action,
-                carrier_pos,
-                idx,
-                &state.team_players,
-                &team_vels,
-                state.opp_goal_left,
-                state.opp_goal_center,
-                state.opp_goal_right,
-                params,
-            ) {
-                // Override facing direction + interact for the carrier only.
-                // Movement (move_to) is set to aim direction so the player faces
-                // the target. Sprint stays NN-controlled.
-                out.commands[idx].move_to = aim_target;
-                out.commands[idx].interact = release;
+        let dc = &det.commands[idx];
+        if dc.override_move {
+            out.commands[idx].move_to = dc.move_to;
+        }
+        if dc.override_interact {
+            out.commands[idx].interact = dc.interact;
+        }
+        if dc.override_sprint {
+            out.commands[idx].sprint = dc.sprint;
+        }
+
+        // Execute the AI's chosen action via the aimbot.
+        let carrier_pos = state.team_players[idx];
+
+        if actions.shoot {
+            // Aim at the AI's chosen goal target.
+            let aim_point = match actions.shoot_target {
+                ShootTarget::Left => state.opp_goal_left,
+                ShootTarget::Center => state.opp_goal_center,
+                ShootTarget::Right => state.opp_goal_right,
+            };
+            let aim_dir = aim_point - carrier_pos;
+            if aim_dir.length_squared() > 1e-6 {
+                let normalized = aim_dir.normalize();
+                out.commands[idx].move_to = carrier_pos + normalized * 100.0;
+                // Only release if charge is sufficient. Otherwise keep charging.
+                let charge = state.team_shot_charges[idx];
+                if charge >= 0.5 {
+                    out.commands[idx].interact = false; // Release to kick
+                } else {
+                    out.commands[idx].interact = true; // Keep charging
+                }
+            }
+        } else if actions.pass {
+            // Aim at the AI's chosen teammate.
+            let target_idx = actions.pass_target.min(3);
+            // Don't pass to self.
+            if target_idx != idx {
+                let mate_pos = state.team_players[target_idx];
+                let mate_vel = team_vels[target_idx];
+                // Lead the pass: aim where the teammate will be.
+                let lead = mate_pos + mate_vel * 0.1;
+                let aim_dir = lead - carrier_pos;
+                if aim_dir.length_squared() > 1e-6 {
+                    out.commands[idx].move_to = carrier_pos + aim_dir.normalize() * 100.0;
+                    // Only release if charge is sufficient. Otherwise keep charging.
+                    let charge = state.team_shot_charges[idx];
+                    if charge >= 0.3 {
+                        out.commands[idx].interact = false; // Release to pass
+                    } else {
+                        out.commands[idx].interact = true; // Keep charging
+                    }
+                }
             }
         }
     }

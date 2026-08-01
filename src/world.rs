@@ -639,6 +639,7 @@ fn filter_kickoff(
         move_to: player.pos,
         sprint: false,
         interact: false,
+        shoot: false,
     }
 }
 
@@ -666,6 +667,7 @@ fn bias_receiving_defender_opening_hold(
         move_to: Vec2::new(skirt_x, cmd.move_to.y),
         sprint: cmd.sprint,
         interact: false,
+        shoot: false,
     }
 }
 

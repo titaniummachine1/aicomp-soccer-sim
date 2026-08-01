@@ -25,6 +25,10 @@ pub struct BrainCommand {
     pub move_to: Vec2,
     pub sprint: bool,
     pub interact: bool,
+    /// NN-only: when true on the ball carrier, the deterministic layer
+    /// releases the ball (if charged) instead of continuing to charge.
+    /// Graph brains never set this; they use `interact` for everything.
+    pub shoot: bool,
 }
 
 impl Default for BrainCommand {
@@ -33,6 +37,7 @@ impl Default for BrainCommand {
             move_to: Vec2::ZERO,
             sprint: false,
             interact: false,
+            shoot: false,
         }
     }
 }
@@ -119,6 +124,7 @@ impl TeamBrain for IdleBrain {
                 move_to: me,
                 sprint: false,
                 interact: false,
+                shoot: false,
             };
         }
         out
@@ -212,6 +218,7 @@ impl TeamBrain for ChaseBallBrain {
                 move_to,
                 sprint,
                 interact,
+                shoot: false,
             };
         }
         out
